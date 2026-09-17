@@ -4,20 +4,29 @@
 //!     statusbar [run] [options] [-- COMMAND...]
 //!     statusbar set <left|right> [TEXT...]
 //!     statusbar init zsh
+//!     statusbar config [--path] [--default | --config PATH]
 //!     statusbar completion <bash|zsh|fish>
 
 const std = @import("std");
 const zecli = @import("zecli");
 
+const config_flag = zecli.FlagSpec{
+    .name = "config",
+    .short = 'c',
+    .value = .string,
+    .value_name = "PATH",
+    .description = "Config file (default: $STATUSBAR_CONFIG, else ~/.config/statusbar/config, else built in)",
+    .completion = .files,
+};
+
+const config_flags = [_]zecli.FlagSpec{
+    config_flag,
+    .{ .name = "default", .description = "Use the built-in config, ignoring any config file" },
+    .{ .name = "path", .description = "Print only where the config comes from" },
+};
+
 const run_flags = [_]zecli.FlagSpec{
-    .{
-        .name = "config",
-        .short = 'c',
-        .value = .string,
-        .value_name = "PATH",
-        .description = "Config file (default: $STATUSBAR_CONFIG, else ~/.config/statusbar/config, else built in)",
-        .completion = .files,
-    },
+    config_flag,
     .{
         .name = "lines",
         .short = 'n',
@@ -84,6 +93,21 @@ const commands = [_]zecli.CommandSpec{
         },
         .double_dash = .positionals,
         .extra_help = "Outside a statusbar session, prints nothing.\n",
+    },
+    .{
+        .name = "config",
+        .description = "Print the configuration statusbar would use",
+        .usage = "statusbar config [--path] [--default | --config PATH]",
+        .flags = &config_flags,
+        .double_dash = .positionals,
+        .extra_help =
+        \\Prints the config file, or the built-in config when there is none, after
+        \\checking that it parses. With --path, prints the file's path, or
+        \\"built-in". To start a config of your own:
+        \\
+        \\  mkdir -p ~/.config/statusbar
+        \\  statusbar config --default > ~/.config/statusbar/config
+        ++ "\n",
     },
     .{
         .name = "completion",

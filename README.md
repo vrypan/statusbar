@@ -34,7 +34,7 @@ statusbar
 
 # Your own, starting from the built-in config
 mkdir -p ~/.config/statusbar
-cp samples/default.config ~/.config/statusbar/config
+statusbar config --default > ~/.config/statusbar/config
 statusbar
 
 # Or from a single command

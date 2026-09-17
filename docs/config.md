@@ -15,12 +15,16 @@ doesn't parse: statusbar stops with the file name, line number and problem,
 before the terminal is touched.
 
 The built-in config is commented and uses the terminal's own palette, so it
-follows your theme. Copy it as a starting point:
+follows your theme. Start from it:
 
 ```sh
 mkdir -p ~/.config/statusbar
-cp samples/default.config ~/.config/statusbar/config
+statusbar config --default > ~/.config/statusbar/config
 ```
+
+`statusbar config` prints the config statusbar would use after checking that
+it parses, and `statusbar config --path` shows which file that is; see
+[usage.md](usage.md#config).
 
 ## Example
 

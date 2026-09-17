@@ -52,6 +52,7 @@ pub fn main(init: std.process.Init) !u8 {
         .run => runSession(arena, init.io, command, stderr),
         .set => setSlot(arena, init.io, command, stderr),
         .init => shellInit(arena, init.io, command, stdout, stderr),
+        .config => printConfig(arena, init.io, command, stdout, stderr),
         .completion => printCompletion(command, stdout, stderr),
     };
 }
@@ -69,10 +70,11 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
     const exec = command.getValue([]const u8, "exec");
     const style = command.getValue([]const u8, "style");
 
-    const cfg = loadConfig(arena, io, command.getValue([]const u8, "config"), stderr) catch |err| {
+    const loaded = loadConfig(arena, io, command.getValue([]const u8, "config"), stderr) catch |err| {
         try stderr.flush();
         return if (err == error.ReportedConfigError) 2 else err;
     };
+    const cfg = loaded.config;
 
     // Precedence: command-line flags, then the config file (or the built-in
     // one), then defaults.
@@ -105,6 +107,26 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
         try stderr.flush();
         return 1;
     };
+}
+
+/// `statusbar config`: the config text statusbar would run with, checked.
+fn printConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
+    const flag = command.getValue([]const u8, "config");
+    if (command.enabled("default") and flag != null) return usageError(stderr, command, "--default and --config are mutually exclusive");
+    // Reading nothing for --default matters when stdout is redirected to the
+    // config file: the shell has already emptied it.
+    const loaded = if (command.enabled("default")) try builtInConfig(arena) else loadConfig(arena, io, flag, stderr) catch |err| {
+        try stderr.flush();
+        return if (err == error.ReportedConfigError) 2 else err;
+    };
+    if (command.enabled("path")) {
+        try stdout.print("{s}\n", .{loaded.path orelse "built-in"});
+    } else {
+        try stdout.writeAll(loaded.text);
+        if (loaded.text.len > 0 and loaded.text[loaded.text.len - 1] != '\n') try stdout.writeByte('\n');
+    }
+    try stdout.flush();
+    return 0;
 }
 
 /// `statusbar completion <bash|zsh|fish>`
@@ -217,10 +239,24 @@ const zsh_init =
 /// samples/default.config, used when there is no config file.
 const default_config = @embedFile("default_config");
 
+const LoadedConfig = struct {
+    /// The file it came from; null for the built-in config.
+    path: ?[]const u8,
+    text: []const u8,
+    config: *config.Config,
+};
+
+fn builtInConfig(arena: std.mem.Allocator) !LoadedConfig {
+    const cfg = try arena.create(config.Config);
+    var diag: config.Diagnostic = .{};
+    cfg.* = try config.parse(default_config, &diag);
+    return .{ .path = null, .text = default_config, .config = cfg };
+}
+
 /// Reads the config from `--config`, `$STATUSBAR_CONFIG`, or the default
 /// location. Only a missing file at the default location is not an error;
 /// the built-in config takes its place.
-fn loadConfig(arena: std.mem.Allocator, io: Io, flag: ?[]const u8, stderr: *Io.Writer) !*config.Config {
+fn loadConfig(arena: std.mem.Allocator, io: Io, flag: ?[]const u8, stderr: *Io.Writer) !LoadedConfig {
     const env = @import("environment.zig");
     var explicit = true;
     const path = flag orelse env.get("STATUSBAR_CONFIG") orelse blk: {
@@ -229,11 +265,13 @@ fn loadConfig(arena: std.mem.Allocator, io: Io, flag: ?[]const u8, stderr: *Io.W
         const home = env.get("HOME") orelse break :blk "";
         break :blk try std.fmt.allocPrint(arena, "{s}/.config/statusbar/config", .{home});
     };
+    var source: ?[]const u8 = path;
     const text = if (path.len == 0) default_config else Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_config_bytes)) catch |err| text: {
         if (!explicit and err == error.FileNotFound) break :text default_config;
         try stderr.print("statusbar: cannot read {s}: {t}\n", .{ path, err });
         return error.ReportedConfigError;
     };
+    if (text.ptr == default_config.ptr) source = null;
     const cfg = try arena.create(config.Config);
     var diag: config.Diagnostic = .{};
     cfg.* = config.parse(text, &diag) catch {
@@ -244,7 +282,7 @@ fn loadConfig(arena: std.mem.Allocator, io: Io, flag: ?[]const u8, stderr: *Io.W
         }
         return error.ReportedConfigError;
     };
-    return cfg;
+    return .{ .path = source, .text = text, .config = cfg };
 }
 
 const max_config_bytes = 64 * 1024;

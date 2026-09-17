@@ -4,6 +4,7 @@
 statusbar [run] [options] [-- COMMAND...]
 statusbar set <left|right> [TEXT...]
 eval "$(statusbar init zsh)"
+statusbar config [--path] [--default | --config PATH]
 statusbar completion <bash|zsh|fish>
 ```
 
@@ -40,6 +41,28 @@ session. See [set.md](set.md).
 
 `statusbar init zsh` prints the zsh integration that moves starship's prompt
 into the bar. See [starship.md](starship.md).
+
+## `config`
+
+Prints the configuration `run` would use: the config file, or the built-in
+config when there is none. The config is parsed first, so this also checks
+it: a broken file reports its error and exits with status 2.
+
+| Option                | Meaning                                              |
+|-----------------------|------------------------------------------------------|
+| `--path`              | print only where the config comes from, or `built-in` |
+| `--default`           | use the built-in config, ignoring any config file    |
+| `-c`, `--config PATH` | use this file, as `run --config` would               |
+
+To start a config of your own from the built-in one:
+
+```sh
+mkdir -p ~/.config/statusbar
+statusbar config --default > ~/.config/statusbar/config
+```
+
+Use `--default` here: the shell empties the target file before statusbar
+reads it, so plain `statusbar config` would find an empty config.
 
 ## `completion`
 
