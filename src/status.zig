@@ -24,6 +24,7 @@ pub const Command = struct {
 
     pid: ?c.pid_t = null,
     fd: ?sys.Fd = null,
+    termination_requested: bool = false,
     started_ms: i64 = 0,
     next_ms: i64 = 0,
     output: [max_output]u8 = undefined,
@@ -74,8 +75,12 @@ pub const Command = struct {
 
     /// Milliseconds until `tick` has work to do, or -1 for none.
     pub fn timeout(self: *const Command, now_ms: i64) i64 {
-        if (self.fd != null) return @max(self.started_ms + self.deadline() - now_ms, 0);
-        if (self.pid != null) return 50;
+        if (self.pid != null) {
+            // Once SIGKILL has been sent, leave the poll loop a bounded wait
+            // to reap the process instead of spinning on an expired deadline.
+            if (self.termination_requested) return 50;
+            return @max(self.started_ms + self.deadline() - now_ms, 0);
+        }
         return @max(self.next_ms - now_ms, 0);
     }
 
@@ -85,13 +90,15 @@ pub const Command = struct {
 
     /// Reaps, kills overdue runs, and starts the next one when it is due.
     pub fn tick(self: *Command, io: std.Io, now_ms: i64) void {
-        if (self.fd != null and now_ms - self.started_ms >= self.deadline()) {
-            self.stop(io);
-        }
-        if (self.fd == null) {
-            if (self.pid) |pid| {
+        if (self.pid) |pid| {
+            if (!self.termination_requested and now_ms - self.started_ms >= self.deadline()) {
+                self.stop(io);
+                self.termination_requested = true;
+            }
+            if (self.fd == null) {
                 if (sys.tryWaitFor(pid) == null) return;
                 self.pid = null;
+                self.termination_requested = false;
             }
         }
         if (self.pid == null and now_ms >= self.next_ms) self.start(io, now_ms);
@@ -113,7 +120,10 @@ pub const Command = struct {
                 sys.close(io, fd);
                 self.fd = null;
                 if (self.pid) |pid| {
-                    if (sys.tryWaitFor(pid) != null) self.pid = null;
+                    if (sys.tryWaitFor(pid) != null) {
+                        self.pid = null;
+                        self.termination_requested = false;
+                    }
                 }
                 return self.output[0..self.output_len];
             },
@@ -160,7 +170,78 @@ pub const Command = struct {
         sys.close(io, fds[1]);
         self.pid = pid;
         self.fd = fds[0];
+        self.termination_requested = false;
         self.started_ms = now_ms;
         self.output_len = 0;
     }
 };
+
+fn awaitOutput(command: *Command, io: std.Io) ![]const u8 {
+    var attempts: usize = 0;
+    while (attempts < 100) : (attempts += 1) {
+        if (command.onReadable(io)) |output| return output;
+        sys.sleepMs(io, 5);
+    }
+    return error.TestExpectedOutput;
+}
+
+test "command output exits and schedules the next refresh" {
+    var command = try Command.init(std.testing.allocator, std.testing.io, "printf done", 100, 1, 80);
+    defer command.deinit(std.testing.io);
+
+    command.refreshNow(0);
+    command.tick(std.testing.io, 0);
+    try std.testing.expectEqualStrings("done", try awaitOutput(&command, std.testing.io));
+    try std.testing.expect(command.pid == null);
+    try std.testing.expectEqual(@as(i64, 1), command.timeout(99));
+    command.tick(std.testing.io, 99);
+    try std.testing.expect(command.pid == null);
+    command.tick(std.testing.io, 100);
+    try std.testing.expect(command.pid != null);
+}
+
+test "command deadline survives closed stdout until the process is reaped" {
+    var command = try Command.init(std.testing.allocator, std.testing.io, "printf ready; exec 1>&-; sleep 2", 100, 1, 80);
+    defer command.deinit(std.testing.io);
+
+    command.refreshNow(0);
+    command.tick(std.testing.io, 0);
+    const first_pid = command.pid.?;
+    try std.testing.expectEqualStrings("ready", try awaitOutput(&command, std.testing.io));
+    try std.testing.expect(command.fd == null);
+    try std.testing.expect(command.pid != null);
+
+    const deadline_ms = command.deadline();
+    try std.testing.expectEqual(@as(i64, 1), command.timeout(deadline_ms - 1));
+    command.tick(std.testing.io, deadline_ms - 1);
+    try std.testing.expectEqual(first_pid, command.pid.?);
+    command.tick(std.testing.io, deadline_ms);
+    try std.testing.expect(command.termination_requested);
+    // An overdue, killed process gets a positive bounded reap wait.
+    try std.testing.expectEqual(@as(i64, 50), command.timeout(deadline_ms));
+
+    command.next_ms = deadline_ms + 1_000;
+    var attempts: usize = 0;
+    while (command.pid != null and attempts < 100) : (attempts += 1) {
+        sys.sleepMs(std.testing.io, 5);
+        command.tick(std.testing.io, deadline_ms + 1);
+    }
+    try std.testing.expect(command.pid == null);
+    command.next_ms = deadline_ms + 1;
+    command.tick(std.testing.io, deadline_ms + 1);
+    try std.testing.expect(command.pid != null);
+    try std.testing.expect(command.pid.? != first_pid);
+}
+
+test "command deadline closes an open stdout pipe" {
+    var command = try Command.init(std.testing.allocator, std.testing.io, "sleep 2", 100, 1, 80);
+    defer command.deinit(std.testing.io);
+
+    command.refreshNow(0);
+    command.tick(std.testing.io, 0);
+    try std.testing.expect(command.fd != null);
+    command.tick(std.testing.io, command.deadline());
+    try std.testing.expect(command.fd == null);
+    try std.testing.expect(command.termination_requested);
+    try std.testing.expectEqual(@as(i64, 50), command.timeout(command.deadline()));
+}

@@ -303,6 +303,7 @@ test {
     _ = cli;
     _ = @import("source.zig");
     _ = @import("child.zig");
+    _ = @import("status.zig");
     _ = proxy;
 }
 
