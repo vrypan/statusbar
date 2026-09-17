@@ -10,7 +10,7 @@ const std = @import("std");
 const markup = @import("markup.zig");
 
 pub const max_lines = 2;
-const max_line_bytes = 1024;
+pub const max_line_bytes = 1024;
 
 pub const Content = struct {
     lines: [max_lines][max_line_bytes]u8 = undefined,
@@ -46,10 +46,16 @@ pub const Look = struct {
     palette: markup.Palette = .{},
 };
 
-pub fn paint(w: *std.Io.Writer, content: *const Content, look: *const Look, first_row: u16, lines: u16, cols: u16, region: []const u8) !void {
+/// `autowrap` is the child's DECAWM, restored after the paint. DECSC does not
+/// save it.
+pub fn paint(w: *std.Io.Writer, content: *const Content, look: *const Look, first_row: u16, lines: u16, cols: u16, region: []const u8, autowrap: bool) !void {
     // Save, restore the margins the terminal may have dropped, then leave
     // origin mode and any line-drawing character set for the paint.
-    try w.writeAll("\x1b7");
+    // Without autowrap, text that turns out wider than measured (the terminal
+    // and statusbar can disagree about a character's width) is clipped at the
+    // right edge. With it, the overflow would wrap onto the first column of
+    // the bottom row and overwrite the start of the bar.
+    try w.writeAll("\x1b7\x1b[?7l");
     try w.writeAll(region);
     try w.writeAll("\x1b[?6l\x1b(B");
     for (0..lines) |n| {
@@ -64,12 +70,11 @@ pub fn paint(w: *std.Io.Writer, content: *const Content, look: *const Look, firs
         }
     }
     try w.writeAll("\x1b[0m\x1b8");
+    if (autowrap) try w.writeAll("\x1b[?7h");
 }
 
-/// Slots, in the order they are drawn.
 const left = 0;
-const center = 1;
-const right = 2;
+const right = 1;
 
 const Placement = struct {
     col: usize = 0,
@@ -77,39 +82,20 @@ const Placement = struct {
     width: usize = 0,
 };
 
-/// One bar line: markup expanded, then split on tabs into slots.
-///
-///     left                     one field
-///     left \t right            two fields
-///     left \t center \t right  three fields
-///
-/// Styling does not carry from one slot into the gap after it.
+/// Splits a line at its first tab into the left and right slots. Any further
+/// tabs stay in the right slot, where they print as spaces.
+pub fn splitSlots(text: []const u8) [2][]const u8 {
+    const tab = std.mem.indexOfScalar(u8, text, '\t') orelse return .{ text, "" };
+    return .{ text[0..tab], text[tab + 1 ..] };
+}
+
+/// One bar line: markup expanded, then split into `left \t right`. Styling
+/// does not carry from the left slot into the gap after it.
 fn writeLine(w: *std.Io.Writer, text: []const u8, cols: u16, style: []const u8, palette: markup.Palette) !void {
     var expanded_buf: [4096]u8 = undefined;
-    const expanded = markup.expand(text, &expanded_buf, palette);
+    const slots = splitSlots(markup.expand(text, &expanded_buf, palette));
 
-    var fields: [3][]const u8 = .{ "", "", "" };
-    var count: usize = 0;
-    var it = std.mem.splitScalar(u8, expanded, '\t');
-    while (it.next()) |field| : (count += 1) {
-        if (count == fields.len) {
-            // Further tabs belong to the last slot, where they print as spaces.
-            fields[count - 1] = expanded[fields[count - 1].ptr - expanded.ptr ..];
-            break;
-        }
-        fields[count] = field;
-    }
-    var slots: [3][]const u8 = .{ "", "", "" };
-    switch (count) {
-        0, 1 => slots[left] = fields[0],
-        2 => {
-            slots[left] = fields[0];
-            slots[right] = fields[1];
-        },
-        else => slots = fields,
-    }
-
-    var widths: [3]usize = undefined;
+    var widths: [2]usize = undefined;
     for (slots, 0..) |slot, n| widths[n] = try writeClipped(null, slot, std.math.maxInt(usize), style);
     const places = layout(widths, cols);
 
@@ -134,31 +120,16 @@ fn writeRule(w: *std.Io.Writer, rule: []const u8, cols: u16) !void {
     while (used + width <= cols) : (used += width) try w.writeAll(rule);
 }
 
-/// Places slots on a line `cols` wide. When space runs out the center goes
-/// first, then the right slot is clipped, and the left slot is kept longest.
-fn layout(widths: [3]usize, cols: usize) [3]Placement {
-    var places: [3]Placement = .{ .{}, .{}, .{} };
-
+/// Places the slots on a line `cols` wide. When space runs out the right slot
+/// is clipped, and the left slot is kept longest.
+fn layout(widths: [2]usize, cols: usize) [2]Placement {
+    var places: [2]Placement = .{ .{}, .{} };
     places[left] = .{ .col = 0, .width = @min(widths[left], cols) };
-    const left_end = places[left].width;
-
     if (widths[right] > 0) {
+        const left_end = places[left].width;
         const gap: usize = if (left_end > 0) 1 else 0;
-        const room = cols -| (left_end + gap);
-        const width = @min(widths[right], room);
+        const width = @min(widths[right], cols -| (left_end + gap));
         places[right] = .{ .col = cols - width, .width = width };
-    }
-
-    if (widths[center] > 0) {
-        const lo = if (left_end > 0) left_end + 1 else 0;
-        const hi = if (places[right].width > 0) places[right].col -| 1 else cols;
-        if (hi >= lo and hi - lo >= widths[center]) {
-            const ideal = (cols -| widths[center]) / 2;
-            places[center] = .{
-                .col = std.math.clamp(ideal, lo, hi - widths[center]),
-                .width = widths[center],
-            };
-        }
     }
     return places;
 }
@@ -209,7 +180,10 @@ fn writeClipped(maybe_w: ?*std.Io.Writer, text: []const u8, cols: usize, style: 
             i += 1;
             continue;
         };
-        const width = cellWidth(cp);
+        var width = cellWidth(cp);
+        // VS16 asks for emoji presentation, which terminals draw two cells
+        // wide: ☁️ is U+2601 U+FE0F.
+        if (width == 1 and std.mem.startsWith(u8, text[i + len ..], "\u{fe0f}")) width = 2;
         if (used + width > cols) break;
         try w.writeAll(text[i .. i + len]);
         used += width;
@@ -307,27 +281,20 @@ fn rendered(text: []const u8, cols: u16) ![]const u8 {
     return T.buf[0..len];
 }
 
-test "slots are aligned left, center and right" {
+test "slots are aligned left and right" {
     try std.testing.expectEqualStrings("host", try rendered("host", 20));
     try std.testing.expectEqualStrings("host           12:00", try rendered("host\t12:00", 20));
-    try std.testing.expectEqualStrings("host    main   12:00", try rendered("host\tmain\t12:00", 20));
-    try std.testing.expectEqualStrings("        main", try rendered("\tmain\t", 20));
     try std.testing.expectEqualStrings("               12:00", try rendered("\t12:00", 20));
+    try std.testing.expectEqualStrings("a              b c d", try rendered("a\tb\tc\td", 20));
 }
 
-test "the center moves aside for a long left slot" {
-    try std.testing.expectEqualStrings("a-long-left main  12", try rendered("a-long-left\tmain\t12", 20));
-}
-
-test "narrow lines drop the center, then clip the right" {
-    try std.testing.expectEqualStrings("hostname 12:00", try rendered("hostname\tbranch\t12:00", 14));
+test "narrow lines clip the right slot first" {
     try std.testing.expectEqualStrings("hostname 12", try rendered("hostname\t12:00", 11));
     try std.testing.expectEqualStrings("hostn", try rendered("hostname\t12:00", 5));
 }
 
 test "markup and wide characters are measured by cells" {
     try std.testing.expectEqualStrings("日本    x", try rendered("#[fg=blue,bold]日本#[default]\tx", 9));
-    try std.testing.expectEqualStrings("a  b c d", try rendered("a\tb\tc\td", 8));
 }
 
 test "text is clipped to the width in cells" {
@@ -351,6 +318,25 @@ test "content keeps the first lines and reports changes" {
     try std.testing.expect(!content.set("one\ntwo\n"));
     try std.testing.expect(content.set("one\n"));
     try std.testing.expectEqualStrings("", content.line(1));
+}
+
+test "emoji presentation takes two cells" {
+    try std.testing.expectEqualStrings("a☁️", try clipped("a☁️b", 3, ""));
+    try std.testing.expectEqualStrings("a", try clipped("a☁️b", 2, ""));
+    try std.testing.expectEqualStrings("a☁b", try clipped("a☁b", 3, ""));
+}
+
+test "the paint clips instead of wrapping and restores autowrap" {
+    var content: Content = .{};
+    _ = content.set("x");
+    var buf: [512]u8 = undefined;
+    for ([_]bool{ true, false }) |autowrap| {
+        var w: std.Io.Writer = .fixed(&buf);
+        try paint(&w, &content, &.{}, 24, 1, 80, "", autowrap);
+        const out = w.buffered();
+        try std.testing.expect(std.mem.startsWith(u8, out, "\x1b7\x1b[?7l"));
+        try std.testing.expectEqual(autowrap, std.mem.endsWith(u8, out, "\x1b8\x1b[?7h"));
+    }
 }
 
 test "rules repeat across the width" {

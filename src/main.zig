@@ -13,6 +13,7 @@ pub const panic = std.debug.FullPanic(struct {
 
 const usage =
     \\usage: statusbar [options] [-- command [args...]]
+    \\       statusbar set left|right [TEXT...]
     \\
     \\Run a command (default: $SHELL) under a pty that is one or two rows
     \\shorter than the terminal, and keep a status bar in the rows it gave up.
@@ -32,8 +33,12 @@ const usage =
     \\  -h, --help            show this help
     \\  -V, --version         show the version
     \\
-    \\Each bar line may hold up to three tab-separated slots: left,
-    \\left<TAB>right, or left<TAB>center<TAB>right. Style text with tmux-like
+    \\`statusbar set` replaces the left or right slot of the bar's last text
+    \\line from inside a session; no TEXT restores it. Outside a session it
+    \\does nothing.
+    \\
+    \\An --exec line may hold two tab-separated slots: left, or
+    \\left<TAB>right. Style text with tmux-like
     \\markup: #[fg=blue,bold]text#[default], with colors given as names
     \\(brightblack), colour214, #89b4fa, or [colors] from the config.
     \\## prints a literal #.
@@ -54,6 +59,10 @@ pub fn main(init: std.process.Init) !u8 {
     var stdout_buf: [1024]u8 = undefined;
     var stdout_file: Io.File.Writer = .initStreaming(.stdout(), init.io, &stdout_buf);
     const stdout = &stdout_file.interface;
+
+    if (args.len > 1 and std.mem.eql(u8, args[1], "set")) {
+        return setSlot(arena, init.io, args[2..], stderr);
+    }
 
     var cli: struct {
         lines: ?u16 = null,
@@ -145,6 +154,38 @@ pub fn main(init: std.process.Init) !u8 {
         try stderr.flush();
         return 1;
     };
+}
+
+/// `statusbar set left|right [TEXT...]`: sends the slot's user variable to the
+/// terminal of the statusbar session this runs in. Words are joined with
+/// spaces, as `echo` would. It writes to /dev/tty rather than stdout, so a
+/// prompt tool capturing stdout never gets the sequence in its prompt.
+fn setSlot(arena: std.mem.Allocator, io: Io, args: []const [:0]const u8, stderr: *Io.Writer) !u8 {
+    if (args.len == 0) return usageError(stderr, "set needs a slot: left or right");
+    const name: []const u8 = if (std.mem.eql(u8, args[0], "left"))
+        "StatusBarLeft"
+    else if (std.mem.eql(u8, args[0], "right"))
+        "StatusBarRight"
+    else
+        return usageError(stderr, "set takes left or right");
+
+    // Outside a session there is no bar to update, and nothing is written.
+    if (!@import("environment.zig").contains("STATUSBAR_LINES")) return 0;
+
+    var text: std.ArrayList(u8) = .empty;
+    for (args[1..], 0..) |word, n| {
+        if (n > 0) try text.append(arena, ' ');
+        try text.appendSlice(arena, word);
+    }
+    const encoder = std.base64.standard.Encoder;
+    const encoded = try arena.alloc(u8, encoder.calcSize(text.items.len));
+    _ = encoder.encode(encoded, text.items);
+    const sequence = try std.fmt.allocPrint(arena, "\x1b]1337;SetUserVar={s}={s}\x07", .{ name, encoded });
+
+    const tty = Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .write_only }) catch return 0;
+    defer tty.close(io);
+    tty.writeStreamingAll(io, sequence) catch {};
+    return 0;
 }
 
 /// Reads the config from `--config`, `$STATUSBAR_CONFIG`, or the default

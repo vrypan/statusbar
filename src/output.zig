@@ -13,14 +13,24 @@
 //!
 //! Everything except CSI parameters is forwarded as it arrives. A CSI is
 //! buffered from its first parameter byte to its final byte, so a sequence
-//! split across reads is still rewritten as a whole.
+//! split across reads is still rewritten as a whole. An OSC is held only as
+//! long as it could still be one of the proxy's own user variables.
 
 const std = @import("std");
 
 const max_seq = 64;
 const max_params = 16;
 
+/// iTerm2's user variables, which WezTerm understands too. The proxy keeps
+/// the two it owns and forwards every other OSC.
+///
+///     ESC ] 1337 ; SetUserVar=StatusBarLeft=<base64> BEL
+const user_var_prefix = "1337;SetUserVar=StatusBar";
+pub const max_value = 1024;
+
 const esc = 0x1b;
+
+pub const Slot = enum(u1) { Left, Right };
 
 pub const Output = struct {
     /// Bar rows above and below the child. With neither, nothing is rewritten.
@@ -41,6 +51,19 @@ pub const Output = struct {
     /// The child saved the cursor (DECSC or SCOSC) and has not restored it
     /// yet. A repaint borrows the same save slot, so it must wait.
     cursor_saved: bool = false,
+    /// DECAWM as the child last set it. The paint turns wrapping off and
+    /// needs to know what to put back.
+    autowrap: bool = true,
+
+    /// The latest StatusBarLeft and StatusBarRight values.
+    values: [2][max_value]u8 = undefined,
+    value_lens: [2]usize = .{ 0, 0 },
+    value_changed: [2]bool = .{ false, false },
+
+    osc_len: usize = 0,
+    payload: [2 * max_value]u8 = undefined,
+    payload_len: usize = 0,
+    payload_overflow: bool = false,
 
     state: State = .ground,
     string_is_osc: bool = false,
@@ -49,7 +72,7 @@ pub const Output = struct {
     seq_len: usize = 0,
     utf8_pending: u3 = 0,
 
-    const State = enum { ground, esc, esc_intermediate, csi, csi_ignore, string, string_esc };
+    const State = enum { ground, esc, esc_intermediate, csi, csi_ignore, string, string_esc, osc_prefix, user_var, user_var_esc };
 
     fn active(self: *const Output) bool {
         return self.above + self.below > 0;
@@ -69,52 +92,68 @@ pub const Output = struct {
             const b = bytes[i];
             switch (self.state) {
                 .ground => {
+                    i += 1;
                     if (b == esc) {
+                        // Hold the ESC back until the next byte shows whether
+                        // it starts one of the proxy's own OSCs, which never
+                        // reach the terminal.
+                        sink.write(bytes[run .. i - 1]);
+                        run = i;
                         self.state = .esc;
                         self.utf8_pending = 0;
                     } else self.trackUtf8(b);
-                    i += 1;
                 },
                 .esc => {
                     i += 1;
+                    run = i;
                     switch (b) {
                         '[' => {
-                            sink.write(bytes[run..i]);
-                            run = i;
+                            sink.write("\x1b[");
                             self.state = .csi;
                             self.seq_len = 0;
                         },
-                        ']', 'P', '_', '^', 'X' => {
+                        ']' => {
+                            self.state = .osc_prefix;
+                            self.osc_len = 0;
+                        },
+                        'P', '_', '^', 'X' => {
+                            sink.write(&.{ esc, b });
                             self.state = .string;
-                            self.string_is_osc = b == ']';
+                            self.string_is_osc = false;
                         },
                         'c' => {
-                            sink.write(bytes[run..i]);
-                            run = i;
+                            sink.write("\x1bc");
                             self.state = .ground;
                             self.hardReset(sink);
                         },
-                        '7' => {
-                            self.cursor_saved = true;
+                        '7', '8' => {
+                            sink.write(&.{ esc, b });
+                            self.cursor_saved = b == '7';
                             self.state = .ground;
                         },
-                        '8' => {
-                            self.cursor_saved = false;
-                            self.state = .ground;
-                        },
-                        esc => {},
+                        // The first ESC was not followed by anything; hold
+                        // the second in its place.
+                        esc => sink.write("\x1b"),
                         0x20...0x2f => {
+                            sink.write(&.{ esc, b });
                             self.state = .esc_intermediate;
                             self.esc_hash = b == '#';
                         },
-                        else => self.state = .ground,
+                        else => {
+                            sink.write(&.{ esc, b });
+                            self.state = .ground;
+                        },
                     }
                 },
                 .esc_intermediate => {
                     i += 1;
                     switch (b) {
                         0x20...0x2f => {},
-                        esc => self.state = .esc,
+                        esc => {
+                            sink.write(bytes[run .. i - 1]);
+                            run = i;
+                            self.state = .esc;
+                        },
                         0x30...0x7e => {
                             // DECALN fills the whole screen with E.
                             if (self.esc_hash and b == '8') self.damaged = true;
@@ -145,7 +184,6 @@ pub const Output = struct {
                         },
                         esc => {
                             sink.write(self.seq[0..self.seq_len]);
-                            sink.write(&.{b});
                             self.state = .esc;
                         },
                         0x18, 0x1a => {
@@ -161,14 +199,22 @@ pub const Output = struct {
                     i += 1;
                     switch (b) {
                         0x40...0x7e, 0x18, 0x1a => self.state = .ground,
-                        esc => self.state = .esc,
+                        esc => {
+                            sink.write(bytes[run .. i - 1]);
+                            run = i;
+                            self.state = .esc;
+                        },
                         else => {},
                     }
                 },
                 .string => {
                     i += 1;
                     switch (b) {
-                        esc => self.state = .string_esc,
+                        esc => {
+                            sink.write(bytes[run .. i - 1]);
+                            run = i;
+                            self.state = .string_esc;
+                        },
                         0x07 => if (self.string_is_osc) {
                             self.state = .ground;
                         },
@@ -179,15 +225,93 @@ pub const Output = struct {
                 .string_esc => {
                     if (b == '\\') {
                         i += 1;
+                        run = i;
+                        sink.write("\x1b\\");
                         self.state = .ground;
                     } else {
-                        // Any other escape aborts the string and starts anew.
+                        // Any other escape aborts the string and starts anew,
+                        // with the held ESC.
+                        self.state = .esc;
+                    }
+                },
+                .osc_prefix => {
+                    if (self.osc_len < user_var_prefix.len and b == user_var_prefix[self.osc_len]) {
+                        i += 1;
+                        run = i;
+                        self.osc_len += 1;
+                        if (self.osc_len == user_var_prefix.len) {
+                            self.state = .user_var;
+                            self.payload_len = 0;
+                            self.payload_overflow = false;
+                        }
+                    } else {
+                        // Not ours: release what was held, and let this byte
+                        // continue an ordinary OSC.
+                        sink.write("\x1b]");
+                        sink.write(user_var_prefix[0..self.osc_len]);
+                        run = i;
+                        self.state = .string;
+                        self.string_is_osc = true;
+                    }
+                },
+                .user_var => {
+                    i += 1;
+                    run = i;
+                    switch (b) {
+                        0x07 => {
+                            self.finishUserVar();
+                            self.state = .ground;
+                        },
+                        esc => self.state = .user_var_esc,
+                        0x18, 0x1a => self.state = .ground,
+                        else => if (self.payload_len < self.payload.len) {
+                            self.payload[self.payload_len] = b;
+                            self.payload_len += 1;
+                        } else {
+                            self.payload_overflow = true;
+                        },
+                    }
+                },
+                .user_var_esc => {
+                    if (b == '\\') {
+                        i += 1;
+                        run = i;
+                        self.finishUserVar();
+                        self.state = .ground;
+                    } else {
+                        // Aborted; the held ESC starts whatever comes next.
                         self.state = .esc;
                     }
                 },
             }
         }
         if (run < bytes.len) sink.write(bytes[run..]);
+    }
+
+    /// Returns a slot value set since the last call, or null if there is none.
+    /// An empty value clears the slot.
+    pub fn takeValue(self: *Output, slot: Slot) ?[]const u8 {
+        const n = @intFromEnum(slot);
+        if (!self.value_changed[n]) return null;
+        self.value_changed[n] = false;
+        return self.values[n][0..self.value_lens[n]];
+    }
+
+    /// `StatusBarLeft=<base64>` or `StatusBarRight=<base64>`. Anything else
+    /// under the prefix, or a value that does not decode, is dropped.
+    fn finishUserVar(self: *Output) void {
+        if (self.payload_overflow) return;
+        const payload = self.payload[0..self.payload_len];
+        const eq = std.mem.indexOfScalar(u8, payload, '=') orelse return;
+        const slot = std.meta.stringToEnum(Slot, payload[0..eq]) orelse return;
+        const encoded = payload[eq + 1 ..];
+        const decoder = std.base64.standard.Decoder;
+        const size = decoder.calcSizeForSlice(encoded) catch return;
+        const n = @intFromEnum(slot);
+        if (size > self.values[n].len) return;
+        decoder.decode(self.values[n][0..size], encoded) catch return;
+        self.value_lens[n] = size;
+        self.value_changed[n] = true;
     }
 
     fn trackUtf8(self: *Output, b: u8) void {
@@ -226,6 +350,7 @@ pub const Output = struct {
 
     fn hardReset(self: *Output, sink: anytype) void {
         self.origin_mode = false;
+        self.autowrap = true;
         self.cursor_saved = false;
         self.top = 0;
         self.bottom = 0;
@@ -303,6 +428,7 @@ pub const Output = struct {
             sink.write(seq);
             var switched = false;
             for (params[0..count]) |mode| switch (mode) {
+                7 => self.autowrap = final == 'h',
                 6 => {
                     self.origin_mode = final == 'h';
                     // DECOM homes the cursor as well.
@@ -315,8 +441,10 @@ pub const Output = struct {
             return;
         } else if (marker == 0 and std.mem.eql(u8, intermediates, "!") and final == 'p') {
             // DECSTR resets the margins and origin mode without homing.
+            // Terminals put autowrap back to their default, which is on.
             sink.write(seq);
             self.origin_mode = false;
+            self.autowrap = true;
             self.top = 0;
             self.bottom = 0;
             self.damaged = true;
@@ -508,5 +636,66 @@ test "an unrestored cursor save is tracked" {
         const got = try translate(&out, case[0], 1);
         std.testing.allocator.free(got);
         try std.testing.expectEqual(case[1], out.cursor_saved);
+    }
+}
+
+test "status bar user variables are taken and never forwarded" {
+    // "left side" and "right" in base64.
+    const input = "a\x1b]1337;SetUserVar=StatusBarLeft=bGVmdCBzaWRl\x07b" ++
+        "\x1b]1337;SetUserVar=StatusBarRight=cmlnaHQ=\x1b\\c";
+    var chunk: usize = 1;
+    while (chunk <= input.len) : (chunk += 1) {
+        var out: Output = .{ .above = 0, .below = 1, .rows = 10 };
+        const got = try translate(&out, input, chunk);
+        defer std.testing.allocator.free(got);
+        try std.testing.expectEqualStrings("abc", got);
+        try std.testing.expectEqualStrings("left side", out.takeValue(.Left).?);
+        try std.testing.expectEqualStrings("right", out.takeValue(.Right).?);
+        try std.testing.expect(out.takeValue(.Left) == null);
+        try std.testing.expect(out.atBoundary());
+    }
+}
+
+test "other OSCs and user variables pass through" {
+    const inputs = [_][]const u8{
+        "\x1b]1337;SetUserVar=foo=YmFy\x07",
+        "\x1b]1337;SetMark\x07",
+        "\x1b]133;A\x1b\\",
+        "\x1b]13\x07x",
+        "\x1b]1337;SetUserVar=StatusBa\x07",
+        "\x1b\x1b]0;t\x07",
+    };
+    for (inputs) |input| {
+        var chunk: usize = 1;
+        while (chunk <= input.len) : (chunk += 1) {
+            var out: Output = .{ .above = 0, .below = 1, .rows = 10 };
+            const got = try translate(&out, input, chunk);
+            defer std.testing.allocator.free(got);
+            try std.testing.expectEqualStrings(input, got);
+        }
+    }
+}
+
+test "an empty value clears and a bad one is ignored" {
+    var out: Output = .{ .above = 0, .below = 1, .rows = 10 };
+    const got = try translate(&out, "\x1b]1337;SetUserVar=StatusBarLeft=\x07\x1b]1337;SetUserVar=StatusBarRight=%%%\x07\x1b]1337;SetUserVar=StatusBarMiddle=eA==\x07", 3);
+    defer std.testing.allocator.free(got);
+    try std.testing.expectEqualStrings("", got);
+    try std.testing.expectEqualStrings("", out.takeValue(.Left).?);
+    try std.testing.expect(out.takeValue(.Right) == null);
+}
+
+test "autowrap is tracked" {
+    var out: Output = .{ .above = 0, .below = 1, .rows = 10 };
+    for ([_]struct { []const u8, bool }{
+        .{ "\x1b[?7l", false },
+        .{ "\x1b[?7h", true },
+        .{ "\x1b[?25;7l", false },
+        .{ "\x1bc", true },
+        .{ "\x1b[?7l\x1b[!p", true },
+    }) |case| {
+        const got = try translate(&out, case[0], 2);
+        std.testing.allocator.free(got);
+        try std.testing.expectEqual(case[1], out.autowrap);
     }
 }

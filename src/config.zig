@@ -14,9 +14,8 @@
 //!     style = fg=rule
 //!
 //!     [line.2]
-//!     left   = " #[fg=accent,bold]#(hostname -s)#[default] · #(load)"
-//!     center = #(branch)
-//!     right  = "%a %d %b  #[bold]%H:%M "
+//!     left  = " #[fg=accent,bold]#(hostname -s)#[default] · #(load)"
+//!     right = "%a %d %b  #[bold]%H:%M "
 //!
 //!     [command.load]
 //!     run      = sysctl -n vm.loadavg | awk '{print $2}'
@@ -68,7 +67,6 @@ pub const Template = struct {
 
 pub const Line = struct {
     left: Template = .{},
-    center: Template = .{},
     right: Template = .{},
     /// Fill the line with this text instead of slots.
     rule: ?[]const u8 = null,
@@ -111,7 +109,7 @@ pub const Config = struct {
 
     pub fn usesClock(self: *const Config) bool {
         for (self.line) |line| {
-            if (line.left.usesClock() or line.center.usesClock() or line.right.usesClock()) return true;
+            if (line.left.usesClock() or line.right.usesClock()) return true;
         }
         return false;
     }
@@ -133,10 +131,8 @@ const Section = union(enum) {
 
 const RawLine = struct {
     left: []const u8 = "",
-    center: []const u8 = "",
     right: []const u8 = "",
     left_at: usize = 0,
-    center_at: usize = 0,
     right_at: usize = 0,
 };
 
@@ -188,9 +184,6 @@ pub fn parse(text: []const u8, diag: *Diagnostic) Error!Config {
                 if (eql(key, "left")) {
                     target.left = value;
                     target.left_at = number;
-                } else if (eql(key, "center")) {
-                    target.center = value;
-                    target.center_at = number;
                 } else if (eql(key, "right")) {
                     target.right = value;
                     target.right_at = number;
@@ -199,7 +192,7 @@ pub fn parse(text: []const u8, diag: *Diagnostic) Error!Config {
                     config.line[n].rule = value;
                 } else if (eql(key, "style")) {
                     config.line[n].style = value;
-                } else return fail(diag, "unknown line key; expected left, center, right, rule or style");
+                } else return fail(diag, "unknown line key; expected left, right, rule or style");
             },
             .command => |n| {
                 if (eql(key, "run")) {
@@ -223,8 +216,6 @@ pub fn parse(text: []const u8, diag: *Diagnostic) Error!Config {
     for (&raw, &config.line) |*source, *line| {
         diag.line = source.left_at;
         line.left = try compile(&config, source.left, diag);
-        diag.line = source.center_at;
-        line.center = try compile(&config, source.center, diag);
         diag.line = source.right_at;
         line.right = try compile(&config, source.right, diag);
     }
@@ -358,8 +349,7 @@ const example =
     \\
     \\[line.2]
     \\left   = " #[fg=accent]#(hostname -s)#[default] · #(load)"
-    \\center = #(git branch --show-current 2>/dev/null)
-    \\right  = "%H:%M #(load) "
+    \\right  = "#(git branch --show-current 2>/dev/null) %H:%M #(load) "
     \\
     \\[command.load]
     \\run      = sysctl -n vm.loadavg | awk '{print $2}'
@@ -392,8 +382,9 @@ test "a full config parses" {
     try std.testing.expectEqual(@as(u8, 1), left[1].command);
     try std.testing.expectEqual(@as(u8, 0), left[3].command);
     const right = config.line[1].right.items();
-    try std.testing.expectEqualStrings("%H:%M ", right[0].text);
-    try std.testing.expectEqual(@as(u8, 0), right[1].command);
+    try std.testing.expectEqual(@as(u8, 2), right[0].command);
+    try std.testing.expectEqualStrings(" %H:%M ", right[1].text);
+    try std.testing.expectEqual(@as(u8, 0), right[2].command);
 }
 
 test "nested parentheses and escaped hashes in templates" {

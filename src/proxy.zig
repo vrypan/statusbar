@@ -20,6 +20,7 @@ const c = std.c;
 const sys = @import("sys.zig");
 const tty = @import("tty.zig");
 const Output = @import("output.zig").Output;
+const Slot = @import("output.zig").Slot;
 const Input = @import("input.zig").Input;
 const bar = @import("bar.zig");
 const config = @import("config.zig");
@@ -396,7 +397,7 @@ const Proxy = struct {
         self.output.writeRegion(&WriterSink{ .w = &region });
         var buf: [16 * 1024]u8 = undefined;
         var w: std.Io.Writer = .fixed(&buf);
-        bar.paint(&w, &self.source.content, self.look, self.layout.barRow(), self.layout.barRows(), self.layout.cols, region.buffered()) catch {};
+        bar.paint(&w, &self.source.content, self.look, self.layout.barRow(), self.layout.barRows(), self.layout.cols, region.buffered(), self.output.autowrap) catch {};
         self.terminal.write(w.buffered());
         self.paint_requested_ms = null;
         self.output.damaged = false;
@@ -452,6 +453,9 @@ const Proxy = struct {
                     .bytes => |n| {
                         self.output.feed(out_buf[0..n], &self.terminal);
                         self.last_output_ms = now_ms;
+                        for ([_]Slot{ .Left, .Right }) |slot| {
+                            if (self.output.takeValue(slot)) |value| self.source.setOverride(slot, value);
+                        }
                         if (self.output.damaged) {
                             // Repaint in the same write as the erase, so the
                             // terminal never renders a frame without the bar.

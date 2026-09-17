@@ -30,9 +30,8 @@ rule  = ─
 style = fg=rule
 
 [line.2]
-left   = " #[fg=accent,bold]#(hostname -s)#[default] #[fg=dim]·#[default] #(load)"
-center = "#[italics]#(git -C ~/src/project branch --show-current)#[default]"
-right  = "%a %d %b  #[bold]%H:%M#[default] "
+left  = " #[fg=accent,bold]#(hostname -s)#[default] #[fg=dim]·#[default] #(load)"
+right = "#[italics]#(git -C ~/src/project branch --show-current)#[default]  %H:%M "
 
 [command.load]
 run      = sysctl -n vm.loadavg | awk '{print $2}'
@@ -53,13 +52,12 @@ as in `#[fg=accent]` or `style = fg=rule`.
 
 **`[line.1]`, `[line.2]`**: line 1 is the bar's upper row.
 
-- `left`, `center`, `right`: templates for the three slots
+- `left`, `right`: templates for the two slots
 - `rule`: fill the line with this text instead, e.g. `─`
 - `style`: style for this line
 
-The center is centered on the whole line and moves aside for a long left or
-right slot. When the line is too narrow, the center is dropped first, then
-the right slot is clipped; the left slot is kept longest.
+When a line is too narrow, the right slot is clipped first; the left slot is
+kept longest.
 
 **`[command.NAME]`**: `run`, a shell command, and optionally `interval`.
 
@@ -96,13 +94,52 @@ Style text with tmux-like markup instead of escape codes:
 
 Styles don't carry across slots. Raw SGR escapes work too.
 
+## Updating the bar from inside the session
+
+Programs running in the session can replace the left or right slot of the
+bar's last text line (the last one that isn't a rule):
+
+    statusbar set left  "$(starship module directory)"
+    statusbar set right "main ✓"
+    statusbar set right                     # restore the template
+
+Words are joined with spaces. Outside a statusbar session the command writes
+nothing and exits successfully, so hooks can call it unconditionally.
+
+It writes to `/dev/tty`, not stdout, so it also works from a prompt tool that
+captures command output. In starship:
+
+```toml
+[custom.statusbar]
+command = "statusbar set right \"$(git branch --show-current)\""
+when    = true
+```
+
+To move starship's prompt into the bar, see [docs/starship.md](docs/starship.md).
+
+Or on every prompt in zsh:
+
+```zsh
+statusbar_precmd() { statusbar set left "$(starship module directory)"; }
+precmd_functions+=(statusbar_precmd)
+```
+
+Under the hood it sends iTerm2's user-variable sequence, which WezTerm also
+understands:
+
+    ESC ] 1337 ; SetUserVar=StatusBarLeft=<base64> BEL
+
+statusbar keeps `StatusBarLeft` and `StatusBarRight` for itself and forwards
+every other OSC, including other user variables, to the terminal. Anything
+that can print to the terminal can send them, so treat bar content as
+display-only.
+
 ## `--exec`
 
 Instead of a config, a single shell command can fill the bar. It runs every
 `--interval` seconds, and each output line fills one bar row. A line may hold
-up to three tab-separated slots: `left`, `left<TAB>right`, or
-`left<TAB>center<TAB>right`. Markup, raw SGR colors and OSC 8 hyperlinks are
-kept; cursor movement is stripped.
+two tab-separated slots: `left` or `left<TAB>right`. Markup, raw SGR colors
+and OSC 8 hyperlinks are kept; cursor movement is stripped.
 
     statusbar -i 5 -s '' -e 'printf " #[bold]%s#[default]\t%s \n" "$(hostname -s)" "$(date +%H:%M)"'
 
