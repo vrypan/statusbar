@@ -394,16 +394,17 @@ const Proxy = struct {
     }
 
     fn paintIfDue(self: *Proxy, now_ms: i64) void {
-        const requested = self.paint_requested_ms orelse return;
-        if (!self.output.atBoundary()) return;
-        if (self.output.cursor_saved and now_ms - self.last_output_ms < paint_quiet_ms) return;
-        if (now_ms - self.last_output_ms < paint_quiet_ms and now_ms - requested < paint_max_delay_ms) return;
+        if (self.paintTimeout(now_ms) != 0) return;
         self.paint();
     }
 
     fn paintTimeout(self: *const Proxy, now_ms: i64) i64 {
         const requested = self.paint_requested_ms orelse return -1;
+        if (!self.output.atBoundary()) return -1;
         const quiet = self.last_output_ms + paint_quiet_ms;
+        // DECSC owns the terminal save slot. Its quiet-time rule deliberately
+        // takes precedence over the usual maximum paint delay.
+        if (self.output.cursor_saved) return @max(quiet - now_ms, 0);
         const forced = requested + paint_max_delay_ms;
         return @max(@min(quiet, forced) - now_ms, 0);
     }
@@ -582,4 +583,65 @@ test "layout places the bar and gives it up on tiny terminals" {
     const tiny = Layout.of(.{ .row = 3, .col = 80, .xpixel = 0, .ypixel = 0 }, 2);
     try std.testing.expectEqual(@as(u16, 0), tiny.bar);
     try std.testing.expectEqual(@as(u16, 3), tiny.child.row);
+}
+
+fn schedulerProxy() Proxy {
+    var proxy: Proxy = undefined;
+    proxy.output = .{ .bar = 1, .rows = 10 };
+    proxy.paint_requested_ms = null;
+    proxy.last_output_ms = 0;
+    return proxy;
+}
+
+test "paint timeout waits for a safe output boundary" {
+    var proxy = schedulerProxy();
+    try std.testing.expectEqual(@as(i64, -1), proxy.paintTimeout(0));
+
+    proxy.paint_requested_ms = 0;
+    proxy.output.state = .csi;
+    try std.testing.expectEqual(@as(i64, -1), proxy.paintTimeout(paint_max_delay_ms + 1));
+    proxy.output.state = .string;
+    try std.testing.expectEqual(@as(i64, -1), proxy.paintTimeout(paint_max_delay_ms + 1));
+    proxy.output.state = .ground;
+    proxy.output.utf8_pending = 1;
+    try std.testing.expectEqual(@as(i64, -1), proxy.paintTimeout(paint_max_delay_ms + 1));
+
+    proxy.output.utf8_pending = 0;
+    proxy.output.cursor_saved = true;
+    proxy.last_output_ms = 100;
+    try std.testing.expectEqual(@as(i64, 10), proxy.paintTimeout(120));
+    try std.testing.expectEqual(@as(i64, 0), proxy.paintTimeout(130));
+
+    proxy.output.cursor_saved = false;
+    proxy.last_output_ms = 1_000;
+    proxy.paint_requested_ms = 0;
+    try std.testing.expectEqual(@as(i64, 0), proxy.paintTimeout(paint_max_delay_ms));
+    proxy.paint_requested_ms = 900;
+    try std.testing.expectEqual(@as(i64, 30), proxy.paintTimeout(1_000));
+    try std.testing.expectEqual(@as(i64, 0), proxy.paintTimeout(1_030));
+    try std.testing.expectEqual(@as(i64, 0), proxy.paintTimeout(1_500));
+}
+
+test "a completed scalar makes an overdue paint eligible" {
+    var output: Output = .{ .bar = 1, .rows = 10 };
+    var sink = struct {
+        pub fn write(_: *@This(), _: []const u8) void {}
+    }{};
+    var proxy = schedulerProxy();
+    proxy.paint_requested_ms = 0;
+    output.feed("\xf0\x9f", &sink);
+    proxy.output = output;
+    try std.testing.expectEqual(@as(i64, -1), proxy.paintTimeout(paint_max_delay_ms + 1));
+    // Repeated checks remain asleep while the scalar is incomplete.
+    try std.testing.expectEqual(@as(i64, -1), proxy.paintTimeout(paint_max_delay_ms + 2));
+    output.feed("\x98\x80", &sink);
+    proxy.output = output;
+    try std.testing.expectEqual(@as(i64, 0), proxy.paintTimeout(paint_max_delay_ms + 2));
+}
+
+test "min timeout ignores absent timers" {
+    try std.testing.expectEqual(@as(i64, 12), minTimeout(-1, 12));
+    try std.testing.expectEqual(@as(i64, 12), minTimeout(12, -1));
+    try std.testing.expectEqual(@as(i64, -1), minTimeout(-1, -1));
+    try std.testing.expectEqual(@as(i64, 4), minTimeout(4, 12));
 }

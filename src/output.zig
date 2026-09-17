@@ -85,6 +85,7 @@ pub const Output = struct {
 
     /// `sink.write(bytes)` receives the translated stream.
     pub fn feed(self: *Output, bytes: []const u8, sink: anytype) void {
+        self.utf8_pending = self.pendingAfter(bytes);
         var run: usize = 0;
         var i: usize = 0;
         while (i < bytes.len) {
@@ -289,7 +290,6 @@ pub const Output = struct {
             }
         }
         if (run < bytes.len) sink.write(bytes[run..]);
-        if (self.state == .ground) self.utf8_pending = incompleteTail(bytes);
     }
 
     /// Returns a slot value set since the last call, or null if there is none.
@@ -318,9 +318,27 @@ pub const Output = struct {
         self.value_changed[n] = true;
     }
 
+    /// Carries an incomplete scalar over read boundaries. Only the leading
+    /// continuation bytes need inspecting; ordinary ASCII output retains the
+    /// fast vectorized path in `feed`.
+    fn pendingAfter(self: *const Output, bytes: []const u8) u3 {
+        var pending = self.utf8_pending;
+        var i: usize = 0;
+        while (pending > 0 and i < bytes.len) : (i += 1) {
+            if (bytes[i] & 0xc0 != 0x80) {
+                // Invalid UTF-8, ASCII, and terminal control bytes all end
+                // the interrupted scalar. Do not let it block repainting.
+                pending = 0;
+                break;
+            }
+            pending -= 1;
+        }
+        if (i == bytes.len) return pending;
+        return incompleteTail(bytes);
+    }
+
     /// How many bytes are still missing from a character at the end of
-    /// `bytes`. A continuation byte with no lead byte in reach completes a
-    /// character that began in an earlier read, so it counts as complete.
+    /// `bytes` when no earlier scalar is incomplete.
     fn incompleteTail(bytes: []const u8) u3 {
         const tail = bytes[bytes.len -| 3..];
         var back: usize = tail.len;
@@ -577,6 +595,63 @@ test "boundaries exclude partial characters and sequences" {
     out.feed("2;1H", &collector);
     try std.testing.expect(out.atBoundary());
     try std.testing.expectEqualStrings("a\xc3\xa9\x1b[10;1H", collector.bytes.items);
+}
+
+test "UTF-8 boundaries survive every read partition" {
+    const cases = [_][]const u8{ "\xc2\xa2", "\xe2\x82\xac", "\xf0\x9f\x98\x80" };
+    for (cases) |text| {
+        // A bit per internal byte boundary selects every possible partition.
+        var mask: usize = 0;
+        while (mask < (@as(usize, 1) << @intCast(text.len - 1))) : (mask += 1) {
+            var out: Output = .{ .bar = 1, .rows = 10 };
+            var collector: Collector = .{};
+            defer collector.bytes.deinit(std.testing.allocator);
+            var start: usize = 0;
+            var boundary: usize = 1;
+            while (boundary < text.len) : (boundary += 1) {
+                if (mask & (@as(usize, 1) << @intCast(boundary - 1)) == 0) continue;
+                out.feed(text[start..boundary], &collector);
+                try std.testing.expect(!out.atBoundary());
+                start = boundary;
+            }
+            out.feed(text[start..], &collector);
+            try std.testing.expect(out.atBoundary());
+            try std.testing.expectEqualStrings(text, collector.bytes.items);
+        }
+    }
+}
+
+test "UTF-8 pending state handles continuation chunks and recovery" {
+    var out: Output = .{ .bar = 1, .rows = 10 };
+    var collector: Collector = .{};
+    defer collector.bytes.deinit(std.testing.allocator);
+
+    out.feed("a\xf0", &collector);
+    try std.testing.expect(!out.atBoundary());
+    out.feed("\x9f", &collector);
+    try std.testing.expect(!out.atBoundary());
+    out.feed("\x98\x80b", &collector);
+    try std.testing.expect(out.atBoundary());
+    out.feed(&.{}, &collector);
+    try std.testing.expect(out.atBoundary());
+    try std.testing.expectEqualStrings("a\xf0\x9f\x98\x80b", collector.bytes.items);
+
+    out.feed("\xc2\xa2\xe2", &collector);
+    try std.testing.expect(!out.atBoundary());
+    out.feed("\x82\xac", &collector);
+    try std.testing.expect(out.atBoundary());
+
+    out.feed("\x80", &collector); // Leading continuation is not held.
+    try std.testing.expect(out.atBoundary());
+    out.feed("\xe2", &collector);
+    try std.testing.expect(!out.atBoundary());
+    out.feed("x", &collector); // ASCII interrupts the malformed scalar.
+    try std.testing.expect(out.atBoundary());
+    out.feed("\xe2", &collector);
+    out.feed("\x1b", &collector); // ESC also clears stale UTF-8 state.
+    try std.testing.expect(!out.atBoundary());
+    out.feed("[H", &collector);
+    try std.testing.expect(out.atBoundary());
 }
 
 test "oversized sequences are forwarded untouched" {
