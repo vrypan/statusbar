@@ -1,8 +1,8 @@
 # statusbar
 
-A PTY proxy that keeps a one- or two-line status bar at the top of the
-terminal and runs a shell (or any command) in a pty that is that much
-shorter.
+A PTY proxy that keeps a one- or two-line status bar at the bottom (or top,
+with `-p top`) of the terminal and runs a shell (or any command) in a pty
+that is that much shorter.
 
     zig build -Doptimize=ReleaseSafe
     ./zig-out/bin/statusbar -n 2 -i 5 \
@@ -43,31 +43,40 @@ Styles don't carry across slots.
 
 ## Example: two lines with a thin rule
 
+Output line 1 is the bar's upper row, so a bottom bar puts the rule first:
+
 ```sh
 #!/bin/sh
+printf "#[fg=#45475a]%${STATUSBAR_COLUMNS}s\n" '' | sed 's/ /─/g'
 printf ' #[fg=#89b4fa,bold]%s#[default] #[fg=#7f849c]·#[default] %s\t%s  #[bold]%s#[default] \n' \
   "$(hostname -s)" "$(sysctl -n vm.loadavg | awk '{print $2}')" \
   "$(date '+%a %d %b')" "$(date +%H:%M)"
-printf "#[fg=#45475a]%${STATUSBAR_COLUMNS}s\n" '' | sed 's/ /─/g'
 ```
 
     statusbar -n 2 -i 5 -s '' -e ~/bin/bar.sh
 
 ## How it works
 
-- The outer terminal's scrolling region (DECSTBM) starts below the bar, so
-  ordinary output and scrolling never reach it.
+- The outer terminal's scrolling region (DECSTBM) covers only the child's
+  rows, so ordinary output and scrolling never reach the bar.
 - Output is scanned for sequences that address absolute rows (CUP, HVP,
-  VPA, DECSTBM) and they are shifted down. Screen clears, RIS, DECSTR,
-  DECALN and alternate-screen switches trigger a repaint.
+  VPA, DECSTBM). They are clamped to the child's rows and, for a top bar,
+  shifted down. Erasures that reach the bar, RIS, DECSTR, DECALN and
+  alternate-screen switches trigger a repaint.
 - Replies from the terminal (cursor position reports, XTWINOPS 18, SGR and
-  X10 mouse events) are shifted back up; mouse clicks on the bar are dropped.
+  X10 mouse events) are translated back; mouse clicks on the bar are
+  dropped.
 
 ## Limitations
 
 - Repaints use DECSC/DECRC, the same single save slot the child uses. They
   only happen between complete sequences, after the child's output has
   paused for 30ms, so collisions are unlikely but possible.
-- xterm, and terminals that follow it, only save lines to scrollback when
-  the scrolling region starts at row 1. With the bar at the top, output that
-  scrolls off inside the session may not reach the terminal's scrollback.
+- Terminals only save lines to scrollback when the scrolling region starts
+  at row 1. That's why the bar defaults to the bottom; with `-p top`, output
+  that scrolls off inside the session may not reach scrollback.
+- With the bar at the bottom, erase-below (`CSI J`) also erases the bar, so
+  it is repainted more often than at the top.
+- When the window grows, terminals that add blank rows at the bottom (rather
+  than pulling lines back from scrollback) can leave a copy of the old bar
+  in the child's area until it is overwritten.

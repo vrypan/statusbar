@@ -14,10 +14,11 @@ const usage =
     \\usage: statusbar [options] [-- command [args...]]
     \\
     \\Run a command (default: $SHELL) under a pty that is one or two rows
-    \\shorter than the terminal, and keep a status bar in the rows above it.
+    \\shorter than the terminal, and keep a status bar in the rows it gave up.
     \\
     \\options:
     \\  -n, --lines N         bar height, 1 or 2 (default 1)
+    \\  -p, --position POS    bottom (default) or top
     \\  -e, --exec COMMAND    shell command whose output fills the bar, one
     \\                        line per bar row (default: date)
     \\  -i, --interval SECS   how often to rerun the command (default 1)
@@ -77,6 +78,9 @@ pub fn main(init: std.process.Init) !u8 {
         if (eql2(arg, "-n", "--lines")) {
             opts.lines = std.fmt.parseInt(u16, value, 10) catch 0;
             if (opts.lines < 1 or opts.lines > 2) return usageError(stderr, "--lines must be 1 or 2");
+        } else if (eql2(arg, "-p", "--position")) {
+            opts.position = std.meta.stringToEnum(proxy.Position, value) orelse
+                return usageError(stderr, "--position must be top or bottom");
         } else if (eql2(arg, "-e", "--exec")) {
             opts.command = value;
         } else if (eql2(arg, "-i", "--interval")) {

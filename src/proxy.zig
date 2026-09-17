@@ -1,15 +1,18 @@
 //! The PTY proxy.
 //!
-//!     terminal emulator     rows 1..lines: the bar
-//!         |                 rows lines+1..: the child's screen
+//!     terminal emulator     the child's screen, and the bar below or above it
+//!         |
 //!     statusbar      <- allocates a pty `lines` rows shorter than the terminal
 //!         |
 //!     interactive shell
 //!
-//! The outer terminal's scrolling region starts below the bar, which keeps
-//! ordinary output there. `output.zig` shifts the child's absolute row
-//! addressing down, `input.zig` shifts the terminal's replies back up, and
-//! the bar is repainted whenever the child wipes it.
+//! The outer terminal's scrolling region covers only the child's rows, which
+//! keeps ordinary output off the bar. `output.zig` translates the child's
+//! absolute row addressing, `input.zig` translates the terminal's replies,
+//! and the bar is repainted whenever the child wipes it.
+//!
+//! The bottom is the default: a scrolling region that starts at row 1 is the
+//! one terminals save into scrollback.
 
 const std = @import("std");
 const posix = std.posix;
@@ -63,9 +66,12 @@ pub fn restoreOnPanic() void {
     }
 }
 
+pub const Position = enum { top, bottom };
+
 pub const Options = struct {
     argv: []const []const u8 = &.{},
     lines: u16 = 1,
+    position: Position = .bottom,
     command: []const u8,
     interval_ms: i64,
     style: []const u8,
@@ -76,7 +82,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
 
     const outer_term = try posix.tcgetattr(stdin_fd);
     const outer_ws = try sys.getWinsize(stdin_fd);
-    const layout = Layout.of(outer_ws, opts.lines);
+    const layout = Layout.of(outer_ws, opts.lines, opts.position);
 
     const pty = try sys.openPty(io, &outer_term, &layout.child);
     errdefer {
@@ -117,9 +123,10 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         .io = io,
         .master = pty.master,
         .lines = opts.lines,
+        .position = opts.position,
         .layout = layout,
-        .output = .{ .offset = layout.offset, .rows = layout.child.row },
-        .input = .{ .offset = layout.offset },
+        .output = .{ .above = layout.above, .below = layout.below, .rows = layout.child.row },
+        .input = .{ .above = layout.above, .below = layout.below, .rows = layout.child.row },
         .command = &command,
         .style = opts.style,
     };
@@ -137,20 +144,35 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
 }
 
 const Layout = struct {
-    /// Rows the bar actually occupies; zero when the terminal is too short to
-    /// spare them.
-    offset: u16,
+    /// Bar rows above or below the child; both zero when the terminal is too
+    /// short to spare them.
+    above: u16,
+    below: u16,
     cols: u16,
     child: posix.winsize,
 
-    fn of(outer: posix.winsize, lines: u16) Layout {
-        const offset: u16 = if (outer.row >= lines + 2) lines else 0;
+    fn of(outer: posix.winsize, lines: u16, position: Position) Layout {
+        const reserved: u16 = if (outer.row >= lines + 2) lines else 0;
         var child = outer;
-        child.row = outer.row - offset;
-        if (offset > 0 and outer.ypixel > 0) {
+        child.row = outer.row - reserved;
+        if (reserved > 0 and outer.ypixel > 0) {
             child.ypixel = @intCast(@as(u32, outer.ypixel) * child.row / outer.row);
         }
-        return .{ .offset = offset, .cols = outer.col, .child = child };
+        return .{
+            .above = if (position == .top) reserved else 0,
+            .below = if (position == .bottom) reserved else 0,
+            .cols = outer.col,
+            .child = child,
+        };
+    }
+
+    fn barRows(self: Layout) u16 {
+        return self.above + self.below;
+    }
+
+    /// The screen row where the bar begins.
+    fn barRow(self: Layout) u16 {
+        return if (self.above > 0) 1 else self.child.row + 1;
     }
 };
 
@@ -263,8 +285,9 @@ const PendingInput = struct {
 const Proxy = struct {
     io: std.Io,
     master: sys.Fd,
-    /// Bar height asked for; `layout.offset` is what the terminal can spare.
+    /// Bar height asked for; `layout` holds what the terminal can spare.
     lines: u16,
+    position: Position,
     layout: Layout,
     output: Output,
     input: Input,
@@ -284,20 +307,22 @@ const Proxy = struct {
     }
 
     /// Makes room for the bar without hiding what is already on screen. The
-    /// content moves down into blank rows below the cursor; only when there
-    /// are too few of those does the top of it scroll into scrollback.
+    /// bar takes blank rows below the cursor; only when there are too few of
+    /// those does the top of the screen scroll into scrollback. A bar at the
+    /// top then pushes the content down into the room that made.
     fn reserveRows(self: *Proxy, outer_rows: u16) void {
         self.terminal = .{ .io = self.io };
-        const offset = self.layout.offset;
-        if (offset > 0) {
+        const bar_rows = self.layout.barRows();
+        if (bar_rows > 0) {
             const row = @min(self.queryCursorRow() orelse outer_rows, outer_rows);
-            const up = offset -| (outer_rows - row);
+            const up = bar_rows -| (outer_rows - row);
             var buf: [64]u8 = undefined;
             self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H", .{outer_rows}) catch "");
             for (0..up) |_| self.terminal.write("\n");
-            self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[1;1H\x1b[{d}L", .{offset}) catch "");
+            const above = self.layout.above;
+            if (above > 0) self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[1;1H\x1b[{d}L", .{above}) catch "");
             self.output.writeRegion(&self.terminal);
-            self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H", .{row - up + offset}) catch "");
+            self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H", .{row - up + above}) catch "");
         }
         self.paint();
         self.terminal.flush();
@@ -307,8 +332,8 @@ const Proxy = struct {
     fn releaseRows(self: *Proxy) void {
         var buf: [32]u8 = undefined;
         self.terminal.write("\x1b7\x1b[r");
-        for (0..self.layout.offset) |n| {
-            self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H\x1b[2K", .{n + 1}) catch "");
+        for (0..self.layout.barRows()) |n| {
+            self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H\x1b[2K", .{self.layout.barRow() + n}) catch "");
         }
         self.terminal.write("\x1b8");
         self.terminal.flush();
@@ -350,7 +375,7 @@ const Proxy = struct {
         self.output.writeRegion(&WriterSink{ .w = &region });
         var buf: [16 * 1024]u8 = undefined;
         var w: std.Io.Writer = .fixed(&buf);
-        bar.paint(&w, &self.content, self.layout.offset, self.layout.cols, self.style, region.buffered()) catch {};
+        bar.paint(&w, &self.content, self.layout.barRow(), self.layout.barRows(), self.layout.cols, self.style, region.buffered()) catch {};
         self.terminal.write(w.buffered());
         self.paint_requested_ms = null;
         self.output.damaged = false;
@@ -359,6 +384,7 @@ const Proxy = struct {
     fn paintIfDue(self: *Proxy, now_ms: i64) void {
         const requested = self.paint_requested_ms orelse return;
         if (!self.output.atBoundary()) return;
+        if (self.output.cursor_saved and now_ms - self.last_output_ms < paint_quiet_ms) return;
         if (now_ms - self.last_output_ms < paint_quiet_ms and now_ms - requested < paint_max_delay_ms) return;
         self.paint();
     }
@@ -407,7 +433,17 @@ const Proxy = struct {
                     .bytes => |n| {
                         self.output.feed(out_buf[0..n], &self.terminal);
                         self.last_output_ms = now_ms;
-                        if (self.output.damaged) self.requestPaint(now_ms);
+                        if (self.output.damaged) {
+                            // Repaint in the same write as the erase, so the
+                            // terminal never renders a frame without the bar.
+                            // Unless the child is holding a saved cursor, which
+                            // the paint would overwrite: then wait for a pause.
+                            if (self.output.atBoundary() and !self.output.cursor_saved) {
+                                self.paint();
+                            } else {
+                                self.requestPaint(now_ms);
+                            }
+                        }
                     },
                     .would_block => {},
                     .eof => {
@@ -462,10 +498,10 @@ const Proxy = struct {
         }
         if (!resized) return;
         const ws = sys.getWinsize(stdin_fd) catch return;
-        self.layout = Layout.of(ws, self.lines);
+        self.layout = Layout.of(ws, self.lines, self.position);
         sys.setWinsize(self.master, &self.layout.child) catch {};
-        self.output.resize(self.layout.offset, self.layout.child.row);
-        self.input.offset = self.layout.offset;
+        self.output.resize(self.layout.above, self.layout.below, self.layout.child.row);
+        self.input = .{ .above = self.layout.above, .below = self.layout.below, .rows = self.layout.child.row };
         self.command.setColumns(ws.col) catch {};
         self.command.refreshNow(now_ms);
         // Terminals drop the margins on resize; put them back before the
@@ -518,11 +554,17 @@ test "cursor reports are found among keystrokes" {
     try std.testing.expect(findCursorReport("\x1b[12;40") == null);
 }
 
-test "layout gives up the bar on tiny terminals" {
-    const big = Layout.of(.{ .row = 24, .col = 80, .xpixel = 0, .ypixel = 0 }, 2);
-    try std.testing.expectEqual(@as(u16, 2), big.offset);
-    try std.testing.expectEqual(@as(u16, 22), big.child.row);
-    const tiny = Layout.of(.{ .row = 3, .col = 80, .xpixel = 0, .ypixel = 0 }, 2);
-    try std.testing.expectEqual(@as(u16, 0), tiny.offset);
+test "layout places the bar and gives it up on tiny terminals" {
+    const size: posix.winsize = .{ .row = 24, .col = 80, .xpixel = 0, .ypixel = 0 };
+    const bottom = Layout.of(size, 2, .bottom);
+    try std.testing.expectEqual(@as(u16, 0), bottom.above);
+    try std.testing.expectEqual(@as(u16, 2), bottom.below);
+    try std.testing.expectEqual(@as(u16, 22), bottom.child.row);
+    try std.testing.expectEqual(@as(u16, 23), bottom.barRow());
+    const top = Layout.of(size, 2, .top);
+    try std.testing.expectEqual(@as(u16, 2), top.above);
+    try std.testing.expectEqual(@as(u16, 1), top.barRow());
+    const tiny = Layout.of(.{ .row = 3, .col = 80, .xpixel = 0, .ypixel = 0 }, 2, .bottom);
+    try std.testing.expectEqual(@as(u16, 0), tiny.barRows());
     try std.testing.expectEqual(@as(u16, 3), tiny.child.row);
 }

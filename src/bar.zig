@@ -38,7 +38,7 @@ pub const Content = struct {
 };
 
 /// `style` is SGR parameters applied to the whole bar, e.g. "7" for reverse.
-pub fn paint(w: *std.Io.Writer, content: *const Content, lines: u16, cols: u16, style: []const u8, region: []const u8) !void {
+pub fn paint(w: *std.Io.Writer, content: *const Content, first_row: u16, lines: u16, cols: u16, style: []const u8, region: []const u8) !void {
     // Save, restore the margins the terminal may have dropped, then leave
     // origin mode and any line-drawing character set for the paint.
     try w.writeAll("\x1b7");
@@ -47,7 +47,7 @@ pub fn paint(w: *std.Io.Writer, content: *const Content, lines: u16, cols: u16, 
     for (0..lines) |n| {
         // Erase first: after a full-width line the cursor sits in the
         // pending-wrap state, where an erase would clear the last cell.
-        try w.print("\x1b[{d};1H\x1b[0;{s}m\x1b[2K", .{ n + 1, style });
+        try w.print("\x1b[{d};1H\x1b[0;{s}m\x1b[2K", .{ first_row + n, style });
         try writeLine(w, content.line(n), cols, style);
     }
     try w.writeAll("\x1b[0m\x1b8");

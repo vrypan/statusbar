@@ -1,11 +1,12 @@
-//! Translates the child's output onto a screen whose top `offset` rows belong
-//! to the bar.
+//! Translates the child's output onto a screen that also holds the bar,
+//! either above or below the child's rows.
 //!
-//!     row 1..offset          the bar, drawn only by the proxy
-//!     row offset+1..         the child's screen, `rows` tall
+//!     row 1..above                   a bar at the top
+//!     row above+1..above+rows        the child's screen, `rows` tall
+//!     row above+rows+1..             a bar at the bottom (`below` rows)
 //!
 //! The outer terminal's scrolling region keeps ordinary output, line feeds
-//! and relative cursor movement below the bar on its own. Only sequences that
+//! and relative cursor movement off the bar on its own. Only sequences that
 //! name an absolute row need rewriting: CUP/HVP, VPA and DECSTBM. Sequences
 //! that wipe or reset the whole screen cannot be translated, so they are
 //! forwarded and reported as damage for the proxy to repaint.
@@ -22,13 +23,14 @@ const max_params = 16;
 const esc = 0x1b;
 
 pub const Output = struct {
-    /// Rows reserved above the child. Zero turns every rewrite off.
-    offset: u16,
+    /// Bar rows above and below the child. With neither, nothing is rewritten.
+    above: u16,
+    below: u16 = 0,
     /// The child's screen height.
     rows: u16,
 
     /// DECOM: while set, the child addresses rows relative to its own margins,
-    /// which already sit below the bar.
+    /// which already exclude the bar.
     origin_mode: bool = false,
     /// The child's DECSTBM margins in its own coordinates; zero is default.
     top: u16 = 0,
@@ -36,6 +38,9 @@ pub const Output = struct {
 
     /// The bar was erased or the margins were reset; the proxy must repaint.
     damaged: bool = false,
+    /// The child saved the cursor (DECSC or SCOSC) and has not restored it
+    /// yet. A repaint borrows the same save slot, so it must wait.
+    cursor_saved: bool = false,
 
     state: State = .ground,
     string_is_osc: bool = false,
@@ -45,6 +50,10 @@ pub const Output = struct {
     utf8_pending: u3 = 0,
 
     const State = enum { ground, esc, esc_intermediate, csi, csi_ignore, string, string_esc };
+
+    fn active(self: *const Output) bool {
+        return self.above + self.below > 0;
+    }
 
     /// True between complete characters and sequences, the only place the
     /// proxy may inject its own bytes without corrupting the child's stream.
@@ -84,6 +93,14 @@ pub const Output = struct {
                             run = i;
                             self.state = .ground;
                             self.hardReset(sink);
+                        },
+                        '7' => {
+                            self.cursor_saved = true;
+                            self.state = .ground;
+                        },
+                        '8' => {
+                            self.cursor_saved = false;
+                            self.state = .ground;
                         },
                         esc => {},
                         0x20...0x2f => {
@@ -187,19 +204,20 @@ pub const Output = struct {
         }
     }
 
-    /// Writes the child's margins, translated below the bar.
+    /// Writes the child's margins in screen coordinates.
     pub fn writeRegion(self: *const Output, sink: anytype) void {
         var buf: [32]u8 = undefined;
         const top: u32 = if (self.top == 0) 1 else self.top;
         const bottom: u32 = if (self.bottom == 0 or self.bottom > self.rows) self.rows else self.bottom;
-        const text = std.fmt.bufPrint(&buf, "\x1b[{d};{d}r", .{ top + self.offset, bottom + self.offset }) catch return;
+        const text = std.fmt.bufPrint(&buf, "\x1b[{d};{d}r", .{ top + self.above, bottom + self.above }) catch return;
         sink.write(text);
     }
 
     /// Screen size changed. Terminals reset the margins on resize, and so will
     /// any child that set its own.
-    pub fn resize(self: *Output, offset: u16, rows: u16) void {
-        self.offset = offset;
+    pub fn resize(self: *Output, above: u16, below: u16, rows: u16) void {
+        self.above = above;
+        self.below = below;
         self.rows = rows;
         self.top = 0;
         self.bottom = 0;
@@ -208,17 +226,18 @@ pub const Output = struct {
 
     fn hardReset(self: *Output, sink: anytype) void {
         self.origin_mode = false;
+        self.cursor_saved = false;
         self.top = 0;
         self.bottom = 0;
         self.damaged = true;
-        if (self.offset == 0) return;
+        if (!self.active()) return;
         self.writeRegion(sink);
-        self.writeHome(sink);
+        if (self.above > 0) self.writeHome(sink);
     }
 
     fn writeHome(self: *const Output, sink: anytype) void {
         var buf: [16]u8 = undefined;
-        sink.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H", .{@as(u32, self.offset) + 1}) catch return);
+        sink.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H", .{@as(u32, self.above) + 1}) catch return);
     }
 
     fn finishCsi(self: *Output, sink: anytype) void {
@@ -244,29 +263,38 @@ pub const Output = struct {
 
         if (marker == 0 and intermediates.len == 0) {
             switch (final) {
-                'H', 'f', 'd' => if (self.offset != 0 and !self.origin_mode) {
+                // Rows past the child's screen are clamped so they never
+                // reach a bar at the bottom.
+                'H', 'f', 'd' => if (self.active() and !self.origin_mode) {
                     const row = @max(if (count > 0) params[0] else 0, 1);
                     const rest = if (std.mem.indexOfScalar(u8, params_text, ';')) |at| params_text[at..] else "";
                     var buf: [max_seq + 16]u8 = undefined;
-                    return sink.write(std.fmt.bufPrint(&buf, "{d}{s}{c}", .{ @min(row, self.rows) + self.offset, rest, final }) catch seq);
+                    return sink.write(std.fmt.bufPrint(&buf, "{d}{s}{c}", .{ @min(row, self.rows) + self.above, rest, final }) catch seq);
                 },
                 'r' => {
                     self.top = if (count > 0) @intCast(@min(params[0], std.math.maxInt(u16))) else 0;
                     self.bottom = if (count > 1) @intCast(@min(params[1], std.math.maxInt(u16))) else 0;
-                    if (self.offset == 0) return sink.write(seq);
+                    if (!self.active()) return sink.write(seq);
                     var buf: [32]u8 = undefined;
                     const top: u32 = if (self.top == 0) 1 else self.top;
                     const bottom: u32 = if (self.bottom == 0 or self.bottom > self.rows) self.rows else self.bottom;
-                    sink.write(std.fmt.bufPrint(&buf, "{d};{d}r", .{ top + self.offset, bottom + self.offset }) catch return);
+                    sink.write(std.fmt.bufPrint(&buf, "{d};{d}r", .{ top + self.above, bottom + self.above }) catch return);
                     // DECSTBM homes the cursor. Without DECOM home is the
-                    // screen's first row, which is now the bar.
-                    if (!self.origin_mode) self.writeHome(sink);
+                    // screen's first row, which may be the bar.
+                    if (self.above > 0 and !self.origin_mode) self.writeHome(sink);
                     return;
+                },
+                's' => if (count == 0) {
+                    self.cursor_saved = true;
+                },
+                'u' => if (count == 0) {
+                    self.cursor_saved = false;
                 },
                 'J' => {
                     sink.write(seq);
                     const mode = if (count > 0) params[0] else 0;
-                    if (mode == 1 or mode == 2 or mode == 3) self.damaged = true;
+                    // Erasing below reaches a bottom bar, above a top one.
+                    if ((mode == 0 and self.below > 0) or (mode == 1 and self.above > 0) or mode == 2 or mode == 3) self.damaged = true;
                     return;
                 },
                 else => {},
@@ -278,7 +306,7 @@ pub const Output = struct {
                 6 => {
                     self.origin_mode = final == 'h';
                     // DECOM homes the cursor as well.
-                    if (self.offset != 0 and !self.origin_mode) self.writeHome(sink);
+                    if (self.above > 0 and !self.origin_mode) self.writeHome(sink);
                 },
                 47, 1047, 1049 => switched = true,
                 else => {},
@@ -343,7 +371,7 @@ fn translate(out: *Output, input: []const u8, chunk: usize) ![]u8 {
 fn expectTranslation(input: []const u8, expected: []const u8) !void {
     var chunk: usize = 1;
     while (chunk <= input.len) : (chunk += 1) {
-        var out: Output = .{ .offset = 2, .rows = 22 };
+        var out: Output = .{ .above = 2, .rows = 22 };
         const got = try translate(&out, input, chunk);
         defer std.testing.allocator.free(got);
         try std.testing.expectEqualStrings(expected, got);
@@ -381,20 +409,20 @@ test "sequences inside strings are not rewritten" {
 }
 
 test "screen-wide erasure and resets damage the bar" {
-    var out: Output = .{ .offset = 1, .rows = 10 };
+    var out: Output = .{ .above = 1, .rows = 10 };
     const plain = try translate(&out, "\x1b[J\x1b[K", 64);
     std.testing.allocator.free(plain);
     try std.testing.expect(!out.damaged);
 
     for ([_][]const u8{ "\x1b[2J", "\x1b[1J", "\x1b[?1049h", "\x1b[!p", "\x1b#8" }) |input| {
-        var o: Output = .{ .offset = 1, .rows = 10 };
+        var o: Output = .{ .above = 1, .rows = 10 };
         const got = try translate(&o, input, 64);
         defer std.testing.allocator.free(got);
         try std.testing.expectEqualStrings(input, got);
         try std.testing.expect(o.damaged);
     }
 
-    var reset: Output = .{ .offset = 1, .rows = 10, .top = 3, .origin_mode = true };
+    var reset: Output = .{ .above = 1, .rows = 10, .top = 3, .origin_mode = true };
     const got = try translate(&reset, "\x1bc", 64);
     defer std.testing.allocator.free(got);
     try std.testing.expectEqualStrings("\x1bc\x1b[2;11r\x1b[2;1H", got);
@@ -402,7 +430,7 @@ test "screen-wide erasure and resets damage the bar" {
 }
 
 test "no offset means no rewriting" {
-    var out: Output = .{ .offset = 0, .rows = 24 };
+    var out: Output = .{ .above = 0, .rows = 24 };
     const input = "\x1b[H\x1b[r\x1b[5d";
     const got = try translate(&out, input, 3);
     defer std.testing.allocator.free(got);
@@ -410,7 +438,7 @@ test "no offset means no rewriting" {
 }
 
 test "boundaries exclude partial characters and sequences" {
-    var out: Output = .{ .offset = 1, .rows = 10 };
+    var out: Output = .{ .above = 1, .rows = 10 };
     var collector: Collector = .{};
     defer collector.bytes.deinit(std.testing.allocator);
     out.feed("a\xc3", &collector);
@@ -425,4 +453,60 @@ test "boundaries exclude partial characters and sequences" {
 test "oversized sequences are forwarded untouched" {
     const input = "\x1b[" ++ "1;" ** 40 ++ "H";
     try expectTranslation(input, input);
+}
+
+test "a bar below keeps rows in place and clamps those past the child" {
+    const cases = [_][2][]const u8{
+        .{ "\x1b[H\x1b[5;3H\x1b[7d", "\x1b[1H\x1b[5;3H\x1b[7d" },
+        .{ "\x1b[99;1H\x1b[24d", "\x1b[22;1H\x1b[22d" },
+        .{ "\x1b[r", "\x1b[1;22r" },
+        .{ "\x1b[2;30r", "\x1b[2;22r" },
+        .{ "\x1b[?6l", "\x1b[?6l" },
+    };
+    for (cases) |case| {
+        var chunk: usize = 1;
+        while (chunk <= case[0].len) : (chunk += 1) {
+            var out: Output = .{ .above = 0, .below = 2, .rows = 22 };
+            const got = try translate(&out, case[0], chunk);
+            defer std.testing.allocator.free(got);
+            try std.testing.expectEqualStrings(case[1], got);
+        }
+    }
+}
+
+test "erasing below damages a bottom bar, erasing above a top one" {
+    const Case = struct { above: u16, below: u16, input: []const u8, damaged: bool };
+    const cases = [_]Case{
+        .{ .above = 0, .below = 1, .input = "\x1b[J", .damaged = true },
+        .{ .above = 0, .below = 1, .input = "\x1b[1J", .damaged = false },
+        .{ .above = 1, .below = 0, .input = "\x1b[0J", .damaged = false },
+        .{ .above = 1, .below = 0, .input = "\x1b[1J", .damaged = true },
+    };
+    for (cases) |case| {
+        var out: Output = .{ .above = case.above, .below = case.below, .rows = 10 };
+        const got = try translate(&out, case.input, 64);
+        defer std.testing.allocator.free(got);
+        try std.testing.expectEqual(case.damaged, out.damaged);
+    }
+
+    var reset: Output = .{ .above = 0, .below = 1, .rows = 10 };
+    const got = try translate(&reset, "\x1bc", 64);
+    defer std.testing.allocator.free(got);
+    try std.testing.expectEqualStrings("\x1bc\x1b[1;10r", got);
+}
+
+test "an unrestored cursor save is tracked" {
+    var out: Output = .{ .above = 0, .below = 1, .rows = 10 };
+    for ([_]struct { []const u8, bool }{
+        .{ "\x1b7", true },
+        .{ "text\x1b8", false },
+        .{ "\x1b[s", true },
+        .{ "\x1b[u", false },
+        .{ "\x1b[2;5s", false },
+        .{ "\x1b7\x1bc", false },
+    }) |case| {
+        const got = try translate(&out, case[0], 1);
+        std.testing.allocator.free(got);
+        try std.testing.expectEqual(case[1], out.cursor_saved);
+    }
 }

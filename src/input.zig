@@ -2,8 +2,9 @@
 //!
 //! Keystrokes pass untouched. The few reports that carry a screen row - the
 //! cursor position (DSR 6), the text-area size (XTWINOPS 18) and mouse
-//! events - are shifted up by the bar's height. Mouse events on the bar itself
-//! are dropped: the child has no row to receive them on.
+//! events - are shifted past a bar above the child, and the size excludes the
+//! bar wherever it is. Mouse events on the bar itself are dropped: the child
+//! has no row to receive them on.
 //!
 //! A report split across reads is held until it completes. The proxy calls
 //! `flush` if nothing follows promptly, so an Alt-[ typed by hand is never
@@ -16,7 +17,10 @@ const max_params = 4;
 const esc = 0x1b;
 
 pub const Input = struct {
-    offset: u16,
+    /// Bar rows above and below the child's `rows`.
+    above: u16,
+    below: u16 = 0,
+    rows: u16,
 
     state: State = .ground,
     seq: [max_seq]u8 = undefined,
@@ -90,11 +94,11 @@ pub const Input = struct {
                     self.hold(b);
                     if (self.seq_len == 6) {
                         const row = self.seq[5] -% 32;
-                        if (row >= 1 and row <= self.offset) {
+                        if (row >= 1 and self.onBar(row)) {
                             self.seq_len = 0;
                             self.state = .ground;
                         } else {
-                            if (row > self.offset) self.seq[5] -= @intCast(self.offset);
+                            if (row > self.above) self.seq[5] -= @intCast(self.above);
                             self.flush(sink);
                         }
                     }
@@ -105,6 +109,10 @@ pub const Input = struct {
         // A lone ESC at the end of a read is the Escape key, not the start
         // of a report still in flight.
         if (self.state == .esc and bytes.len == 1) self.flush(sink);
+    }
+
+    fn onBar(self: *const Input, row: u32) bool {
+        return row <= self.above or (self.below > 0 and row > @as(u32, self.above) + self.rows);
     }
 
     fn hold(self: *Input, b: u8) void {
@@ -128,21 +136,26 @@ pub const Input = struct {
         var params: [max_params]u32 = undefined;
         const count = parseParams(body, &params) orelse return sink.write(seq);
 
-        const row_index: usize = switch (final) {
-            // A row within the bar is not a position report but a modified
+        switch (final) {
+            // A row within a top bar is not a position report but a modified
             // F3 key, which shares the encoding.
-            'R' => if ((marker == 0 or marker == '?') and count >= 2 and params[0] > self.offset) 0 else return sink.write(seq),
-            'M', 'm' => if (marker == '<' and count == 3) 2 else return sink.write(seq),
-            't' => if (marker == 0 and count == 3 and params[0] == 8) 1 else return sink.write(seq),
+            'R' => {
+                if (!(marker == 0 or marker == '?') or count < 2 or self.above == 0 or params[0] <= self.above) return sink.write(seq);
+                params[0] -= self.above;
+            },
+            'M', 'm' => {
+                if (marker != '<' or count != 3) return sink.write(seq);
+                if (self.onBar(params[2])) return;
+                if (self.above == 0) return sink.write(seq);
+                params[2] -= self.above;
+            },
+            't' => {
+                const bar = self.above + self.below;
+                if (marker != 0 or count != 3 or params[0] != 8 or bar == 0 or params[1] <= bar) return sink.write(seq);
+                params[1] -= bar;
+            },
             else => return sink.write(seq),
-        };
-        if (self.offset == 0) return sink.write(seq);
-        if (params[row_index] <= self.offset) {
-            // Only a mouse event can land on the bar; swallow it.
-            if (final == 'M' or final == 'm') return;
-            return sink.write(seq);
         }
-        params[row_index] -= self.offset;
 
         var buf: [max_seq + 16]u8 = undefined;
         var w: std.Io.Writer = .fixed(&buf);
@@ -192,7 +205,7 @@ fn expectTranslation(input: []const u8, expected: []const u8) !void {
     const sizes = [_]usize{ input.len, 2, 3, 5 };
     for (sizes) |chunk| {
         if (chunk == 0) continue;
-        var in: Input = .{ .offset = 2 };
+        var in: Input = .{ .above = 2, .rows = 20 };
         var collector: Collector = .{};
         defer collector.bytes.deinit(std.testing.allocator);
         var i: usize = 0;
@@ -233,7 +246,7 @@ test "mouse events shift, and those on the bar vanish" {
 }
 
 test "a lone escape key is not held" {
-    var in: Input = .{ .offset = 1 };
+    var in: Input = .{ .above = 1, .rows = 20 };
     var collector: Collector = .{};
     defer collector.bytes.deinit(std.testing.allocator);
     in.feed("\x1b", &collector);
@@ -243,4 +256,14 @@ test "a lone escape key is not held" {
     try std.testing.expect(in.holding());
     in.flush(&collector);
     try std.testing.expectEqualStrings("\x1b\x1b[5", collector.bytes.items);
+}
+
+test "a bar below leaves reports alone and swallows clicks on it" {
+    var in: Input = .{ .above = 0, .below = 2, .rows = 22 };
+    var collector: Collector = .{};
+    defer collector.bytes.deinit(std.testing.allocator);
+    in.feed("\x1b[10;4R\x1b[<0;5;22M\x1b[<0;5;23M\x1b[8;24;80t", &collector);
+    in.feed("\x1b[M !\x37", &collector); // row 23: on the bar
+    in.feed("\x1b[M !\x36", &collector); // row 22: the child's last row
+    try std.testing.expectEqualStrings("\x1b[10;4R\x1b[<0;5;22M\x1b[8;22;80t\x1b[M !\x36", collector.bytes.items);
 }
