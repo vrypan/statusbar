@@ -1,7 +1,6 @@
 //! The config file.
 //!
 //!     lines = 2
-//!     position = bottom
 //!     interval = 5
 //!     style = fg=text
 //!
@@ -40,8 +39,6 @@ pub const max_lines = 2;
 pub const max_commands = 16;
 pub const max_colors = 32;
 const max_parts = 32;
-
-pub const Position = enum { top, bottom };
 
 pub const Part = union(enum) {
     text: []const u8,
@@ -83,7 +80,6 @@ pub const Command = struct {
 
 pub const Config = struct {
     lines: ?u16 = null,
-    position: ?Position = null,
     style: ?[]const u8 = null,
     interval_ms: i64 = 5000,
     colors: [max_colors]markup.Color = undefined,
@@ -167,12 +163,12 @@ pub fn parse(text: []const u8, diag: *Diagnostic) Error!Config {
                     if (lines < 1 or lines > max_lines) return fail(diag, "lines must be 1 or 2");
                     config.lines = lines;
                 } else if (eql(key, "position")) {
-                    config.position = std.meta.stringToEnum(Position, value) orelse return fail(diag, "position must be top or bottom");
+                    return fail(diag, "position is no longer supported; the bar is always at the bottom");
                 } else if (eql(key, "interval")) {
                     config.interval_ms = try parseInterval(value, diag);
                 } else if (eql(key, "style")) {
                     config.style = value;
-                } else return fail(diag, "unknown option; expected lines, position, interval or style");
+                } else return fail(diag, "unknown option; expected lines, interval or style");
             },
             .colors => {
                 if (config.colors_len == max_colors) return fail(diag, "too many colors");
@@ -337,7 +333,6 @@ fn fail(diag: *Diagnostic, message: []const u8) Error {
 const example =
     \\# statusbar
     \\lines = 2
-    \\position = top
     \\style = fg=text
     \\
     \\[colors]
@@ -360,7 +355,6 @@ test "a full config parses" {
     var diag: Diagnostic = .{};
     const config = try parse(example, &diag);
     try std.testing.expectEqual(@as(?u16, 2), config.lines);
-    try std.testing.expectEqual(@as(?Position, .top), config.position);
     try std.testing.expectEqualStrings("fg=text", config.style.?);
     try std.testing.expectEqualStrings("#89b4fa", config.colors[0].value);
     try std.testing.expectEqualStrings("─", config.line[0].rule.?);
@@ -400,7 +394,7 @@ test "nested parentheses and escaped hashes in templates" {
 test "errors name the line" {
     const cases = [_]struct { []const u8, usize }{
         .{ "lines = 3", 1 },
-        .{ "\n\nposition = middle", 3 },
+        .{ "\n\nposition = bottom", 3 },
         .{ "[line.3]", 1 },
         .{ "[colours]", 1 },
         .{ "[line.1]\nleft\n", 2 },

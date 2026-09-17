@@ -15,6 +15,9 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     mod.addOptions("build_options", options);
+    // The sample config doubles as the built-in default, so the two can't
+    // drift apart.
+    mod.addAnonymousImport("default_config", .{ .root_source_file = b.path("samples/default.config") });
 
     const exe = b.addExecutable(.{ .name = "statusbar", .root_module = mod });
     b.installArtifact(exe);

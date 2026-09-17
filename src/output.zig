@@ -1,15 +1,15 @@
-//! Translates the child's output onto a screen that also holds the bar,
-//! either above or below the child's rows.
+//! Translates the child's output onto a screen that also holds the bar below
+//! the child's rows.
 //!
-//!     row 1..above                   a bar at the top
-//!     row above+1..above+rows        the child's screen, `rows` tall
-//!     row above+rows+1..             a bar at the bottom (`below` rows)
+//!     row 1..rows            the child's screen
+//!     row rows+1..rows+bar   the bar
 //!
 //! The outer terminal's scrolling region keeps ordinary output, line feeds
 //! and relative cursor movement off the bar on its own. Only sequences that
-//! name an absolute row need rewriting: CUP/HVP, VPA and DECSTBM. Sequences
-//! that wipe or reset the whole screen cannot be translated, so they are
-//! forwarded and reported as damage for the proxy to repaint.
+//! name an absolute row need rewriting, CUP/HVP, VPA and DECSTBM, and only to
+//! clamp rows past the child's screen. Sequences that wipe or reset the whole
+//! screen cannot be translated, so they are forwarded and reported as damage
+//! for the proxy to repaint.
 //!
 //! Everything except CSI parameters is forwarded as it arrives. A CSI is
 //! buffered from its first parameter byte to its final byte, so a sequence
@@ -33,9 +33,8 @@ const esc = 0x1b;
 pub const Slot = enum(u1) { Left, Right };
 
 pub const Output = struct {
-    /// Bar rows above and below the child. With neither, nothing is rewritten.
-    above: u16,
-    below: u16 = 0,
+    /// Bar rows below the child. With none, nothing is rewritten.
+    bar: u16,
     /// The child's screen height.
     rows: u16,
 
@@ -75,7 +74,7 @@ pub const Output = struct {
     const State = enum { ground, esc, esc_intermediate, csi, csi_ignore, string, string_esc, osc_prefix, user_var, user_var_esc };
 
     fn active(self: *const Output) bool {
-        return self.above + self.below > 0;
+        return self.bar > 0;
     }
 
     /// True between complete characters and sequences, the only place the
@@ -328,20 +327,19 @@ pub const Output = struct {
         }
     }
 
-    /// Writes the child's margins in screen coordinates.
+    /// Writes the child's margins, kept off the bar.
     pub fn writeRegion(self: *const Output, sink: anytype) void {
         var buf: [32]u8 = undefined;
         const top: u32 = if (self.top == 0) 1 else self.top;
         const bottom: u32 = if (self.bottom == 0 or self.bottom > self.rows) self.rows else self.bottom;
-        const text = std.fmt.bufPrint(&buf, "\x1b[{d};{d}r", .{ top + self.above, bottom + self.above }) catch return;
+        const text = std.fmt.bufPrint(&buf, "\x1b[{d};{d}r", .{ top, bottom }) catch return;
         sink.write(text);
     }
 
     /// Screen size changed. Terminals reset the margins on resize, and so will
     /// any child that set its own.
-    pub fn resize(self: *Output, above: u16, below: u16, rows: u16) void {
-        self.above = above;
-        self.below = below;
+    pub fn resize(self: *Output, bar: u16, rows: u16) void {
+        self.bar = bar;
         self.rows = rows;
         self.top = 0;
         self.bottom = 0;
@@ -355,14 +353,7 @@ pub const Output = struct {
         self.top = 0;
         self.bottom = 0;
         self.damaged = true;
-        if (!self.active()) return;
-        self.writeRegion(sink);
-        if (self.above > 0) self.writeHome(sink);
-    }
-
-    fn writeHome(self: *const Output, sink: anytype) void {
-        var buf: [16]u8 = undefined;
-        sink.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H", .{@as(u32, self.above) + 1}) catch return);
+        if (self.active()) self.writeRegion(sink);
     }
 
     fn finishCsi(self: *Output, sink: anytype) void {
@@ -389,12 +380,12 @@ pub const Output = struct {
         if (marker == 0 and intermediates.len == 0) {
             switch (final) {
                 // Rows past the child's screen are clamped so they never
-                // reach a bar at the bottom.
+                // reach the bar.
                 'H', 'f', 'd' => if (self.active() and !self.origin_mode) {
                     const row = @max(if (count > 0) params[0] else 0, 1);
                     const rest = if (std.mem.indexOfScalar(u8, params_text, ';')) |at| params_text[at..] else "";
                     var buf: [max_seq + 16]u8 = undefined;
-                    return sink.write(std.fmt.bufPrint(&buf, "{d}{s}{c}", .{ @min(row, self.rows) + self.above, rest, final }) catch seq);
+                    return sink.write(std.fmt.bufPrint(&buf, "{d}{s}{c}", .{ @min(row, self.rows), rest, final }) catch seq);
                 },
                 'r' => {
                     self.top = if (count > 0) @intCast(@min(params[0], std.math.maxInt(u16))) else 0;
@@ -403,10 +394,7 @@ pub const Output = struct {
                     var buf: [32]u8 = undefined;
                     const top: u32 = if (self.top == 0) 1 else self.top;
                     const bottom: u32 = if (self.bottom == 0 or self.bottom > self.rows) self.rows else self.bottom;
-                    sink.write(std.fmt.bufPrint(&buf, "{d};{d}r", .{ top + self.above, bottom + self.above }) catch return);
-                    // DECSTBM homes the cursor. Without DECOM home is the
-                    // screen's first row, which may be the bar.
-                    if (self.above > 0 and !self.origin_mode) self.writeHome(sink);
+                    sink.write(std.fmt.bufPrint(&buf, "{d};{d}r", .{ top, bottom }) catch return);
                     return;
                 },
                 's' => if (count == 0) {
@@ -418,8 +406,9 @@ pub const Output = struct {
                 'J' => {
                     sink.write(seq);
                     const mode = if (count > 0) params[0] else 0;
-                    // Erasing below reaches a bottom bar, above a top one.
-                    if ((mode == 0 and self.below > 0) or (mode == 1 and self.above > 0) or mode == 2 or mode == 3) self.damaged = true;
+                    // Erasing below reaches the bar, and so does the whole
+                    // screen; erasing above does not.
+                    if (mode != 1) self.damaged = true;
                     return;
                 },
                 else => {},
@@ -429,11 +418,7 @@ pub const Output = struct {
             var switched = false;
             for (params[0..count]) |mode| switch (mode) {
                 7 => self.autowrap = final == 'h',
-                6 => {
-                    self.origin_mode = final == 'h';
-                    // DECOM homes the cursor as well.
-                    if (self.above > 0 and !self.origin_mode) self.writeHome(sink);
-                },
+                6 => self.origin_mode = final == 'h',
                 47, 1047, 1049 => switched = true,
                 else => {},
             };
@@ -499,7 +484,7 @@ fn translate(out: *Output, input: []const u8, chunk: usize) ![]u8 {
 fn expectTranslation(input: []const u8, expected: []const u8) !void {
     var chunk: usize = 1;
     while (chunk <= input.len) : (chunk += 1) {
-        var out: Output = .{ .above = 2, .rows = 22 };
+        var out: Output = .{ .bar = 2, .rows = 22 };
         const got = try translate(&out, input, chunk);
         defer std.testing.allocator.free(got);
         try std.testing.expectEqualStrings(expected, got);
@@ -507,75 +492,68 @@ fn expectTranslation(input: []const u8, expected: []const u8) !void {
 }
 
 test "text and unrelated sequences pass through" {
-    const input = "héllo\r\n\x1b[31mred\x1b[0m\x1b]0;title\x07\x1b[?25l\x1b[5A\x1b(0";
+    const input = "héllo\r\n\x1b[31mred\x1b[0m\x1b]0;title\x07\x1b[?25l\x1b[5A\x1b(0\x1b[?6h\x1b[2;2H\x1b[?6l";
     try expectTranslation(input, input);
 }
 
-test "absolute rows move below the bar" {
-    try expectTranslation("\x1b[H", "\x1b[3H");
-    try expectTranslation("\x1b[;5H", "\x1b[3;5H");
-    try expectTranslation("\x1b[10;4H", "\x1b[12;4H");
-    try expectTranslation("\x1b[7;1f", "\x1b[9;1f");
-    try expectTranslation("\x1b[4d", "\x1b[6d");
-    try expectTranslation("\x1b[99;1H", "\x1b[24;1H");
+test "rows past the child's screen are clamped off the bar" {
+    try expectTranslation("\x1b[H\x1b[;5H\x1b[5;3H\x1b[7d", "\x1b[1H\x1b[1;5H\x1b[5;3H\x1b[7d");
+    try expectTranslation("\x1b[99;1H\x1b[24d\x1b[23;4f", "\x1b[22;1H\x1b[22d\x1b[22;4f");
 }
 
-test "margins move below the bar and home stays on the child's screen" {
-    try expectTranslation("\x1b[r", "\x1b[3;24r\x1b[3;1H");
-    try expectTranslation("\x1b[5;10r", "\x1b[7;12r\x1b[3;1H");
-}
-
-test "origin mode leaves addressing to the terminal" {
-    try expectTranslation("\x1b[?6h\x1b[2;2H\x1b[?6l", "\x1b[?6h\x1b[2;2H\x1b[?6l\x1b[3;1H");
+test "margins are kept off the bar" {
+    try expectTranslation("\x1b[r", "\x1b[1;22r");
+    try expectTranslation("\x1b[5;10r", "\x1b[5;10r");
+    try expectTranslation("\x1b[2;30r", "\x1b[2;22r");
 }
 
 test "sequences inside strings are not rewritten" {
-    const input = "\x1b]8;;\x1b[H\x07\x1bPq\x1b[H\x1b\\";
     // The ESC inside the OSC aborts it; what follows is a real CUP.
-    try expectTranslation(input, "\x1b]8;;\x1b[3H\x07\x1bPq\x1b[3H\x1b\\");
-    try expectTranslation("\x1b]0;a[H\x07", "\x1b]0;a[H\x07");
+    try expectTranslation("\x1b]8;;\x1b[99H\x07\x1bPq\x1b[99H\x1b\\", "\x1b]8;;\x1b[22H\x07\x1bPq\x1b[22H\x1b\\");
+    try expectTranslation("\x1b]0;a[99H\x07", "\x1b]0;a[99H\x07");
 }
 
-test "screen-wide erasure and resets damage the bar" {
-    var out: Output = .{ .above = 1, .rows = 10 };
-    const plain = try translate(&out, "\x1b[J\x1b[K", 64);
-    std.testing.allocator.free(plain);
-    try std.testing.expect(!out.damaged);
-
-    for ([_][]const u8{ "\x1b[2J", "\x1b[1J", "\x1b[?1049h", "\x1b[!p", "\x1b#8" }) |input| {
-        var o: Output = .{ .above = 1, .rows = 10 };
-        const got = try translate(&o, input, 64);
+test "erasures that reach the bar and resets damage it" {
+    for ([_][]const u8{ "\x1b[1J", "\x1b[K", "\x1b[2K" }) |input| {
+        var out: Output = .{ .bar = 1, .rows = 10 };
+        const got = try translate(&out, input, 64);
+        defer std.testing.allocator.free(got);
+        try std.testing.expect(!out.damaged);
+    }
+    for ([_][]const u8{ "\x1b[J", "\x1b[0J", "\x1b[2J", "\x1b[3J", "\x1b[?1049h", "\x1b[!p", "\x1b#8" }) |input| {
+        var out: Output = .{ .bar = 1, .rows = 10 };
+        const got = try translate(&out, input, 64);
         defer std.testing.allocator.free(got);
         try std.testing.expectEqualStrings(input, got);
-        try std.testing.expect(o.damaged);
+        try std.testing.expect(out.damaged);
     }
 
-    var reset: Output = .{ .above = 1, .rows = 10, .top = 3, .origin_mode = true };
+    var reset: Output = .{ .bar = 1, .rows = 10, .top = 3, .origin_mode = true };
     const got = try translate(&reset, "\x1bc", 64);
     defer std.testing.allocator.free(got);
-    try std.testing.expectEqualStrings("\x1bc\x1b[2;11r\x1b[2;1H", got);
+    try std.testing.expectEqualStrings("\x1bc\x1b[1;10r", got);
     try std.testing.expect(reset.damaged and !reset.origin_mode and reset.top == 0);
 }
 
-test "no offset means no rewriting" {
-    var out: Output = .{ .above = 0, .rows = 24 };
-    const input = "\x1b[H\x1b[r\x1b[5d";
+test "no bar means no rewriting" {
+    var out: Output = .{ .bar = 0, .rows = 24 };
+    const input = "\x1b[99H\x1b[r\x1b[50d";
     const got = try translate(&out, input, 3);
     defer std.testing.allocator.free(got);
     try std.testing.expectEqualStrings(input, got);
 }
 
 test "boundaries exclude partial characters and sequences" {
-    var out: Output = .{ .above = 1, .rows = 10 };
+    var out: Output = .{ .bar = 1, .rows = 10 };
     var collector: Collector = .{};
     defer collector.bytes.deinit(std.testing.allocator);
     out.feed("a\xc3", &collector);
     try std.testing.expect(!out.atBoundary());
     out.feed("\xa9\x1b[1", &collector);
     try std.testing.expect(!out.atBoundary());
-    out.feed(";1H", &collector);
+    out.feed("2;1H", &collector);
     try std.testing.expect(out.atBoundary());
-    try std.testing.expectEqualStrings("a\xc3\xa9\x1b[2;1H", collector.bytes.items);
+    try std.testing.expectEqualStrings("a\xc3\xa9\x1b[10;1H", collector.bytes.items);
 }
 
 test "oversized sequences are forwarded untouched" {
@@ -583,48 +561,8 @@ test "oversized sequences are forwarded untouched" {
     try expectTranslation(input, input);
 }
 
-test "a bar below keeps rows in place and clamps those past the child" {
-    const cases = [_][2][]const u8{
-        .{ "\x1b[H\x1b[5;3H\x1b[7d", "\x1b[1H\x1b[5;3H\x1b[7d" },
-        .{ "\x1b[99;1H\x1b[24d", "\x1b[22;1H\x1b[22d" },
-        .{ "\x1b[r", "\x1b[1;22r" },
-        .{ "\x1b[2;30r", "\x1b[2;22r" },
-        .{ "\x1b[?6l", "\x1b[?6l" },
-    };
-    for (cases) |case| {
-        var chunk: usize = 1;
-        while (chunk <= case[0].len) : (chunk += 1) {
-            var out: Output = .{ .above = 0, .below = 2, .rows = 22 };
-            const got = try translate(&out, case[0], chunk);
-            defer std.testing.allocator.free(got);
-            try std.testing.expectEqualStrings(case[1], got);
-        }
-    }
-}
-
-test "erasing below damages a bottom bar, erasing above a top one" {
-    const Case = struct { above: u16, below: u16, input: []const u8, damaged: bool };
-    const cases = [_]Case{
-        .{ .above = 0, .below = 1, .input = "\x1b[J", .damaged = true },
-        .{ .above = 0, .below = 1, .input = "\x1b[1J", .damaged = false },
-        .{ .above = 1, .below = 0, .input = "\x1b[0J", .damaged = false },
-        .{ .above = 1, .below = 0, .input = "\x1b[1J", .damaged = true },
-    };
-    for (cases) |case| {
-        var out: Output = .{ .above = case.above, .below = case.below, .rows = 10 };
-        const got = try translate(&out, case.input, 64);
-        defer std.testing.allocator.free(got);
-        try std.testing.expectEqual(case.damaged, out.damaged);
-    }
-
-    var reset: Output = .{ .above = 0, .below = 1, .rows = 10 };
-    const got = try translate(&reset, "\x1bc", 64);
-    defer std.testing.allocator.free(got);
-    try std.testing.expectEqualStrings("\x1bc\x1b[1;10r", got);
-}
-
 test "an unrestored cursor save is tracked" {
-    var out: Output = .{ .above = 0, .below = 1, .rows = 10 };
+    var out: Output = .{ .bar = 1, .rows = 10 };
     for ([_]struct { []const u8, bool }{
         .{ "\x1b7", true },
         .{ "text\x1b8", false },
@@ -645,7 +583,7 @@ test "status bar user variables are taken and never forwarded" {
         "\x1b]1337;SetUserVar=StatusBarRight=cmlnaHQ=\x1b\\c";
     var chunk: usize = 1;
     while (chunk <= input.len) : (chunk += 1) {
-        var out: Output = .{ .above = 0, .below = 1, .rows = 10 };
+        var out: Output = .{ .bar = 1, .rows = 10 };
         const got = try translate(&out, input, chunk);
         defer std.testing.allocator.free(got);
         try std.testing.expectEqualStrings("abc", got);
@@ -668,7 +606,7 @@ test "other OSCs and user variables pass through" {
     for (inputs) |input| {
         var chunk: usize = 1;
         while (chunk <= input.len) : (chunk += 1) {
-            var out: Output = .{ .above = 0, .below = 1, .rows = 10 };
+            var out: Output = .{ .bar = 1, .rows = 10 };
             const got = try translate(&out, input, chunk);
             defer std.testing.allocator.free(got);
             try std.testing.expectEqualStrings(input, got);
@@ -677,7 +615,7 @@ test "other OSCs and user variables pass through" {
 }
 
 test "an empty value clears and a bad one is ignored" {
-    var out: Output = .{ .above = 0, .below = 1, .rows = 10 };
+    var out: Output = .{ .bar = 1, .rows = 10 };
     const got = try translate(&out, "\x1b]1337;SetUserVar=StatusBarLeft=\x07\x1b]1337;SetUserVar=StatusBarRight=%%%\x07\x1b]1337;SetUserVar=StatusBarMiddle=eA==\x07", 3);
     defer std.testing.allocator.free(got);
     try std.testing.expectEqualStrings("", got);
@@ -686,7 +624,7 @@ test "an empty value clears and a bad one is ignored" {
 }
 
 test "autowrap is tracked" {
-    var out: Output = .{ .above = 0, .below = 1, .rows = 10 };
+    var out: Output = .{ .bar = 1, .rows = 10 };
     for ([_]struct { []const u8, bool }{
         .{ "\x1b[?7l", false },
         .{ "\x1b[?7h", true },

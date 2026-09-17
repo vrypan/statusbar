@@ -1,10 +1,10 @@
-//! Translates the terminal's replies back into the child's coordinates.
+//! Keeps the terminal's replies about the bar away from the child.
 //!
-//! Keystrokes pass untouched. The few reports that carry a screen row - the
-//! cursor position (DSR 6), the text-area size (XTWINOPS 18) and mouse
-//! events - are shifted past a bar above the child, and the size excludes the
-//! bar wherever it is. Mouse events on the bar itself are dropped: the child
-//! has no row to receive them on.
+//! Keystrokes pass untouched, and so do cursor position reports: the child's
+//! rows sit at the top of the screen, where the terminal numbers them the
+//! same way. Two replies still need care. The text-area size (XTWINOPS 18)
+//! counts the bar's rows, which the child doesn't have, and mouse events on
+//! the bar itself are dropped: the child has no row to receive them on.
 //!
 //! A report split across reads is held until it completes. The proxy calls
 //! `flush` if nothing follows promptly, so an Alt-[ typed by hand is never
@@ -17,9 +17,8 @@ const max_params = 4;
 const esc = 0x1b;
 
 pub const Input = struct {
-    /// Bar rows above and below the child's `rows`.
-    above: u16,
-    below: u16 = 0,
+    /// Bar rows below the child's `rows`.
+    bar: u16,
     rows: u16,
 
     state: State = .ground,
@@ -94,11 +93,10 @@ pub const Input = struct {
                     self.hold(b);
                     if (self.seq_len == 6) {
                         const row = self.seq[5] -% 32;
-                        if (row >= 1 and self.onBar(row)) {
+                        if (self.onBar(row)) {
                             self.seq_len = 0;
                             self.state = .ground;
                         } else {
-                            if (row > self.above) self.seq[5] -= @intCast(self.above);
                             self.flush(sink);
                         }
                     }
@@ -112,7 +110,7 @@ pub const Input = struct {
     }
 
     fn onBar(self: *const Input, row: u32) bool {
-        return row <= self.above or (self.below > 0 and row > @as(u32, self.above) + self.rows);
+        return self.bar > 0 and row > self.rows;
     }
 
     fn hold(self: *Input, b: u8) void {
@@ -137,22 +135,13 @@ pub const Input = struct {
         const count = parseParams(body, &params) orelse return sink.write(seq);
 
         switch (final) {
-            // A row within a top bar is not a position report but a modified
-            // F3 key, which shares the encoding.
-            'R' => {
-                if (!(marker == 0 or marker == '?') or count < 2 or self.above == 0 or params[0] <= self.above) return sink.write(seq);
-                params[0] -= self.above;
-            },
             'M', 'm' => {
-                if (marker != '<' or count != 3) return sink.write(seq);
-                if (self.onBar(params[2])) return;
-                if (self.above == 0) return sink.write(seq);
-                params[2] -= self.above;
+                if (marker == '<' and count == 3 and self.onBar(params[2])) return;
+                return sink.write(seq);
             },
             't' => {
-                const bar = self.above + self.below;
-                if (marker != 0 or count != 3 or params[0] != 8 or bar == 0 or params[1] <= bar) return sink.write(seq);
-                params[1] -= bar;
+                if (marker != 0 or count != 3 or params[0] != 8 or self.bar == 0 or params[1] <= self.bar) return sink.write(seq);
+                params[1] -= self.bar;
             },
             else => return sink.write(seq),
         }
@@ -205,7 +194,7 @@ fn expectTranslation(input: []const u8, expected: []const u8) !void {
     const sizes = [_]usize{ input.len, 2, 3, 5 };
     for (sizes) |chunk| {
         if (chunk == 0) continue;
-        var in: Input = .{ .above = 2, .rows = 20 };
+        var in: Input = .{ .bar = 2, .rows = 22 };
         var collector: Collector = .{};
         defer collector.bytes.deinit(std.testing.allocator);
         var i: usize = 0;
@@ -219,34 +208,26 @@ fn expectTranslation(input: []const u8, expected: []const u8) !void {
     }
 }
 
-test "keystrokes pass through" {
+test "keystrokes and cursor reports pass through" {
     try expectTranslation("ls -la\r", "ls -la\r");
-    try expectTranslation("\x1b[A\x1b[1;5C\x1bOP\x1bx", "\x1b[A\x1b[1;5C\x1bOP\x1bx");
+    try expectTranslation("\x1b[A\x1b[1;5C\x1bOP\x1bx\x1b\x1b", "\x1b[A\x1b[1;5C\x1bOP\x1bx\x1b\x1b");
     try expectTranslation("\x1b[200~paste\x1b[201~", "\x1b[200~paste\x1b[201~");
-}
-
-test "cursor reports move into the child's coordinates" {
-    try expectTranslation("\x1b[10;4R", "\x1b[8;4R");
-    try expectTranslation("a\x1b[3;1Rb", "a\x1b[1;1Rb");
-    try expectTranslation("\x1b[?10;4;1R", "\x1b[?8;4;1R");
-    // Modified F3 keys share the encoding and stay as they are.
-    try expectTranslation("\x1b[1;5R", "\x1b[1;5R");
+    try expectTranslation("\x1b[10;4R\x1b[?10;4;1R\x1b[1;5R", "\x1b[10;4R\x1b[?10;4;1R\x1b[1;5R");
 }
 
 test "text area size excludes the bar" {
-    try expectTranslation("\x1b[8;40;120t", "\x1b[8;38;120t");
+    try expectTranslation("\x1b[8;24;80t", "\x1b[8;22;80t");
 }
 
-test "mouse events shift, and those on the bar vanish" {
-    try expectTranslation("\x1b[<0;5;10M\x1b[<0;5;10m", "\x1b[<0;5;8M\x1b[<0;5;8m");
-    try expectTranslation("x\x1b[<0;5;2My", "xy");
-    try expectTranslation("\x1b[M !*", "\x1b[M !(");
-    try expectTranslation("\x1b[M !\"z", "z");
-    try expectTranslation("\x1b\x1b\x1b[5;1R", "\x1b\x1b\x1b[3;1R");
+test "mouse events on the bar vanish" {
+    try expectTranslation("\x1b[<0;5;22M\x1b[<0;5;22m", "\x1b[<0;5;22M\x1b[<0;5;22m");
+    try expectTranslation("x\x1b[<0;5;23My", "xy");
+    try expectTranslation("\x1b[M !\x36", "\x1b[M !\x36"); // row 22: the child's last row
+    try expectTranslation("\x1b[M !\x37z", "z"); // row 23: the bar
 }
 
 test "a lone escape key is not held" {
-    var in: Input = .{ .above = 1, .rows = 20 };
+    var in: Input = .{ .bar = 1, .rows = 20 };
     var collector: Collector = .{};
     defer collector.bytes.deinit(std.testing.allocator);
     in.feed("\x1b", &collector);
@@ -256,14 +237,4 @@ test "a lone escape key is not held" {
     try std.testing.expect(in.holding());
     in.flush(&collector);
     try std.testing.expectEqualStrings("\x1b\x1b[5", collector.bytes.items);
-}
-
-test "a bar below leaves reports alone and swallows clicks on it" {
-    var in: Input = .{ .above = 0, .below = 2, .rows = 22 };
-    var collector: Collector = .{};
-    defer collector.bytes.deinit(std.testing.allocator);
-    in.feed("\x1b[10;4R\x1b[<0;5;22M\x1b[<0;5;23M\x1b[8;24;80t", &collector);
-    in.feed("\x1b[M !\x37", &collector); // row 23: on the bar
-    in.feed("\x1b[M !\x36", &collector); // row 22: the child's last row
-    try std.testing.expectEqualStrings("\x1b[10;4R\x1b[<0;5;22M\x1b[8;22;80t\x1b[M !\x36", collector.bytes.items);
 }

@@ -7,13 +7,15 @@ statusbar reads its config from the first of:
 3. `$XDG_CONFIG_HOME/statusbar/config`
 4. `~/.config/statusbar/config`
 
-Only a missing file at one of the last two, default locations is not an
-error. A file that doesn't parse stops statusbar with the file name, line
-number and problem, before the terminal is touched.
+When there is no file at the last two, default locations, statusbar uses its
+built-in config, which is
+[`samples/default.config`](../samples/default.config). A missing file given
+with `--config` or `$STATUSBAR_CONFIG` is an error, and so is a file that
+doesn't parse: statusbar stops with the file name, line number and problem,
+before the terminal is touched.
 
-[`samples/default.config`](../samples/default.config) is a commented
-starting point, and [`samples/native.config`](../samples/native.config)
-uses the terminal's own palette:
+The built-in config is commented and uses the terminal's own palette, so it
+follows your theme. Copy it as a starting point:
 
 ```sh
 mkdir -p ~/.config/statusbar
@@ -48,7 +50,6 @@ interval = 10
 | Key        | Meaning                                                        |
 |------------|----------------------------------------------------------------|
 | `lines`    | bar height, 1 or 2 (default: the highest `[line.N]`)           |
-| `position` | `bottom` (default) or `top`                                    |
 | `interval` | refresh for commands without their own, in seconds (default 5) |
 | `style`    | style for lines without their own, e.g. `bg=#1e1e2e`           |
 

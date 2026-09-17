@@ -1,8 +1,8 @@
 # statusbar
 
 A status bar for any terminal. `statusbar` runs your shell in a pty one or
-two rows shorter than the window, and keeps a bar in the rows it gave up,
-at the bottom or top. Full-screen programs and scrollback keep working.
+two rows shorter than the window, and keeps a bar in the rows it gave up at
+the bottom. Full-screen programs and scrollback keep working.
 
 ```
 ❯ make test
@@ -29,10 +29,10 @@ zig build test                        # unit tests
 ## Quick start
 
 ```sh
-# A bar with the date, no config needed
+# The built-in bar: user, host, load, date and time
 statusbar
 
-# A two-line bar from the sample config
+# Your own, starting from the built-in config
 mkdir -p ~/.config/statusbar
 cp samples/default.config ~/.config/statusbar/config
 statusbar

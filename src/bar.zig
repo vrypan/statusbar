@@ -1,4 +1,4 @@
-//! Paints the bar into the rows above the child's screen.
+//! Paints the bar into the rows below the child's screen.
 //!
 //! The paint is wrapped in DECSC/DECRC, which save and restore the cursor,
 //! its attributes, origin mode and character sets, so the child resumes

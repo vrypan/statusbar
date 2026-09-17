@@ -22,11 +22,10 @@ const usage =
     \\options:
     \\  -c, --config PATH     config file (default: $STATUSBAR_CONFIG, else
     \\                        $XDG_CONFIG_HOME/statusbar/config, else
-    \\                        ~/.config/statusbar/config)
+    \\                        ~/.config/statusbar/config, else built in)
     \\  -n, --lines N         bar height, 1 or 2 (default: the config's lines)
-    \\  -p, --position POS    bottom (default) or top
     \\  -e, --exec COMMAND    shell command whose output lines fill the bar,
-    \\                        instead of the config's [line.N] (default: date)
+    \\                        instead of the config's [line.N]
     \\  -i, --interval SECS   how often commands rerun (default 1 for --exec,
     \\                        the config's interval otherwise)
     \\  -s, --style STYLE     bar style as SGR parameters (7) or markup
@@ -74,7 +73,6 @@ pub fn main(init: std.process.Init) !u8 {
 
     var cli: struct {
         lines: ?u16 = null,
-        position: ?proxy.Position = null,
         command: ?[]const u8 = null,
         interval_ms: ?i64 = null,
         style: ?[]const u8 = null,
@@ -104,9 +102,6 @@ pub fn main(init: std.process.Init) !u8 {
             const lines = std.fmt.parseInt(u16, value, 10) catch 0;
             if (lines < 1 or lines > 2) return usageError(stderr, "--lines must be 1 or 2");
             cli.lines = lines;
-        } else if (eql2(arg, "-p", "--position")) {
-            cli.position = std.meta.stringToEnum(proxy.Position, value) orelse
-                return usageError(stderr, "--position must be top or bottom");
         } else if (eql2(arg, "-e", "--exec")) {
             cli.command = value;
         } else if (eql2(arg, "-i", "--interval")) {
@@ -127,21 +122,17 @@ pub fn main(init: std.process.Init) !u8 {
         return if (err == error.ReportedConfigError) 2 else err;
     };
 
-    // Precedence: command-line flags, then the config file, then defaults.
-    const templates = cli.command == null and cfg != null and cfg.?.defined_lines > 0;
-    if (cfg) |c| {
-        if (cli.interval_ms) |ms| c.interval_ms = ms;
-    }
+    // Precedence: command-line flags, then the config file (or the built-in
+    // one), then defaults.
+    const templates = cli.command == null and cfg.defined_lines > 0;
+    if (cli.interval_ms) |ms| cfg.interval_ms = ms;
     var opts: proxy.Options = .{
-        .lines = cli.lines orelse
-            (if (cfg) |c| c.lines else null) orelse
-            (if (templates) cfg.?.defined_lines else 1),
-        .position = cli.position orelse (if (cfg) |c| c.position else null) orelse .bottom,
+        .lines = cli.lines orelse cfg.lines orelse (if (templates) cfg.defined_lines else 1),
         .command = if (templates) null else cli.command orelse "date",
         .interval_ms = cli.interval_ms orelse 1000,
         .cfg = cfg,
         // Reverse video marks a plain command's bar; a config draws its own.
-        .style = cli.style orelse (if (cfg) |c| c.style else null) orelse (if (templates) "" else "7"),
+        .style = cli.style orelse cfg.style orelse (if (templates) "" else "7"),
     };
 
     const argv = try arena.alloc([]const u8, args.len - i);
@@ -254,19 +245,23 @@ const zsh_init =
     \\
 ;
 
+/// samples/default.config, used when there is no config file.
+const default_config = @embedFile("default_config");
+
 /// Reads the config from `--config`, `$STATUSBAR_CONFIG`, or the default
-/// location. Only a missing file at the default location is not an error.
-fn loadConfig(arena: std.mem.Allocator, io: Io, flag: ?[]const u8, stderr: *Io.Writer) !?*config.Config {
+/// location. Only a missing file at the default location is not an error;
+/// the built-in config takes its place.
+fn loadConfig(arena: std.mem.Allocator, io: Io, flag: ?[]const u8, stderr: *Io.Writer) !*config.Config {
     const env = @import("environment.zig");
     var explicit = true;
     const path = flag orelse env.get("STATUSBAR_CONFIG") orelse blk: {
         explicit = false;
         if (env.get("XDG_CONFIG_HOME")) |xdg| break :blk try std.fmt.allocPrint(arena, "{s}/statusbar/config", .{xdg});
-        const home = env.get("HOME") orelse return null;
+        const home = env.get("HOME") orelse break :blk "";
         break :blk try std.fmt.allocPrint(arena, "{s}/.config/statusbar/config", .{home});
     };
-    const text = Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_config_bytes)) catch |err| {
-        if (!explicit and err == error.FileNotFound) return null;
+    const text = if (path.len == 0) default_config else Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_config_bytes)) catch |err| text: {
+        if (!explicit and err == error.FileNotFound) break :text default_config;
         try stderr.print("statusbar: cannot read {s}: {t}\n", .{ path, err });
         return error.ReportedConfigError;
     };
@@ -315,4 +310,10 @@ test {
     _ = @import("source.zig");
     _ = @import("child.zig");
     _ = proxy;
+}
+
+test "the built-in config parses" {
+    var diag: config.Diagnostic = .{};
+    const cfg = try config.parse(default_config, &diag);
+    try std.testing.expectEqual(@as(u16, 2), cfg.defined_lines);
 }

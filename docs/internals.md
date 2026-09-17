@@ -4,7 +4,7 @@ statusbar is a PTY proxy. It sits between the terminal and the command it
 runs, and forwards both directions.
 
 ```
-terminal emulator     the child's screen, and the bar below or above it
+terminal emulator     the child's screen, and the bar below it
     |
 statusbar             allocates a pty 1 or 2 rows shorter than the terminal
     |
@@ -13,15 +13,18 @@ shell
 
 - The outer terminal's scrolling region (DECSTBM) covers only the child's
   rows, so ordinary output and scrolling never reach the bar.
+- The bar is always at the bottom. Terminals only save lines to scrollback
+  when the scrolling region starts at row 1, so a bar at the top would lose
+  everything that scrolls off inside the session.
 - Output is scanned for sequences that address absolute rows (CUP, HVP, VPA,
-  DECSTBM). They are clamped to the child's rows and, for a top bar, shifted
-  down. Everything else passes through as it arrives.
+  DECSTBM), and rows past the child's screen are clamped so they never reach
+  the bar. Everything else passes through as it arrives.
 - Erasures that reach the bar, RIS, DECSTR, DECALN and alternate-screen
   switches trigger a repaint. A repaint that follows an erasure goes out in
   the same write, so the terminal never shows a frame without the bar.
-- Replies from the terminal that carry a row (cursor position reports,
-  XTWINOPS 18, SGR and X10 mouse events) are translated back; mouse clicks on
-  the bar are dropped.
+- Cursor position reports pass through unchanged, since the child's rows are
+  numbered the same on both sides. The text-area size report (XTWINOPS 18)
+  leaves out the bar's rows, and mouse clicks on the bar are dropped.
 - The bar is painted with autowrap off, so text that the terminal draws wider
   than statusbar measured is clipped at the right edge rather than wrapping.
 - `StatusBarLeft` and `StatusBarRight` user variables are taken out of the
@@ -35,9 +38,6 @@ shell
   the child uses too. They only happen between complete sequences, and wait
   for a pause while the child holds a saved cursor, so collisions are
   unlikely but possible.
-- Terminals only save lines to scrollback when the scrolling region starts at
-  row 1. That's why the bar defaults to the bottom; with `-p top`, output
-  that scrolls off inside the session may not reach scrollback.
 - When the window grows, terminals that add blank rows at the bottom (rather
   than pulling lines back from scrollback) can leave a copy of the old bar in
   the child's area until it is overwritten.

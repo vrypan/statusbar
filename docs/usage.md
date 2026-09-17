@@ -14,9 +14,8 @@ The session ends when the command exits, with the command's exit status.
 
 | Option                  | Meaning                                                                 |
 |-------------------------|-------------------------------------------------------------------------|
-| `-c`, `--config PATH`   | config file; see [config.md](config.md) for where it is looked for      |
+| `-c`, `--config PATH`   | config file; see [config.md](config.md) for where it is looked for, and the built-in default |
 | `-n`, `--lines N`       | bar height, 1 or 2 (default: from the config, else 1)                   |
-| `-p`, `--position POS`  | `bottom` (default) or `top`                                             |
 | `-e`, `--exec COMMAND`  | fill the bar from one shell command instead of the config's lines       |
 | `-i`, `--interval SECS` | how often commands rerun (default 1 with `--exec`, else the config's)   |
 | `-s`, `--style STYLE`   | bar style, as SGR parameters (`7`) or markup attributes (`fg=blue,bold`); `''` for none |
@@ -51,10 +50,10 @@ stripped.
 statusbar -i 5 -s '' -e 'printf " #[bold]%s#[default]\t%s \n" "$(hostname -s)" "$(date +%H:%M)"'
 ```
 
-With neither `--exec` nor a config with `[line.N]` sections, the bar shows
-`date` in reverse video. `--exec` also uses reverse video unless `--style` or
-the config sets another style; a config's colors and other options still
-apply.
+`--exec` uses reverse video unless `--style` or the config sets another
+style. The config's colors and other options still apply, and without a
+config file that is the built-in one. A config file with no `[line.N]`
+sections shows `date` the same way.
 
 ## Environment
 
