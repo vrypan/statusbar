@@ -1,16 +1,24 @@
 # Usage
 
 ```
-statusbar [options] [-- command [args...]]
-statusbar set left|right [TEXT...]
+statusbar [run] [options] [-- COMMAND...]
+statusbar set <left|right> [TEXT...]
 eval "$(statusbar init zsh)"
+statusbar completion <bash|zsh|fish>
 ```
 
-`statusbar` runs a command, by default `$SHELL`, in a pty one or two rows
-shorter than the terminal, and keeps a status bar in the rows it gave up.
-The session ends when the command exits, with the command's exit status.
+`statusbar --help` lists the commands, and `statusbar COMMAND --help` shows
+each one's options.
 
-## Options
+## `run`
+
+Runs a command, by default `$SHELL`, in a pty one or two rows shorter than
+the terminal, and keeps a status bar in the rows it gave up. The session
+ends when the command exits, with the command's exit status.
+
+`run` is the default command, so it can be left out:
+`statusbar -n 1 -- vim` is `statusbar run -n 1 -- vim`. The command to run
+always follows `--`.
 
 | Option                  | Meaning                                                                 |
 |-------------------------|-------------------------------------------------------------------------|
@@ -19,21 +27,35 @@ The session ends when the command exits, with the command's exit status.
 | `-e`, `--exec COMMAND`  | fill the bar from one shell command instead of the config's lines       |
 | `-i`, `--interval SECS` | how often commands rerun (default 1 with `--exec`, else the config's)   |
 | `-s`, `--style STYLE`   | bar style, as SGR parameters (`7`) or markup attributes (`fg=blue,bold`); `''` for none |
-| `-h`, `--help`          | show help                                                               |
-| `-V`, `--version`       | show the version                                                        |
 
-Options take their value as the next argument, and long options also after
-`=` (`--lines=2`). Options override the config file.
+Options take their value as the next argument (`-n 2`), and long options
+also after `=` (`--lines=2`). Options override the config file.
 
-A command whose name starts with `-`, or is `set` or `init`, must follow
-`--`: `statusbar -- set`.
+## `set`
 
-## Subcommands
+`statusbar set left|right [TEXT...]` replaces a slot of the bar from inside a
+session. See [set.md](set.md).
 
-- `statusbar set left|right [TEXT...]` replaces a slot of the bar from
-  inside a session. See [set.md](set.md).
-- `statusbar init zsh` prints the zsh integration that moves starship's
-  prompt into the bar. See [starship.md](starship.md).
+## `init`
+
+`statusbar init zsh` prints the zsh integration that moves starship's prompt
+into the bar. See [starship.md](starship.md).
+
+## `completion`
+
+`statusbar completion bash|zsh|fish` prints a completion script for the
+commands, options and values:
+
+```sh
+# zsh: into a directory on $fpath
+statusbar completion zsh > ~/.zsh/completions/_statusbar
+
+# bash
+statusbar completion bash > ~/.local/share/bash-completion/completions/statusbar
+
+# fish
+statusbar completion fish > ~/.config/fish/completions/statusbar.fish
+```
 
 ## Without a config: `--exec`
 

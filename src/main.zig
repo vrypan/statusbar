@@ -1,6 +1,9 @@
 const std = @import("std");
 const Io = std.Io;
 const build_options = @import("build_options");
+const zecli = @import("zecli");
+const completion = @import("completion");
+const cli = @import("cli.zig");
 const proxy = @import("proxy.zig");
 const config = @import("config.zig");
 
@@ -11,47 +14,6 @@ pub const panic = std.debug.FullPanic(struct {
     }
 }.restoreThenPanic);
 
-const usage =
-    \\usage: statusbar [options] [-- command [args...]]
-    \\       statusbar set left|right [TEXT...]
-    \\       eval "$(statusbar init zsh)"
-    \\
-    \\Run a command (default: $SHELL) under a pty that is one or two rows
-    \\shorter than the terminal, and keep a status bar in the rows it gave up.
-    \\
-    \\options:
-    \\  -c, --config PATH     config file (default: $STATUSBAR_CONFIG, else
-    \\                        $XDG_CONFIG_HOME/statusbar/config, else
-    \\                        ~/.config/statusbar/config, else built in)
-    \\  -n, --lines N         bar height, 1 or 2 (default: the config's lines)
-    \\  -e, --exec COMMAND    shell command whose output lines fill the bar,
-    \\                        instead of the config's [line.N]
-    \\  -i, --interval SECS   how often commands rerun (default 1 for --exec,
-    \\                        the config's interval otherwise)
-    \\  -s, --style STYLE     bar style as SGR parameters (7) or markup
-    \\                        attributes (fg=blue,bold); "" for none
-    \\  -h, --help            show this help
-    \\  -V, --version         show the version
-    \\
-    \\`statusbar set` replaces the left or right slot of the bar's last text
-    \\line from inside a session; no TEXT restores it. Outside a session it
-    \\does nothing.
-    \\
-    \\`statusbar init zsh` prints shell code for ~/.zshrc. Inside a session,
-    \\it moves starship's prompt into the bar and keeps only its last line,
-    \\the prompt character, in the terminal.
-    \\
-    \\An --exec line may hold two tab-separated slots: left, or
-    \\left<TAB>right. Style text with tmux-like
-    \\markup: #[fg=blue,bold]text#[default], with colors given as names
-    \\(brightblack), colour214, #89b4fa, or [colors] from the config.
-    \\## prints a literal #.
-    \\
-    \\Commands see STATUSBAR_COLUMNS and STATUSBAR_LINES. The child sees
-    \\STATUSBAR_LINES, so nested sessions can tell they are inside a bar.
-    \\
-;
-
 pub fn main(init: std.process.Init) !u8 {
     @import("environment.zig").init(init.environ_map);
     const arena = init.arena.allocator();
@@ -60,90 +22,80 @@ pub fn main(init: std.process.Init) !u8 {
     var stderr_buf: [1024]u8 = undefined;
     var stderr_file: Io.File.Writer = .initStreaming(.stderr(), init.io, &stderr_buf);
     const stderr = &stderr_file.interface;
-    var stdout_buf: [1024]u8 = undefined;
+    var stdout_buf: [4096]u8 = undefined;
     var stdout_file: Io.File.Writer = .initStreaming(.stdout(), init.io, &stdout_buf);
     const stdout = &stdout_file.interface;
 
-    if (args.len > 1 and std.mem.eql(u8, args[1], "set")) {
-        return setSlot(arena, init.io, args[2..], stderr);
-    }
-    if (args.len > 1 and std.mem.eql(u8, args[1], "init")) {
-        return shellInit(arena, init.io, args[2..], stdout, stderr);
-    }
+    const routed = try cli.routeDefaultCommand(arena, args[1..]);
+    const invocation = zecli.Invocation.init(arena, stderr, cli.application, routed, init.environ_map) catch |err| {
+        if (err != error.ReportedCliError) return err;
+        try stderr.flush();
+        return 2;
+    };
 
-    var cli: struct {
-        lines: ?u16 = null,
-        command: ?[]const u8 = null,
-        interval_ms: ?i64 = null,
-        style: ?[]const u8 = null,
-        config: ?[]const u8 = null,
-    } = .{};
-
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        const arg: []const u8 = args[i];
-        if (std.mem.eql(u8, arg, "--")) {
-            i += 1;
-            break;
-        }
-        if (arg.len == 0 or arg[0] != '-') break;
-        if (eql2(arg, "-h", "--help")) {
-            try stdout.writeAll(usage);
-            try stdout.flush();
-            return 0;
-        }
-        if (eql2(arg, "-V", "--version")) {
-            try stdout.writeAll("statusbar " ++ build_options.version ++ "\n");
-            try stdout.flush();
-            return 0;
-        }
-        const value = optionValue(args, &i) orelse return usageError(stderr, "missing value for option");
-        if (eql2(arg, "-n", "--lines")) {
-            const lines = std.fmt.parseInt(u16, value, 10) catch 0;
-            if (lines < 1 or lines > 2) return usageError(stderr, "--lines must be 1 or 2");
-            cli.lines = lines;
-        } else if (eql2(arg, "-e", "--exec")) {
-            cli.command = value;
-        } else if (eql2(arg, "-i", "--interval")) {
-            const secs = std.fmt.parseFloat(f64, value) catch -1;
-            if (!(secs >= 0.1 and secs <= 86400)) return usageError(stderr, "--interval must be between 0.1 and 86400 seconds");
-            cli.interval_ms = @intFromFloat(secs * 1000);
-        } else if (eql2(arg, "-s", "--style")) {
-            cli.style = value;
-        } else if (eql2(arg, "-c", "--config")) {
-            cli.config = value;
-        } else {
-            return usageError(stderr, "unknown option");
-        }
+    if (try invocation.printHelpIfRequested(arena, stdout)) {
+        try stdout.flush();
+        return 0;
     }
+    if (invocation.enabled("version")) {
+        try stdout.writeAll("statusbar " ++ build_options.version ++ "\n");
+        try stdout.flush();
+        return 0;
+    }
+    const command = invocation.getCommand() orelse {
+        try zecli.printApplicationHelp(arena, stdout, cli.application);
+        try stdout.flush();
+        return 0;
+    };
 
-    const cfg = loadConfig(arena, init.io, cli.config, stderr) catch |err| {
+    return switch (try command.as(cli.CommandName)) {
+        .run => runSession(arena, init.io, command, stderr),
+        .set => setSlot(arena, init.io, command, stderr),
+        .init => shellInit(arena, init.io, command, stdout, stderr),
+        .completion => printCompletion(command, stdout, stderr),
+    };
+}
+
+/// `statusbar [run]`: the session itself.
+fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
+    const lines: ?u16 = if (command.getValue(usize, "lines")) |n| lines: {
+        if (n < 1 or n > 2) return usageError(stderr, command, "--lines must be 1 or 2");
+        break :lines @intCast(n);
+    } else null;
+    const interval_ms: ?i64 = if (command.getValue(f64, "interval")) |secs| interval: {
+        if (!(secs >= 0.1 and secs <= 86400)) return usageError(stderr, command, "--interval must be between 0.1 and 86400 seconds");
+        break :interval @intFromFloat(secs * 1000);
+    } else null;
+    const exec = command.getValue([]const u8, "exec");
+    const style = command.getValue([]const u8, "style");
+
+    const cfg = loadConfig(arena, io, command.getValue([]const u8, "config"), stderr) catch |err| {
         try stderr.flush();
         return if (err == error.ReportedConfigError) 2 else err;
     };
 
     // Precedence: command-line flags, then the config file (or the built-in
     // one), then defaults.
-    const templates = cli.command == null and cfg.defined_lines > 0;
-    if (cli.interval_ms) |ms| cfg.interval_ms = ms;
-    var opts: proxy.Options = .{
-        .lines = cli.lines orelse cfg.lines orelse (if (templates) cfg.defined_lines else 1),
-        .command = if (templates) null else cli.command orelse "date",
-        .interval_ms = cli.interval_ms orelse 1000,
+    const templates = exec == null and cfg.defined_lines > 0;
+    if (interval_ms) |ms| cfg.interval_ms = ms;
+    const child = command.passthrough() orelse &.{};
+    const argv = try arena.alloc([]const u8, child.len);
+    for (child, argv) |arg, *slot| slot.* = arg;
+    const opts: proxy.Options = .{
+        .argv = argv,
+        .lines = lines orelse cfg.lines orelse (if (templates) cfg.defined_lines else 1),
+        .command = if (templates) null else exec orelse "date",
+        .interval_ms = interval_ms orelse 1000,
         .cfg = cfg,
         // Reverse video marks a plain command's bar; a config draws its own.
-        .style = cli.style orelse cfg.style orelse (if (templates) "" else "7"),
+        .style = style orelse cfg.style orelse (if (templates) "" else "7"),
     };
-
-    const argv = try arena.alloc([]const u8, args.len - i);
-    for (args[i..], argv) |arg, *slot| slot.* = arg;
-    opts.argv = argv;
 
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
     defer _ = debug_allocator.deinit();
     const gpa = if (@import("builtin").mode == .Debug) debug_allocator.allocator() else std.heap.smp_allocator;
 
-    return proxy.run(gpa, init.io, opts) catch |err| {
+    return proxy.run(gpa, io, opts) catch |err| {
         const message = switch (err) {
             error.NotATerminal => "statusbar: stdin and stdout must be a terminal\n",
             error.ForkFailed => "statusbar: cannot fork\n",
@@ -155,18 +107,34 @@ pub fn main(init: std.process.Init) !u8 {
     };
 }
 
+/// `statusbar completion <bash|zsh|fish>`
+fn printCompletion(command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
+    const shell = command.positionals()[0];
+    if (std.mem.eql(u8, shell, "bash")) {
+        try completion.generateBash(stdout, cli.application);
+    } else if (std.mem.eql(u8, shell, "zsh")) {
+        try completion.generateZsh(stdout, cli.application);
+    } else if (std.mem.eql(u8, shell, "fish")) {
+        try completion.generateFish(stdout, cli.application);
+    } else {
+        return usageError(stderr, command, "completion supports bash, zsh and fish");
+    }
+    try stdout.flush();
+    return 0;
+}
+
 /// `statusbar set left|right [TEXT...]`: sends the slot's user variable to the
 /// terminal of the statusbar session this runs in. Words are joined with
 /// spaces, as `echo` would. It writes to /dev/tty rather than stdout, so a
 /// prompt tool capturing stdout never gets the sequence in its prompt.
-fn setSlot(arena: std.mem.Allocator, io: Io, args: []const [:0]const u8, stderr: *Io.Writer) !u8 {
-    if (args.len == 0) return usageError(stderr, "set needs a slot: left or right");
+fn setSlot(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
+    const args = command.positionals();
     const name: []const u8 = if (std.mem.eql(u8, args[0], "left"))
         "StatusBarLeft"
     else if (std.mem.eql(u8, args[0], "right"))
         "StatusBarRight"
     else
-        return usageError(stderr, "set takes left or right");
+        return usageError(stderr, command, "SLOT must be left or right");
 
     // Outside a session there is no bar to update, and nothing is written.
     if (!@import("environment.zig").contains("STATUSBAR_LINES")) return 0;
@@ -189,8 +157,9 @@ fn setSlot(arena: std.mem.Allocator, io: Io, args: []const [:0]const u8, stderr:
 
 /// `statusbar init zsh`: prints the shell integration. Outside a session it
 /// prints nothing, so the `eval` costs nothing in other terminals.
-fn shellInit(arena: std.mem.Allocator, io: Io, args: []const [:0]const u8, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
-    if (args.len != 1 or !std.mem.eql(u8, args[0], "zsh")) return usageError(stderr, "init supports zsh: eval \"$(statusbar init zsh)\"");
+fn shellInit(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
+    const args = command.positionals();
+    if (!std.mem.eql(u8, args[0], "zsh")) return usageError(stderr, command, "init supports zsh");
     if (!@import("environment.zig").contains("STATUSBAR_LINES")) return 0;
 
     // Call this exact binary, as starship's own init does, so the hook works
@@ -280,23 +249,9 @@ fn loadConfig(arena: std.mem.Allocator, io: Io, flag: ?[]const u8, stderr: *Io.W
 
 const max_config_bytes = 64 * 1024;
 
-fn eql2(arg: []const u8, short: []const u8, long: []const u8) bool {
-    return std.mem.eql(u8, arg, short) or std.mem.eql(u8, arg, long);
-}
-
-/// Accepts `--opt value` and `--opt=value`.
-fn optionValue(args: []const [:0]const u8, i: *usize) ?[]const u8 {
-    const arg: []const u8 = args[i.*];
-    if (std.mem.startsWith(u8, arg, "--")) {
-        if (std.mem.indexOfScalar(u8, arg, '=')) |at| return arg[at + 1 ..];
-    }
-    if (i.* + 1 >= args.len) return null;
-    i.* += 1;
-    return args[i.*];
-}
-
-fn usageError(stderr: *Io.Writer, message: []const u8) !u8 {
-    try stderr.print("statusbar: {s}\n\n{s}", .{ message, usage });
+/// Reports an invalid value the way zecli reports a parse error.
+fn usageError(stderr: *Io.Writer, command: *const zecli.Command, message: []const u8) !u8 {
+    try stderr.print("error: {s}\n\nUsage: {s}\n\nTry 'statusbar {s} --help' for more information.\n", .{ message, command.spec.usage, command.name });
     try stderr.flush();
     return 2;
 }
@@ -307,6 +262,7 @@ test {
     _ = @import("bar.zig");
     _ = @import("markup.zig");
     _ = @import("config.zig");
+    _ = cli;
     _ = @import("source.zig");
     _ = @import("child.zig");
     _ = proxy;

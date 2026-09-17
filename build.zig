@@ -15,6 +15,9 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     mod.addOptions("build_options", options);
+    const zecli = b.dependency("zecli", .{});
+    mod.addImport("zecli", zecli.module("cli"));
+    mod.addImport("completion", zecli.module("completion"));
     // The sample config doubles as the built-in default, so the two can't
     // drift apart.
     mod.addAnonymousImport("default_config", .{ .root_source_file = b.path("samples/default.config") });

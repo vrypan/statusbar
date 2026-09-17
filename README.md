@@ -41,6 +41,9 @@ statusbar
 statusbar -e 'date "+%H:%M"'
 ```
 
+Run `statusbar --help` for the commands, and `statusbar completion zsh` (or
+`bash`, `fish`) for shell completions.
+
 To put starship's prompt in the bar, add this to `~/.zshrc`:
 
 ```zsh
@@ -49,7 +52,8 @@ eval "$(statusbar init zsh)"
 
 ## Documentation
 
-- [Usage](docs/usage.md): command-line options, `--exec`, environment
+- [Usage](docs/usage.md): commands, options, `--exec`, completions,
+  environment
 - [Config file](docs/config.md): lines, slots, templates, commands, colors
   and markup
 - [Updating the bar](docs/set.md): `statusbar set` and its escape sequence

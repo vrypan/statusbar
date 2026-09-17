@@ -3,7 +3,12 @@
     .version = "0.1.0",
     .fingerprint = 0x7b494927cd0cc4b4,
     .minimum_zig_version = "0.16.0",
-    .dependencies = .{},
+    .dependencies = .{
+        .zecli = .{
+            .url = "git+https://github.com/vrypan/zecli.git?ref=v0.4.0#95eac759082a8612f27f7b137a5d99ad2c7bc5f1",
+            .hash = "zecli-0.4.0-j151k7hDAwCgbgSebqmkkZ6Iyd3noZ2DaioUArcjww2C",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",
