@@ -9,8 +9,49 @@ shorter.
         -e 'date "+%H:%M"; git -C ~/src/project branch --show-current'
 
 The bar command runs under `/bin/sh -c` every `--interval` seconds. Each
-output line fills one bar row, clipped to `STATUSBAR_COLUMNS`. SGR colors
-and OSC 8 hyperlinks are kept; cursor movement is stripped.
+output line fills one bar row. Raw SGR colors and OSC 8 hyperlinks are kept;
+cursor movement is stripped.
+
+## Slots
+
+A line may hold up to three tab-separated slots, which statusbar aligns:
+
+| Output                        | Layout                  |
+|-------------------------------|-------------------------|
+| `left`                        | left                    |
+| `left<TAB>right`              | left, right             |
+| `left<TAB>center<TAB>right`   | left, center, right     |
+
+The center is centered on the whole line and moves aside for a long left or
+right slot. When the line is too narrow, the center is dropped first, then
+the right slot is clipped; the left slot is kept longest.
+
+## Markup
+
+Style text with tmux-like markup instead of escape codes:
+
+    #[fg=#89b4fa,bold]host#[default] #[fg=brightblack]·#[default] 3.73
+
+- `fg=` / `bg=`: `black` … `white`, `brightblack` … `brightwhite`,
+  `colour214` (or `214`), `#rrggbb`, `default` (the terminal's own color)
+- `bold dim italics underscore blink reverse strikethrough overline`, and
+  `no…` to turn each off
+- `default` or `none`: back to the bar's `--style`
+- `##` is a literal `#`
+
+Styles don't carry across slots.
+
+## Example: two lines with a thin rule
+
+```sh
+#!/bin/sh
+printf ' #[fg=#89b4fa,bold]%s#[default] #[fg=#7f849c]·#[default] %s\t%s  #[bold]%s#[default] \n' \
+  "$(hostname -s)" "$(sysctl -n vm.loadavg | awk '{print $2}')" \
+  "$(date '+%a %d %b')" "$(date +%H:%M)"
+printf "#[fg=#45475a]%${STATUSBAR_COLUMNS}s\n" '' | sed 's/ /─/g'
+```
+
+    statusbar -n 2 -i 5 -s '' -e ~/bin/bar.sh
 
 ## How it works
 

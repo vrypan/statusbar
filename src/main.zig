@@ -26,6 +26,11 @@ const usage =
     \\  -h, --help            show this help
     \\  -V, --version         show the version
     \\
+    \\Each output line may hold up to three tab-separated slots: left,
+    \\left<TAB>right, or left<TAB>center<TAB>right. Style text with tmux-like
+    \\markup: #[fg=blue,bold]text#[default], with colors given as names
+    \\(brightblack), colour214, or #89b4fa. ## prints a literal #.
+    \\
     \\The command sees STATUSBAR_COLUMNS and STATUSBAR_LINES. The child sees
     \\STATUSBAR_LINES, so nested sessions can tell they are inside a bar.
     \\
@@ -132,6 +137,7 @@ test {
     _ = @import("output.zig");
     _ = @import("input.zig");
     _ = @import("bar.zig");
+    _ = @import("markup.zig");
     _ = @import("child.zig");
     _ = proxy;
 }

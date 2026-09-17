@@ -348,7 +348,7 @@ const Proxy = struct {
         var region_buf: [32]u8 = undefined;
         var region: std.Io.Writer = .fixed(&region_buf);
         self.output.writeRegion(&WriterSink{ .w = &region });
-        var buf: [4 * 1024 + 256]u8 = undefined;
+        var buf: [16 * 1024]u8 = undefined;
         var w: std.Io.Writer = .fixed(&buf);
         bar.paint(&w, &self.content, self.layout.offset, self.layout.cols, self.style, region.buffered()) catch {};
         self.terminal.write(w.buffered());

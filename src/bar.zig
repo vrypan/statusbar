@@ -7,6 +7,7 @@
 //! sequences and after the child has gone quiet.
 
 const std = @import("std");
+const markup = @import("markup.zig");
 
 pub const max_lines = 2;
 const max_line_bytes = 1024;
@@ -47,16 +48,108 @@ pub fn paint(w: *std.Io.Writer, content: *const Content, lines: u16, cols: u16, 
         // Erase first: after a full-width line the cursor sits in the
         // pending-wrap state, where an erase would clear the last cell.
         try w.print("\x1b[{d};1H\x1b[0;{s}m\x1b[2K", .{ n + 1, style });
-        try writeClipped(w, content.line(n), cols, style);
+        try writeLine(w, content.line(n), cols, style);
     }
     try w.writeAll("\x1b[0m\x1b8");
 }
 
-/// Writes `text` without letting it occupy more than `cols` cells. Escape
-/// sequences are copied but take no space; SGR resets are followed by the bar
-/// style again so a command's colors never strip the bar's background. Other
-/// control characters are dropped, since they could move the cursor.
-fn writeClipped(w: *std.Io.Writer, text: []const u8, cols: u16, style: []const u8) !void {
+/// Slots, in the order they are drawn.
+const left = 0;
+const center = 1;
+const right = 2;
+
+const Placement = struct {
+    col: usize = 0,
+    /// Cells the slot may use; zero hides it.
+    width: usize = 0,
+};
+
+/// One bar line: markup expanded, then split on tabs into slots.
+///
+///     left                     one field
+///     left \t right            two fields
+///     left \t center \t right  three fields
+///
+/// Styling does not carry from one slot into the gap after it.
+fn writeLine(w: *std.Io.Writer, text: []const u8, cols: u16, style: []const u8) !void {
+    var expanded_buf: [4096]u8 = undefined;
+    const expanded = markup.expand(text, &expanded_buf);
+
+    var fields: [3][]const u8 = .{ "", "", "" };
+    var count: usize = 0;
+    var it = std.mem.splitScalar(u8, expanded, '\t');
+    while (it.next()) |field| : (count += 1) {
+        if (count == fields.len) {
+            // Further tabs belong to the last slot, where they print as spaces.
+            fields[count - 1] = expanded[fields[count - 1].ptr - expanded.ptr ..];
+            break;
+        }
+        fields[count] = field;
+    }
+    var slots: [3][]const u8 = .{ "", "", "" };
+    switch (count) {
+        0, 1 => slots[left] = fields[0],
+        2 => {
+            slots[left] = fields[0];
+            slots[right] = fields[1];
+        },
+        else => slots = fields,
+    }
+
+    var widths: [3]usize = undefined;
+    for (slots, 0..) |slot, n| widths[n] = try writeClipped(null, slot, std.math.maxInt(usize), style);
+    const places = layout(widths, cols);
+
+    var cursor: usize = 0;
+    for (slots, places) |slot, place| {
+        if (place.width == 0) continue;
+        if (place.col > cursor) {
+            try w.print("\x1b[0;{s}m", .{style});
+            try w.splatByteAll(' ', place.col - cursor);
+            cursor = place.col;
+        }
+        cursor += try writeClipped(w, slot, place.width, style);
+    }
+}
+
+/// Places slots on a line `cols` wide. When space runs out the center goes
+/// first, then the right slot is clipped, and the left slot is kept longest.
+fn layout(widths: [3]usize, cols: usize) [3]Placement {
+    var places: [3]Placement = .{ .{}, .{}, .{} };
+
+    places[left] = .{ .col = 0, .width = @min(widths[left], cols) };
+    const left_end = places[left].width;
+
+    if (widths[right] > 0) {
+        const gap: usize = if (left_end > 0) 1 else 0;
+        const room = cols -| (left_end + gap);
+        const width = @min(widths[right], room);
+        places[right] = .{ .col = cols - width, .width = width };
+    }
+
+    if (widths[center] > 0) {
+        const lo = if (left_end > 0) left_end + 1 else 0;
+        const hi = if (places[right].width > 0) places[right].col -| 1 else cols;
+        if (hi >= lo and hi - lo >= widths[center]) {
+            const ideal = (cols -| widths[center]) / 2;
+            places[center] = .{
+                .col = std.math.clamp(ideal, lo, hi - widths[center]),
+                .width = widths[center],
+            };
+        }
+    }
+    return places;
+}
+
+/// Writes `text` without letting it occupy more than `cols` cells, and returns
+/// the cells used. With no writer it only measures. Escape sequences are
+/// copied but take no space; SGR resets are followed by the bar style again so
+/// a command's colors never strip the bar's background. Other control
+/// characters are dropped, since they could move the cursor.
+fn writeClipped(maybe_w: ?*std.Io.Writer, text: []const u8, cols: usize, style: []const u8) !usize {
+    var discard_buf: [64]u8 = undefined;
+    var discarding: std.Io.Writer.Discarding = .init(&discard_buf);
+    const w = maybe_w orelse &discarding.writer;
     var used: usize = 0;
     var i: usize = 0;
     while (i < text.len) {
@@ -100,6 +193,7 @@ fn writeClipped(w: *std.Io.Writer, text: []const u8, cols: u16, style: []const u
         used += width;
         i += len;
     }
+    return used;
 }
 
 fn isReset(params: []const u8) bool {
@@ -162,8 +256,56 @@ fn clipped(text: []const u8, cols: u16, style: []const u8) ![]const u8 {
         var buf: [512]u8 = undefined;
     };
     var w: std.Io.Writer = .fixed(&S.buf);
-    try writeClipped(&w, text, cols, style);
+    _ = try writeClipped(&w, text, cols, style);
     return w.buffered();
+}
+
+fn rendered(text: []const u8, cols: u16) ![]const u8 {
+    const S = struct {
+        var buf: [1024]u8 = undefined;
+    };
+    var w: std.Io.Writer = .fixed(&S.buf);
+    try writeLine(&w, text, cols, "");
+    // Drop the style resets in the gaps to compare the visible text.
+    const out = w.buffered();
+    const T = struct {
+        var buf: [1024]u8 = undefined;
+    };
+    var len: usize = 0;
+    var i: usize = 0;
+    while (i < out.len) {
+        if (out[i] == 0x1b) {
+            i = sequenceEnd(out, i);
+            continue;
+        }
+        T.buf[len] = out[i];
+        len += 1;
+        i += 1;
+    }
+    return T.buf[0..len];
+}
+
+test "slots are aligned left, center and right" {
+    try std.testing.expectEqualStrings("host", try rendered("host", 20));
+    try std.testing.expectEqualStrings("host           12:00", try rendered("host\t12:00", 20));
+    try std.testing.expectEqualStrings("host    main   12:00", try rendered("host\tmain\t12:00", 20));
+    try std.testing.expectEqualStrings("        main", try rendered("\tmain\t", 20));
+    try std.testing.expectEqualStrings("               12:00", try rendered("\t12:00", 20));
+}
+
+test "the center moves aside for a long left slot" {
+    try std.testing.expectEqualStrings("a-long-left main  12", try rendered("a-long-left\tmain\t12", 20));
+}
+
+test "narrow lines drop the center, then clip the right" {
+    try std.testing.expectEqualStrings("hostname 12:00", try rendered("hostname\tbranch\t12:00", 14));
+    try std.testing.expectEqualStrings("hostname 12", try rendered("hostname\t12:00", 11));
+    try std.testing.expectEqualStrings("hostn", try rendered("hostname\t12:00", 5));
+}
+
+test "markup and wide characters are measured by cells" {
+    try std.testing.expectEqualStrings("日本    x", try rendered("#[fg=blue,bold]日本#[default]\tx", 9));
+    try std.testing.expectEqualStrings("a  b c d", try rendered("a\tb\tc\td", 8));
 }
 
 test "text is clipped to the width in cells" {
