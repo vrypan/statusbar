@@ -14,8 +14,10 @@ the bottom. Full-screen programs and scrollback keep working.
 
 - Configure the bar with templates: text, colors, strftime clocks and shell
   commands, each on its own refresh interval.
-- Update it from inside the session with `statusbar set`.
+- Update it from your scripts with `statusbar set`.
 - Move your starship prompt into it with one line in `~/.zshrc`.
+
+![screenshot](screenshot-1.png)
 
 ## Build
 
