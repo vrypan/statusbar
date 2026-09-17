@@ -51,12 +51,14 @@ pub const Input = struct {
                 .ground => if (b == esc) {
                     sink.write(bytes[run..i]);
                     run = i + 1;
+                    // Ground state holds no bytes, so the initial ESC fits.
                     self.hold(b);
                     self.state = .esc;
                 },
                 .esc => {
                     run = i + 1;
                     if (b == '[') {
+                        // ESC state holds only the initial escape.
                         self.hold(b);
                         self.state = .csi;
                     } else {
@@ -70,11 +72,18 @@ pub const Input = struct {
                     run = i + 1;
                     switch (b) {
                         0x40...0x7e => {
-                            self.hold(b);
-                            if (b == 'M' and self.seq_len == 3) {
-                                self.state = .x10_mouse;
+                            if (self.seq_len == max_seq) {
+                                // Preserve a CSI that filled the buffer and
+                                // forward its final byte as ordinary input.
+                                self.flush(sink);
+                                run = i;
                             } else {
-                                self.finishCsi(sink);
+                                self.hold(b);
+                                if (b == 'M' and self.seq_len == 3) {
+                                    self.state = .x10_mouse;
+                                } else {
+                                    self.finishCsi(sink);
+                                }
                             }
                         },
                         0x20...0x3f => if (self.seq_len == max_seq) {
@@ -90,6 +99,7 @@ pub const Input = struct {
                 },
                 .x10_mouse => {
                     run = i + 1;
+                    // X10 reports are a fixed six bytes, below max_seq.
                     self.hold(b);
                     if (self.seq_len == 6) {
                         const row = self.seq[5] -% 32;
@@ -114,6 +124,7 @@ pub const Input = struct {
     }
 
     fn hold(self: *Input, b: u8) void {
+        std.debug.assert(self.seq_len < self.seq.len);
         self.seq[self.seq_len] = b;
         self.seq_len += 1;
     }
@@ -208,6 +219,24 @@ fn expectTranslation(input: []const u8, expected: []const u8) !void {
     }
 }
 
+fn expectSplitRecovery(csi: []const u8, split: usize) !void {
+    var input: [max_seq + 16]u8 = undefined;
+    @memcpy(input[0..csi.len], csi);
+    @memcpy(input[csi.len..][0..11], "x\x1b[8;24;80t");
+
+    var expected: [max_seq + 16]u8 = undefined;
+    @memcpy(expected[0..csi.len], csi);
+    @memcpy(expected[csi.len..][0..11], "x\x1b[8;22;80t");
+
+    var in: Input = .{ .bar = 2, .rows = 22 };
+    var collector: Collector = .{};
+    defer collector.bytes.deinit(std.testing.allocator);
+    in.feed(input[0..split], &collector);
+    in.feed(input[split .. csi.len + 11], &collector);
+    try std.testing.expect(!in.holding());
+    try std.testing.expectEqualStrings(expected[0 .. csi.len + 11], collector.bytes.items);
+}
+
 test "keystrokes and cursor reports pass through" {
     try expectTranslation("ls -la\r", "ls -la\r");
     try expectTranslation("\x1b[A\x1b[1;5C\x1bOP\x1bx\x1b\x1b", "\x1b[A\x1b[1;5C\x1bOP\x1bx\x1b\x1b");
@@ -237,4 +266,38 @@ test "a lone escape key is not held" {
     try std.testing.expect(in.holding());
     in.flush(&collector);
     try std.testing.expectEqualStrings("\x1b\x1b[5", collector.bytes.items);
+}
+
+test "long CSI sequences preserve bytes and recover" {
+    const cases = [_]struct { parameter_len: usize }{
+        .{ .parameter_len = max_seq - 4 }, // final byte leaves one slot unused
+        .{ .parameter_len = max_seq - 3 }, // final byte exactly fills seq
+        .{ .parameter_len = max_seq - 2 }, // seq is full before its final byte
+    };
+
+    for (cases) |case| {
+        var sequence: [max_seq + 1]u8 = undefined;
+        sequence[0] = esc;
+        sequence[1] = '[';
+        @memset(sequence[2 .. 2 + case.parameter_len], '1');
+        sequence[2 + case.parameter_len] = 'A';
+        const csi = sequence[0 .. 3 + case.parameter_len];
+
+        var input: [max_seq + 16]u8 = undefined;
+        @memcpy(input[0..csi.len], csi);
+        @memcpy(input[csi.len..][0..11], "x\x1b[8;24;80t");
+
+        var expected: [max_seq + 16]u8 = undefined;
+        @memcpy(expected[0..csi.len], csi);
+        @memcpy(expected[csi.len..][0..11], "x\x1b[8;22;80t");
+
+        try expectTranslation(input[0 .. csi.len + 11], expected[0 .. csi.len + 11]);
+
+        if (case.parameter_len == max_seq - 2) {
+            // Split before and after the overflowing final byte. Both paths
+            // must clear the held bytes and still translate the next report.
+            try expectSplitRecovery(csi, csi.len - 1);
+            try expectSplitRecovery(csi, csi.len);
+        }
+    }
 }
