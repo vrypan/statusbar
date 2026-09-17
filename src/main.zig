@@ -14,6 +14,7 @@ pub const panic = std.debug.FullPanic(struct {
 const usage =
     \\usage: statusbar [options] [-- command [args...]]
     \\       statusbar set left|right [TEXT...]
+    \\       eval "$(statusbar init zsh)"
     \\
     \\Run a command (default: $SHELL) under a pty that is one or two rows
     \\shorter than the terminal, and keep a status bar in the rows it gave up.
@@ -36,6 +37,10 @@ const usage =
     \\`statusbar set` replaces the left or right slot of the bar's last text
     \\line from inside a session; no TEXT restores it. Outside a session it
     \\does nothing.
+    \\
+    \\`statusbar init zsh` prints shell code for ~/.zshrc. Inside a session,
+    \\it moves starship's prompt into the bar and keeps only its last line,
+    \\the prompt character, in the terminal.
     \\
     \\An --exec line may hold two tab-separated slots: left, or
     \\left<TAB>right. Style text with tmux-like
@@ -62,6 +67,9 @@ pub fn main(init: std.process.Init) !u8 {
 
     if (args.len > 1 and std.mem.eql(u8, args[1], "set")) {
         return setSlot(arena, init.io, args[2..], stderr);
+    }
+    if (args.len > 1 and std.mem.eql(u8, args[1], "init")) {
+        return shellInit(arena, init.io, args[2..], stdout, stderr);
     }
 
     var cli: struct {
@@ -187,6 +195,64 @@ fn setSlot(arena: std.mem.Allocator, io: Io, args: []const [:0]const u8, stderr:
     tty.writeStreamingAll(io, sequence) catch {};
     return 0;
 }
+
+/// `statusbar init zsh`: prints the shell integration. Outside a session it
+/// prints nothing, so the `eval` costs nothing in other terminals.
+fn shellInit(arena: std.mem.Allocator, io: Io, args: []const [:0]const u8, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
+    if (args.len != 1 or !std.mem.eql(u8, args[0], "zsh")) return usageError(stderr, "init supports zsh: eval \"$(statusbar init zsh)\"");
+    if (!@import("environment.zig").contains("STATUSBAR_LINES")) return 0;
+
+    // Call this exact binary, as starship's own init does, so the hook works
+    // whether or not statusbar is on PATH.
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const self_path = @import("sys.zig").selfExePath(io, &path_buf) orelse "statusbar";
+    try stdout.writeAll(try std.mem.replaceOwned(u8, arena, zsh_init, "@STATUSBAR@", try shellQuote(arena, self_path)));
+    try stdout.flush();
+    return 0;
+}
+
+/// Single-quotes a word for the shell.
+fn shellQuote(arena: std.mem.Allocator, word: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, "'{s}'", .{try std.mem.replaceOwned(u8, arena, word, "'", "'\\''")});
+}
+
+const zsh_init =
+    \\# statusbar integration for zsh: eval "$(statusbar init zsh)"
+    \\#
+    \\# Runs starship's normal prompt and splits it: every line but the last goes
+    \\# to the bar's left slot, and the last line, the prompt character, stays in
+    \\# the terminal. A one-line prompt stays whole and leaves the bar alone.
+    \\if (( $+commands[starship] )); then
+    \\  __statusbar_prompt() {
+    \\    local out rest newline
+    \\    out=$(STARSHIP_SHELL=zsh starship prompt --terminal-width="$COLUMNS" --keymap="${KEYMAP:-}" --status="${STARSHIP_CMD_STATUS:-}" --pipestatus="${STARSHIP_PIPE_STATUS[*]:-}" --cmd-duration="${STARSHIP_DURATION:-}" --jobs="$STARSHIP_JOBS_COUNT")
+    \\    # Starship's add_newline blank line separates the prompt from the last
+    \\    # command's output; it stays with the prompt, not the bar.
+    \\    if [[ $out == $'\n'* ]]; then
+    \\      newline=$'\n'
+    \\      out=${out#$'\n'}
+    \\    fi
+    \\    if [[ $out == *$'\n'* ]]; then
+    \\      rest=${out%$'\n'*}
+    \\      out=${out##*$'\n'}
+    \\    fi
+    \\    # Starship marks escape codes with %{ %} and doubles literal percent
+    \\    # signs for zsh; prompt expansion turns that back into plain output.
+    \\    @STATUSBAR@ set left "${(%)rest}"
+    \\    print -rn -- "$newline$out"
+    \\  }
+    \\
+    \\  # starship init sets PROMPT when it is evaluated, so take it over at the
+    \\  # first prompt instead. That works whichever init comes first in .zshrc.
+    \\  __statusbar_setup() {
+    \\    precmd_functions=(${precmd_functions:#__statusbar_setup})
+    \\    setopt prompt_subst
+    \\    PROMPT='$(__statusbar_prompt)'
+    \\  }
+    \\  precmd_functions+=(__statusbar_setup)
+    \\fi
+    \\
+;
 
 /// Reads the config from `--config`, `$STATUSBAR_CONFIG`, or the default
 /// location. Only a missing file at the default location is not an error.

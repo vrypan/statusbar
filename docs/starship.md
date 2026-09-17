@@ -10,17 +10,46 @@ The terminal keeps only the prompt character:
 statusbar on main [!⇡] via v0.16.0                             18:34
 ```
 
-It takes two pieces in `~/.zshrc`, both placed after
-`eval "$(starship init zsh)"`:
+## Setup
+
+Add one line to `~/.zshrc`:
+
+```zsh
+eval "$(statusbar init zsh)"
+```
+
+That's all; there's nothing to change in `starship.toml`. Inside a statusbar
+session, each prompt runs starship as usual and splits the result: every
+line but the last goes to the bar's left slot, and the last line (with
+starship's default layout, the prompt character) stays in the terminal. The
+character still turns red after a failed command and follows vi keymaps.
+
+- The line can go before or after `eval "$(starship init zsh)"`; the
+  integration takes over the prompt at the first prompt, after `.zshrc` has
+  run.
+- Outside statusbar, `statusbar init zsh` prints nothing, so the same
+  `.zshrc` works in every terminal.
+- A one-line starship prompt is left whole in the terminal, and the bar keeps
+  its configured content.
+- Starship's `add_newline` blank line stays in the terminal, above the
+  prompt, as it would without statusbar.
+- The bar's right slot, and the right prompt (`right_format`), are untouched.
+
+Run `statusbar init zsh` inside a session to read the code it installs.
+
+## Doing it by hand
+
+The sections below build the same thing from parts, for when you want a
+different split: another selection of modules, the right slot, or a
+profile. Use them instead of `statusbar init zsh`, not together with it. Both
+pieces go in `~/.zshrc` after `eval "$(starship init zsh)"`, and both check
+`$STATUSBAR_LINES`, so the same `.zshrc` works inside and outside statusbar.
 
 1. A hook that sends starship's output to the bar before each prompt.
 2. A shorter `PROMPT` while inside statusbar, so the same details don't
    show twice.
 
-Both check `$STATUSBAR_LINES`, so the same `.zshrc` works inside and
-outside statusbar.
-
-## 1. Send the prompt to the bar
+### 1. Send the prompt to the bar
 
 ```zsh
 statusbar_precmd() {
@@ -50,7 +79,7 @@ precmd_functions+=(statusbar_precmd)
 Use `statusbar set right` instead to put the prompt on the right side of the
 bar.
 
-### Choosing what goes in the bar
+#### Choosing what goes in the bar
 
 If your `format` doesn't end in `$line_break$character`, or you want a
 different selection than the prompt, define a profile and use it instead of
@@ -72,7 +101,7 @@ statusbar = "$directory$git_branch$git_status$cmd_duration$status"
 A profile is only a format string; modules keep their settings from the rest
 of the file.
 
-## 2. Keep only the prompt character in the terminal
+### 2. Keep only the prompt character in the terminal
 
 Add a profile for the terminal prompt. `[profiles]` may appear only once in
 the file, so add the line to an existing section if you have one:
@@ -134,12 +163,14 @@ see the [README](../README.md).
 **`%{` or `\[` in the bar.** The hook is missing `STARSHIP_SHELL=`.
 
 **The bar shows the `❯` line, or is empty.** Your `format` doesn't end in
-`$line_break$character`. Use a profile, as in
+`$line_break$character`, so the last line isn't just the prompt character.
+Set up the split by hand with a profile, as in
 [Choosing what goes in the bar](#choosing-what-goes-in-the-bar).
 
 **Nothing reaches the bar.** Check that `echo $STATUSBAR_LINES` prints a
-number in the session, and that `statusbar set left test` shows `test`. A
-statusbar started before you updated it may need a restart.
+number in the session, that `statusbar init zsh` prints code there, and that
+`statusbar set left test` shows `test`. A statusbar started before you
+updated it may need a restart.
 
 **The right side is misaligned.** statusbar counts most wide characters and
 emoji as two cells, but a terminal may draw a symbol at a different width

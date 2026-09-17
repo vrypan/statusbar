@@ -115,7 +115,8 @@ command = "statusbar set right \"$(git branch --show-current)\""
 when    = true
 ```
 
-To move starship's prompt into the bar, see [docs/starship.md](docs/starship.md).
+To move starship's prompt into the bar, add `eval "$(statusbar init zsh)"`
+to `~/.zshrc`; see [docs/starship.md](docs/starship.md).
 
 Or on every prompt in zsh:
 
