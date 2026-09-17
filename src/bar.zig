@@ -37,8 +37,16 @@ pub const Content = struct {
     }
 };
 
-/// `style` is SGR parameters applied to the whole bar, e.g. "7" for reverse.
-pub fn paint(w: *std.Io.Writer, content: *const Content, first_row: u16, lines: u16, cols: u16, style: []const u8, region: []const u8) !void {
+/// How each bar line is drawn, apart from its text.
+pub const Look = struct {
+    /// SGR parameters for each line, e.g. "7" for reverse.
+    styles: [max_lines][]const u8 = .{ "", "" },
+    /// A line with a rule is filled with that text instead of its content.
+    rules: [max_lines]?[]const u8 = .{ null, null },
+    palette: markup.Palette = .{},
+};
+
+pub fn paint(w: *std.Io.Writer, content: *const Content, look: *const Look, first_row: u16, lines: u16, cols: u16, region: []const u8) !void {
     // Save, restore the margins the terminal may have dropped, then leave
     // origin mode and any line-drawing character set for the paint.
     try w.writeAll("\x1b7");
@@ -47,8 +55,13 @@ pub fn paint(w: *std.Io.Writer, content: *const Content, first_row: u16, lines: 
     for (0..lines) |n| {
         // Erase first: after a full-width line the cursor sits in the
         // pending-wrap state, where an erase would clear the last cell.
+        const style = look.styles[n];
         try w.print("\x1b[{d};1H\x1b[0;{s}m\x1b[2K", .{ first_row + n, style });
-        try writeLine(w, content.line(n), cols, style);
+        if (look.rules[n]) |rule| {
+            try writeRule(w, rule, cols);
+        } else {
+            try writeLine(w, content.line(n), cols, style, look.palette);
+        }
     }
     try w.writeAll("\x1b[0m\x1b8");
 }
@@ -71,9 +84,9 @@ const Placement = struct {
 ///     left \t center \t right  three fields
 ///
 /// Styling does not carry from one slot into the gap after it.
-fn writeLine(w: *std.Io.Writer, text: []const u8, cols: u16, style: []const u8) !void {
+fn writeLine(w: *std.Io.Writer, text: []const u8, cols: u16, style: []const u8, palette: markup.Palette) !void {
     var expanded_buf: [4096]u8 = undefined;
-    const expanded = markup.expand(text, &expanded_buf);
+    const expanded = markup.expand(text, &expanded_buf, palette);
 
     var fields: [3][]const u8 = .{ "", "", "" };
     var count: usize = 0;
@@ -110,6 +123,15 @@ fn writeLine(w: *std.Io.Writer, text: []const u8, cols: u16, style: []const u8) 
         }
         cursor += try writeClipped(w, slot, place.width, style);
     }
+}
+
+/// Repeats `rule` across the line, leaving out a final repetition that would
+/// not fit whole.
+fn writeRule(w: *std.Io.Writer, rule: []const u8, cols: u16) !void {
+    const width = try writeClipped(null, rule, std.math.maxInt(usize), "");
+    if (width == 0) return;
+    var used: usize = 0;
+    while (used + width <= cols) : (used += width) try w.writeAll(rule);
 }
 
 /// Places slots on a line `cols` wide. When space runs out the center goes
@@ -265,7 +287,7 @@ fn rendered(text: []const u8, cols: u16) ![]const u8 {
         var buf: [1024]u8 = undefined;
     };
     var w: std.Io.Writer = .fixed(&S.buf);
-    try writeLine(&w, text, cols, "");
+    try writeLine(&w, text, cols, "", .{});
     // Drop the style resets in the gaps to compare the visible text.
     const out = w.buffered();
     const T = struct {
@@ -329,4 +351,14 @@ test "content keeps the first lines and reports changes" {
     try std.testing.expect(!content.set("one\ntwo\n"));
     try std.testing.expect(content.set("one\n"));
     try std.testing.expectEqualStrings("", content.line(1));
+}
+
+test "rules repeat across the width" {
+    var buf: [256]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try writeRule(&w, "─", 5);
+    try std.testing.expectEqualStrings("─────", w.buffered());
+    w.end = 0;
+    try writeRule(&w, "-=", 5);
+    try std.testing.expectEqualStrings("-=-=", w.buffered());
 }

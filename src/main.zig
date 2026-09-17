@@ -2,6 +2,7 @@ const std = @import("std");
 const Io = std.Io;
 const build_options = @import("build_options");
 const proxy = @import("proxy.zig");
+const config = @import("config.zig");
 
 pub const panic = std.debug.FullPanic(struct {
     fn restoreThenPanic(msg: []const u8, first_trace_addr: ?usize) noreturn {
@@ -17,22 +18,27 @@ const usage =
     \\shorter than the terminal, and keep a status bar in the rows it gave up.
     \\
     \\options:
-    \\  -n, --lines N         bar height, 1 or 2 (default 1)
+    \\  -c, --config PATH     config file (default: $STATUSBAR_CONFIG, else
+    \\                        $XDG_CONFIG_HOME/statusbar/config, else
+    \\                        ~/.config/statusbar/config)
+    \\  -n, --lines N         bar height, 1 or 2 (default: the config's lines)
     \\  -p, --position POS    bottom (default) or top
-    \\  -e, --exec COMMAND    shell command whose output fills the bar, one
-    \\                        line per bar row (default: date)
-    \\  -i, --interval SECS   how often to rerun the command (default 1)
-    \\  -s, --style SGR       SGR parameters for the bar (default "7", reverse;
-    \\                        "" for none)
+    \\  -e, --exec COMMAND    shell command whose output lines fill the bar,
+    \\                        instead of the config's [line.N] (default: date)
+    \\  -i, --interval SECS   how often commands rerun (default 1 for --exec,
+    \\                        the config's interval otherwise)
+    \\  -s, --style STYLE     bar style as SGR parameters (7) or markup
+    \\                        attributes (fg=blue,bold); "" for none
     \\  -h, --help            show this help
     \\  -V, --version         show the version
     \\
-    \\Each output line may hold up to three tab-separated slots: left,
+    \\Each bar line may hold up to three tab-separated slots: left,
     \\left<TAB>right, or left<TAB>center<TAB>right. Style text with tmux-like
     \\markup: #[fg=blue,bold]text#[default], with colors given as names
-    \\(brightblack), colour214, or #89b4fa. ## prints a literal #.
+    \\(brightblack), colour214, #89b4fa, or [colors] from the config.
+    \\## prints a literal #.
     \\
-    \\The command sees STATUSBAR_COLUMNS and STATUSBAR_LINES. The child sees
+    \\Commands see STATUSBAR_COLUMNS and STATUSBAR_LINES. The child sees
     \\STATUSBAR_LINES, so nested sessions can tell they are inside a bar.
     \\
 ;
@@ -49,12 +55,14 @@ pub fn main(init: std.process.Init) !u8 {
     var stdout_file: Io.File.Writer = .initStreaming(.stdout(), init.io, &stdout_buf);
     const stdout = &stdout_file.interface;
 
-    var opts: proxy.Options = .{
-        .lines = 1,
-        .command = "date",
-        .interval_ms = 1000,
-        .style = "7",
-    };
+    var cli: struct {
+        lines: ?u16 = null,
+        position: ?proxy.Position = null,
+        command: ?[]const u8 = null,
+        interval_ms: ?i64 = null,
+        style: ?[]const u8 = null,
+        config: ?[]const u8 = null,
+    } = .{};
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -76,25 +84,48 @@ pub fn main(init: std.process.Init) !u8 {
         }
         const value = optionValue(args, &i) orelse return usageError(stderr, "missing value for option");
         if (eql2(arg, "-n", "--lines")) {
-            opts.lines = std.fmt.parseInt(u16, value, 10) catch 0;
-            if (opts.lines < 1 or opts.lines > 2) return usageError(stderr, "--lines must be 1 or 2");
+            const lines = std.fmt.parseInt(u16, value, 10) catch 0;
+            if (lines < 1 or lines > 2) return usageError(stderr, "--lines must be 1 or 2");
+            cli.lines = lines;
         } else if (eql2(arg, "-p", "--position")) {
-            opts.position = std.meta.stringToEnum(proxy.Position, value) orelse
+            cli.position = std.meta.stringToEnum(proxy.Position, value) orelse
                 return usageError(stderr, "--position must be top or bottom");
         } else if (eql2(arg, "-e", "--exec")) {
-            opts.command = value;
+            cli.command = value;
         } else if (eql2(arg, "-i", "--interval")) {
             const secs = std.fmt.parseFloat(f64, value) catch -1;
             if (!(secs >= 0.1 and secs <= 86400)) return usageError(stderr, "--interval must be between 0.1 and 86400 seconds");
-            opts.interval_ms = @intFromFloat(secs * 1000);
+            cli.interval_ms = @intFromFloat(secs * 1000);
         } else if (eql2(arg, "-s", "--style")) {
-            for (value) |b| if (!std.ascii.isDigit(b) and b != ';' and b != ':')
-                return usageError(stderr, "--style takes SGR parameters such as 7 or 1;37;44");
-            opts.style = value;
+            cli.style = value;
+        } else if (eql2(arg, "-c", "--config")) {
+            cli.config = value;
         } else {
             return usageError(stderr, "unknown option");
         }
     }
+
+    const cfg = loadConfig(arena, init.io, cli.config, stderr) catch |err| {
+        try stderr.flush();
+        return if (err == error.ReportedConfigError) 2 else err;
+    };
+
+    // Precedence: command-line flags, then the config file, then defaults.
+    const templates = cli.command == null and cfg != null and cfg.?.defined_lines > 0;
+    if (cfg) |c| {
+        if (cli.interval_ms) |ms| c.interval_ms = ms;
+    }
+    var opts: proxy.Options = .{
+        .lines = cli.lines orelse
+            (if (cfg) |c| c.lines else null) orelse
+            (if (templates) cfg.?.defined_lines else 1),
+        .position = cli.position orelse (if (cfg) |c| c.position else null) orelse .bottom,
+        .command = if (templates) null else cli.command orelse "date",
+        .interval_ms = cli.interval_ms orelse 1000,
+        .cfg = cfg,
+        // Reverse video marks a plain command's bar; a config draws its own.
+        .style = cli.style orelse (if (cfg) |c| c.style else null) orelse (if (templates) "" else "7"),
+    };
 
     const argv = try arena.alloc([]const u8, args.len - i);
     for (args[i..], argv) |arg, *slot| slot.* = arg;
@@ -115,6 +146,37 @@ pub fn main(init: std.process.Init) !u8 {
         return 1;
     };
 }
+
+/// Reads the config from `--config`, `$STATUSBAR_CONFIG`, or the default
+/// location. Only a missing file at the default location is not an error.
+fn loadConfig(arena: std.mem.Allocator, io: Io, flag: ?[]const u8, stderr: *Io.Writer) !?*config.Config {
+    const env = @import("environment.zig");
+    var explicit = true;
+    const path = flag orelse env.get("STATUSBAR_CONFIG") orelse blk: {
+        explicit = false;
+        if (env.get("XDG_CONFIG_HOME")) |xdg| break :blk try std.fmt.allocPrint(arena, "{s}/statusbar/config", .{xdg});
+        const home = env.get("HOME") orelse return null;
+        break :blk try std.fmt.allocPrint(arena, "{s}/.config/statusbar/config", .{home});
+    };
+    const text = Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_config_bytes)) catch |err| {
+        if (!explicit and err == error.FileNotFound) return null;
+        try stderr.print("statusbar: cannot read {s}: {t}\n", .{ path, err });
+        return error.ReportedConfigError;
+    };
+    const cfg = try arena.create(config.Config);
+    var diag: config.Diagnostic = .{};
+    cfg.* = config.parse(text, &diag) catch {
+        if (diag.line > 0) {
+            try stderr.print("statusbar: {s}:{d}: {s}\n", .{ path, diag.line, diag.message });
+        } else {
+            try stderr.print("statusbar: {s}: {s}\n", .{ path, diag.message });
+        }
+        return error.ReportedConfigError;
+    };
+    return cfg;
+}
+
+const max_config_bytes = 64 * 1024;
 
 fn eql2(arg: []const u8, short: []const u8, long: []const u8) bool {
     return std.mem.eql(u8, arg, short) or std.mem.eql(u8, arg, long);
@@ -142,6 +204,8 @@ test {
     _ = @import("input.zig");
     _ = @import("bar.zig");
     _ = @import("markup.zig");
+    _ = @import("config.zig");
+    _ = @import("source.zig");
     _ = @import("child.zig");
     _ = proxy;
 }

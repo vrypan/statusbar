@@ -22,7 +22,9 @@ const tty = @import("tty.zig");
 const Output = @import("output.zig").Output;
 const Input = @import("input.zig").Input;
 const bar = @import("bar.zig");
-const status = @import("status.zig");
+const config = @import("config.zig");
+const markup = @import("markup.zig");
+const Source = @import("source.zig").Source;
 
 const io_buf_size = 64 * 1024;
 const pending_input_capacity = 64 * 1024;
@@ -66,14 +68,18 @@ pub fn restoreOnPanic() void {
     }
 }
 
-pub const Position = enum { top, bottom };
+pub const Position = config.Position;
 
 pub const Options = struct {
     argv: []const []const u8 = &.{},
     lines: u16 = 1,
     position: Position = .bottom,
-    command: []const u8,
+    /// `--exec`: this command's output lines are the bar. Without it the
+    /// config's [line.N] sections are.
+    command: ?[]const u8,
     interval_ms: i64,
+    cfg: ?*const config.Config = null,
+    /// Raw SGR parameters or markup attributes, for lines without their own.
     style: []const u8,
 };
 
@@ -101,8 +107,24 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     sig_pipe_w.store(sig_fds[1], .monotonic);
     installSignalHandlers();
 
-    var command = try status.Command.init(gpa, io, opts.command, opts.interval_ms, opts.lines, outer_ws.col);
-    defer command.deinit(io);
+    var source = if (opts.command) |command|
+        try Source.initExec(gpa, io, command, opts.interval_ms, opts.lines, outer_ws.col)
+    else
+        try Source.initConfig(gpa, io, opts.cfg.?, opts.lines, outer_ws.col);
+    defer source.deinit();
+
+    var look: bar.Look = .{};
+    var style_bufs: [bar.max_lines][256]u8 = undefined;
+    if (opts.cfg) |cfg| look.palette = cfg.palette();
+    for (0..bar.max_lines) |n| {
+        var spec = opts.style;
+        if (opts.command == null) {
+            const line = &opts.cfg.?.line[n];
+            if (line.style) |own| spec = own;
+            look.rules[n] = line.rule;
+        }
+        look.styles[n] = markup.barStyle(spec, look.palette, &style_bufs[n]);
+    }
 
     var child_environment = try sys.environMap().clone(gpa);
     defer child_environment.deinit();
@@ -127,8 +149,8 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         .layout = layout,
         .output = .{ .above = layout.above, .below = layout.below, .rows = layout.child.row },
         .input = .{ .above = layout.above, .below = layout.below, .rows = layout.child.row },
-        .command = &command,
-        .style = opts.style,
+        .source = &source,
+        .look = &look,
     };
     proxy.reserveRows(outer_ws.row);
     defer proxy.releaseRows();
@@ -291,9 +313,8 @@ const Proxy = struct {
     layout: Layout,
     output: Output,
     input: Input,
-    command: *status.Command,
-    style: []const u8,
-    content: bar.Content = .{},
+    source: *Source,
+    look: *const bar.Look,
 
     terminal: TerminalSink = undefined,
     pending_input: PendingInput = .{},
@@ -326,7 +347,7 @@ const Proxy = struct {
         }
         self.paint();
         self.terminal.flush();
-        self.command.refreshNow(self.now());
+        self.source.refreshNow(self.now());
     }
 
     fn releaseRows(self: *Proxy) void {
@@ -375,7 +396,7 @@ const Proxy = struct {
         self.output.writeRegion(&WriterSink{ .w = &region });
         var buf: [16 * 1024]u8 = undefined;
         var w: std.Io.Writer = .fixed(&buf);
-        bar.paint(&w, &self.content, self.layout.barRow(), self.layout.barRows(), self.layout.cols, self.style, region.buffered()) catch {};
+        bar.paint(&w, &self.source.content, self.look, self.layout.barRow(), self.layout.barRows(), self.layout.cols, region.buffered()) catch {};
         self.terminal.write(w.buffered());
         self.paint_requested_ms = null;
         self.output.damaged = false;
@@ -405,23 +426,21 @@ const Proxy = struct {
             .{ .fd = stdin_fd, .events = posix.POLL.IN, .revents = 0 },
             .{ .fd = self.master, .events = posix.POLL.IN, .revents = 0 },
             .{ .fd = sig_r, .events = posix.POLL.IN, .revents = 0 },
-            .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 },
-        };
+        } ++ [_]posix.pollfd{undefined} ** config.max_commands;
         const in = &fds[0];
         const out = &fds[1];
         const sig = &fds[2];
-        const cmd = &fds[3];
 
         while (true) {
             in.fd = if (stdin_open and self.pending_input.room() > in_buf.len + input_headroom) stdin_fd else -1;
             out.events = posix.POLL.IN;
             if (self.pending_input.len > 0) out.events |= posix.POLL.OUT;
-            cmd.fd = self.command.readFd();
+            const command_fds = self.source.pollFds(fds[3..]);
 
             var now_ms = self.now();
-            var timeout = minTimeout(self.paintTimeout(now_ms), self.command.timeout(now_ms));
+            var timeout = minTimeout(self.paintTimeout(now_ms), self.source.timeout(now_ms));
             if (self.input.holding()) timeout = minTimeout(timeout, @max(self.last_input_ms + input_hold_ms - now_ms, 0));
-            _ = posix.poll(&fds, @intCast(@min(timeout, std.math.maxInt(c_int)))) catch return;
+            _ = posix.poll(fds[0 .. 3 + command_fds.len], @intCast(@min(timeout, std.math.maxInt(c_int)))) catch return;
             now_ms = self.now();
 
             if (sig.revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
@@ -453,12 +472,7 @@ const Proxy = struct {
                 }
             }
 
-            if (cmd.fd >= 0 and cmd.revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR) != 0) {
-                if (self.command.onReadable(self.io)) |text| {
-                    if (self.content.set(text)) self.requestPaint(now_ms);
-                }
-            }
-            self.command.tick(self.io, now_ms);
+            if (self.source.update(command_fds, now_ms)) self.requestPaint(now_ms);
 
             self.paintIfDue(now_ms);
             self.terminal.flush();
@@ -502,8 +516,8 @@ const Proxy = struct {
         sys.setWinsize(self.master, &self.layout.child) catch {};
         self.output.resize(self.layout.above, self.layout.below, self.layout.child.row);
         self.input = .{ .above = self.layout.above, .below = self.layout.below, .rows = self.layout.child.row };
-        self.command.setColumns(ws.col) catch {};
-        self.command.refreshNow(now_ms);
+        self.source.setColumns(ws.col);
+        self.source.refreshNow(now_ms);
         // Terminals drop the margins on resize; put them back before the
         // child redraws, if the stream allows it right now.
         self.requestPaint(now_ms);
