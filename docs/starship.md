@@ -156,7 +156,7 @@ To style the bar differently from the prompt, run the hook's
 
 Starship's colors pass through to the bar as they are. The rest of the bar
 (the config's other slot, the rule line) is styled by statusbar's own config;
-see the [README](../README.md).
+see [config.md](config.md).
 
 ## Troubleshooting
 
