@@ -28,6 +28,12 @@ zig build -Doptimize=ReleaseSafe      # binary in zig-out/bin/statusbar
 zig build test                        # unit tests
 ```
 
+Or install a released version with Homebrew:
+
+```sh
+brew install vrypan/tap/statusbar
+```
+
 ## Quick start
 
 ```sh

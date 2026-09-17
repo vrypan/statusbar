@@ -1,0 +1,156 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build release artifacts
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Require main
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "releases must be run from main, not $GITHUB_REF" >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v6
+
+      # Keep this in sync with build.zig.zon minimum_zig_version.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Derive release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(sed -n 's/^[[:space:]]*\.version = "\([^"]*\)",[[:space:]]*$/\1/p' build.zig.zon)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid version in build.zig.zon: ${version:-<empty>}" >&2
+            exit 1
+          fi
+
+          tag="v${version}"
+          if [[ -n "$(git ls-remote --tags origin "refs/tags/${tag}")" ]]; then
+            echo "tag already exists on origin: $tag" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check source
+        run: make check
+
+      - name: Build release archives
+        run: make -j3 package OPTIMIZE=ReleaseSafe
+
+      - name: Generate checksums
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          archives=(dist/statusbar-"$VERSION"-*.tar.gz)
+          if (( ${#archives[@]} != 3 )); then
+            echo "expected 3 release archives, found ${#archives[@]}" >&2
+            exit 1
+          fi
+          (
+            cd dist
+            sha256sum statusbar-"$VERSION"-*.tar.gz > SHA256SUMS
+          )
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ steps.version.outputs.tag }}
+          path: |
+            dist/statusbar-${{ steps.version.outputs.version }}-*.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    name: Publish ${{ needs.build.outputs.tag }}
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-${{ needs.build.outputs.tag }}
+          path: dist
+
+      - name: Verify release artifacts
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous_tag="$(git describe --tags --match 'v[0-9]*' --abbrev=0 "$GITHUB_SHA" 2>/dev/null || true)"
+          if [[ -n "$previous_tag" ]]; then
+            commit_range="${previous_tag}..${GITHUB_SHA}"
+          else
+            commit_range="$GITHUB_SHA"
+          fi
+          {
+            echo "## Commits"
+            git log --reverse --format='- %s' "$commit_range"
+            echo
+            echo "## Install"
+            echo
+            echo '```sh'
+            echo 'brew install vrypan/tap/statusbar'
+            echo '```'
+            echo
+            echo "Or download an archive, then extract it under your preferred prefix:"
+            echo
+            echo '```sh'
+            echo "tar -xzf statusbar-${VERSION}-x86_64-linux-musl.tar.gz -C ~/.local --strip-components=1"
+            echo '```'
+          } > release-notes.md
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes \
+            --notes-file release-notes.md \
+            --fail-on-no-commits \
+            dist/*.tar.gz \
+            dist/SHA256SUMS
+
+  update-homebrew-formula:
+    name: Update Homebrew formula
+    needs: [build, publish]
+    uses: ./.github/workflows/update-homebrew-formula.yml
+    with:
+      tag: ${{ needs.build.outputs.tag }}
+    secrets: inherit
