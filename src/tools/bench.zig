@@ -12,6 +12,7 @@ const Sink = struct {
     pub fn write(self: *Sink, bytes: []const u8) void {
         // Touch the bytes so nothing is optimized away, without the cost of
         // a real terminal write.
+        if (bytes.len == 0) return;
         self.total +%= bytes.len +% bytes[bytes.len - 1];
     }
 };
