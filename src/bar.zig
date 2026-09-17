@@ -148,16 +148,16 @@ fn writeClipped(maybe_w: ?*std.Io.Writer, text: []const u8, cols: usize, style: 
     while (i < text.len) {
         const b = text[i];
         if (b == 0x1b) {
-            const end = sequenceEnd(text, i);
-            const seq = text[i..end];
+            const sequence = escapeSequence(text, i);
+            const seq = text[i..sequence.end];
             // Only styling and hyperlinks are safe to let through.
-            if (seq.len >= 3 and seq[1] == '[' and seq[seq.len - 1] == 'm') {
+            if (sequence.kind == .sgr) {
                 try w.writeAll(seq);
                 if (isReset(seq[2 .. seq.len - 1]) and style.len > 0) try w.print("\x1b[{s}m", .{style});
-            } else if (seq.len >= 2 and seq[1] == ']') {
+            } else if (sequence.kind == .osc8) {
                 try w.writeAll(seq);
             }
-            i = end;
+            i = sequence.end;
             continue;
         }
         if (b == '\t') {
@@ -194,34 +194,93 @@ fn writeClipped(maybe_w: ?*std.Io.Writer, text: []const u8, cols: usize, style: 
 
 fn isReset(params: []const u8) bool {
     if (params.len == 0) return true;
-    var it = std.mem.splitScalar(u8, params, ';');
-    while (it.next()) |p| {
-        if (p.len == 0 or std.mem.eql(u8, p, "0")) return true;
+    var fields = std.mem.splitScalar(u8, params, ';');
+    var parts: [32][]const u8 = undefined;
+    var len: usize = 0;
+    while (fields.next()) |field| {
+        // A fixed buffer is plenty for an SGR sequence and avoids allocating
+        // while rendering command output. Conservatively ignore excessive
+        // parameters rather than risking a false reset.
+        if (len == parts.len) return false;
+        parts[len] = field;
+        len += 1;
+    }
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        const part = parts[i];
+        if (part.len == 0 or std.mem.eql(u8, part, "0")) return true;
+        // Colon-form colors are one parameter: their zero-valued components
+        // are not reset parameters.
+        if (std.mem.indexOfScalar(u8, part, ':') != null) continue;
+        if (std.mem.eql(u8, part, "38") or std.mem.eql(u8, part, "48") or std.mem.eql(u8, part, "58")) {
+            if (i + 1 >= len) continue;
+            if (std.mem.eql(u8, parts[i + 1], "5")) {
+                i += @min(@as(usize, 2), len - i - 1);
+            } else if (std.mem.eql(u8, parts[i + 1], "2")) {
+                i += @min(@as(usize, 4), len - i - 1);
+            }
+        }
     }
     return false;
 }
 
-fn sequenceEnd(text: []const u8, start: usize) usize {
+const EscapeKind = enum { invalid, sgr, osc8 };
+const EscapeSequence = struct { end: usize, kind: EscapeKind };
+
+/// Parses one complete escape sequence. Invalid sequences are consumed without
+/// being emitted; when another ESC starts, leave it for the next iteration so
+/// a valid sequence after malformed command output can still be recognized.
+fn escapeSequence(text: []const u8, start: usize) EscapeSequence {
     var i = start + 1;
-    if (i >= text.len) return i;
+    if (i >= text.len) return .{ .end = i, .kind = .invalid };
     switch (text[i]) {
         '[' => {
             i += 1;
+            var params_valid = true;
             while (i < text.len) : (i += 1) {
-                if (text[i] >= 0x40 and text[i] <= 0x7e) return i + 1;
+                const b = text[i];
+                if (b == 0x1b) return .{ .end = i, .kind = .invalid };
+                if (b < 0x20 or b == 0x7f) return .{ .end = i + 1, .kind = .invalid };
+                if (b >= 0x40 and b <= 0x7e) {
+                    const params = text[start + 2 .. i];
+                    if (b == 'm' and params_valid and validSgrParams(params)) return .{ .end = i + 1, .kind = .sgr };
+                    return .{ .end = i + 1, .kind = .invalid };
+                }
+                // Private markers and intermediates are not SGR parameters.
+                if (!std.ascii.isDigit(b) and b != ';' and b != ':') params_valid = false;
             }
-            return i;
+            return .{ .end = i, .kind = .invalid };
         },
-        ']', 'P', '_', '^', 'X' => {
+        ']' => {
             i += 1;
             while (i < text.len) : (i += 1) {
-                if (text[i] == 0x07) return i + 1;
-                if (text[i] == 0x1b and i + 1 < text.len and text[i + 1] == '\\') return i + 2;
+                const b = text[i];
+                if (b == 0x07) return .{ .end = i + 1, .kind = if (validOsc8(text[start + 2 .. i])) .osc8 else .invalid };
+                if (b == 0x1b) {
+                    if (i + 1 < text.len and text[i + 1] == '\\') return .{ .end = i + 2, .kind = if (validOsc8(text[start + 2 .. i])) .osc8 else .invalid };
+                    return .{ .end = i, .kind = .invalid };
+                }
+                if (b < 0x20 or b == 0x7f) return .{ .end = i + 1, .kind = .invalid };
             }
-            return i;
+            return .{ .end = i, .kind = .invalid };
         },
-        else => return i + 1,
+        // DCS, APC, PM, SOS, and every other escape are never bar content.
+        else => return .{ .end = i + 1, .kind = .invalid },
     }
+}
+
+fn validSgrParams(params: []const u8) bool {
+    for (params) |b| if (!std.ascii.isDigit(b) and b != ';' and b != ':') return false;
+    return true;
+}
+
+fn validOsc8(payload: []const u8) bool {
+    if (!std.mem.startsWith(u8, payload, "8;")) return false;
+    const second = std.mem.indexOfScalarPos(u8, payload, 2, ';') orelse return false;
+    // Both the optional parameter string and URI must be free of controls.
+    for (payload[2..second]) |b| if (b < 0x20 or b == 0x7f) return false;
+    for (payload[second + 1 ..]) |b| if (b < 0x20 or b == 0x7f) return false;
+    return true;
 }
 
 /// A small wcwidth: combining marks take no cell, East Asian wide characters
@@ -271,7 +330,7 @@ fn rendered(text: []const u8, cols: u16) ![]const u8 {
     var i: usize = 0;
     while (i < out.len) {
         if (out[i] == 0x1b) {
-            i = sequenceEnd(out, i);
+            i = escapeSequence(out, i).end;
             continue;
         }
         T.buf[len] = out[i];
@@ -310,6 +369,37 @@ test "styling passes through and resets keep the bar style" {
     try std.testing.expectEqualStrings("ab", try clipped("a\x1b[5;5Hb", 3, ""));
 }
 
+test "only complete SGR and OSC 8 escape sequences pass through" {
+    try std.testing.expectEqualStrings("a\x1b[31mb", try clipped("a\x1b[31mb", 2, ""));
+    try std.testing.expectEqualStrings("a\x1b]8;;https://example.test\x07b\x1b]8;;\x1b\\c", try clipped("a\x1b]8;;https://example.test\x07b\x1b]8;;\x1b\\c", 3, ""));
+    try std.testing.expectEqualStrings("abc", try clipped("a\x1b]2;title\x07b\x1b]52;c;clipboard\x1b\\c", 3, ""));
+    try std.testing.expectEqualStrings("ab", try clipped("a\x1b[?25mb", 2, ""));
+    try std.testing.expectEqualStrings("abc\x1b[32md", try clipped("a\x1b]8;;bad\x18b\x1b[31\x18c\x1b[32md", 4, ""));
+    try std.testing.expectEqualStrings("a\x1b[31mbcd", try clipped("a\x1b]8;;unterminated\x1b[31mbcd", 4, ""));
+}
+
+test "SGR resets distinguish colors from top-level zero" {
+    try std.testing.expectEqualStrings("\x1b[38;5;0ma", try clipped("\x1b[38;5;0ma", 1, "7"));
+    try std.testing.expectEqualStrings("\x1b[48;2;0;0;0ma", try clipped("\x1b[48;2;0;0;0ma", 1, "7"));
+    try std.testing.expectEqualStrings("\x1b[58:2::0:0:0ma", try clipped("\x1b[58:2::0:0:0ma", 1, "7"));
+    try std.testing.expectEqualStrings("\x1b[31;0m\x1b[7ma", try clipped("\x1b[31;0ma", 1, "7"));
+    try std.testing.expectEqualStrings("\x1b[m\x1b[7ma", try clipped("\x1b[ma", 1, "7"));
+}
+
+test "content truncation cannot emit a partial escape sequence" {
+    var content: Content = .{};
+    var text: [max_line_bytes + 6]u8 = undefined;
+    @memset(text[0 .. max_line_bytes - 2], 'a');
+    @memcpy(text[max_line_bytes - 2 .. max_line_bytes + 6], "\x1b[31mxyz");
+    _ = content.set(&text);
+    var buf: [max_line_bytes]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    _ = try writeClipped(&w, content.line(0), max_line_bytes, "");
+    const out = w.buffered();
+    try std.testing.expectEqual(max_line_bytes - 2, out.len);
+    try std.testing.expect(std.mem.indexOfScalar(u8, out, 0x1b) == null);
+}
+
 test "content keeps the first lines and reports changes" {
     var content: Content = .{};
     try std.testing.expect(content.set("one\r\ntwo\nthree\n"));
@@ -336,6 +426,7 @@ test "the paint clips instead of wrapping and restores autowrap" {
         const out = w.buffered();
         try std.testing.expect(std.mem.startsWith(u8, out, "\x1b7\x1b[?7l"));
         try std.testing.expectEqual(autowrap, std.mem.endsWith(u8, out, "\x1b8\x1b[?7h"));
+        try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[0m\x1b8") != null);
     }
 }
 
