@@ -30,6 +30,22 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_cmd.addArgs(args);
     b.step("run", "Run statusbar").dependOn(&run_cmd.step);
 
+    const bench_mod = b.createModule(.{
+        .root_source_file = b.path("src/tools/bench.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    for ([_][]const u8{ "output", "input" }) |name| {
+        bench_mod.addImport(name, b.createModule(.{
+            .root_source_file = b.path(b.fmt("src/{s}.zig", .{name})),
+            .target = target,
+            .optimize = optimize,
+        }));
+    }
+    const bench = b.addExecutable(.{ .name = "statusbar-bench", .root_module = bench_mod });
+    b.step("bench", "Benchmark the translators").dependOn(&b.addRunArtifact(bench).step);
+
     const tests = b.addTest(.{ .root_module = mod });
     b.step("test", "Run unit tests").dependOn(&b.addRunArtifact(tests).step);
 }

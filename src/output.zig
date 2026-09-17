@@ -91,16 +91,20 @@ pub const Output = struct {
             const b = bytes[i];
             switch (self.state) {
                 .ground => {
-                    i += 1;
-                    if (b == esc) {
-                        // Hold the ESC back until the next byte shows whether
-                        // it starts one of the proxy's own OSCs, which never
-                        // reach the terminal.
-                        sink.write(bytes[run .. i - 1]);
-                        run = i;
-                        self.state = .esc;
-                        self.utf8_pending = 0;
-                    } else self.trackUtf8(b);
+                    // Ordinary output is the common case, and none of it is
+                    // rewritten: skip to the next escape in one vectorized
+                    // search instead of examining each byte.
+                    const next = std.mem.indexOfScalarPos(u8, bytes, i, esc) orelse {
+                        i = bytes.len;
+                        continue;
+                    };
+                    // Hold the ESC back until the next byte shows whether it
+                    // starts one of the proxy's own OSCs, which never reach
+                    // the terminal.
+                    sink.write(bytes[run..next]);
+                    i = next + 1;
+                    run = i;
+                    self.state = .esc;
                 },
                 .esc => {
                     i += 1;
@@ -285,6 +289,7 @@ pub const Output = struct {
             }
         }
         if (run < bytes.len) sink.write(bytes[run..]);
+        if (self.state == .ground) self.utf8_pending = incompleteTail(bytes);
     }
 
     /// Returns a slot value set since the last call, or null if there is none.
@@ -313,18 +318,30 @@ pub const Output = struct {
         self.value_changed[n] = true;
     }
 
-    fn trackUtf8(self: *Output, b: u8) void {
-        if (b & 0xc0 == 0x80) {
-            if (self.utf8_pending > 0) self.utf8_pending -= 1;
-        } else if (b & 0xe0 == 0xc0) {
-            self.utf8_pending = 1;
-        } else if (b & 0xf0 == 0xe0) {
-            self.utf8_pending = 2;
-        } else if (b & 0xf8 == 0xf0) {
-            self.utf8_pending = 3;
-        } else {
-            self.utf8_pending = 0;
+    /// How many bytes are still missing from a character at the end of
+    /// `bytes`. A continuation byte with no lead byte in reach completes a
+    /// character that began in an earlier read, so it counts as complete.
+    fn incompleteTail(bytes: []const u8) u3 {
+        const tail = bytes[bytes.len -| 3..];
+        var back: usize = tail.len;
+        while (back > 0) {
+            back -= 1;
+            const b = tail[back];
+            if (b & 0xc0 == 0x80) continue;
+            const length: usize = if (b & 0x80 == 0)
+                1
+            else if (b & 0xe0 == 0xc0)
+                2
+            else if (b & 0xf0 == 0xe0)
+                3
+            else if (b & 0xf8 == 0xf0)
+                4
+            else
+                1;
+            const have = tail.len - back;
+            return if (length > have) @intCast(length - have) else 0;
         }
+        return 0;
     }
 
     /// Writes the child's margins, kept off the bar.
@@ -359,6 +376,12 @@ pub const Output = struct {
     fn finishCsi(self: *Output, sink: anytype) void {
         const seq = self.seq[0..self.seq_len];
         const final = seq[seq.len - 1];
+        switch (final) {
+            // The sequences below are the only ones this proxy looks at. Every
+            // other one, SGR above all, goes straight through.
+            'H', 'f', 'd', 'r', 'J', 's', 'u', 'h', 'l', 'p' => {},
+            else => return sink.write(seq),
+        }
         var body = seq[0 .. seq.len - 1];
 
         var marker: u8 = 0;

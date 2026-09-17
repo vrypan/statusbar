@@ -37,6 +37,10 @@ const input_headroom = 64;
 const paint_quiet_ms = 30;
 /// Continuous output does not postpone a paint beyond this.
 const paint_max_delay_ms = 500;
+/// How much of the child's output one pass through the loop may forward,
+/// before going back to the terminal's input and the bar's own timers.
+const drain_limit = 1024 * 1024;
+
 /// An incomplete report from the terminal is released after this long.
 const input_hold_ms = 25;
 const cursor_query_timeout_ms = 500;
@@ -237,10 +241,14 @@ const TerminalSink = struct {
     len: usize = 0,
     broken: bool = false,
 
+    /// Runs this large are most of a read of ordinary output: writing them
+    /// straight through saves copying them first.
+    const direct_write_min = 8 * 1024;
+
     pub fn write(self: *TerminalSink, bytes: []const u8) void {
-        if (self.len + bytes.len > self.buf.len) {
+        if (self.len + bytes.len > self.buf.len or (self.len == 0 and bytes.len >= direct_write_min)) {
             self.flush();
-            if (bytes.len > self.buf.len) return self.writeOut(bytes);
+            if (bytes.len >= direct_write_min) return self.writeOut(bytes);
         }
         @memcpy(self.buf[self.len..][0..bytes.len], bytes);
         self.len += bytes.len;
@@ -431,30 +439,42 @@ const Proxy = struct {
             }
 
             if (out.revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
-                switch (sys.readNonBlocking(self.master, &out_buf) catch return) {
-                    .bytes => |n| {
-                        self.output.feed(out_buf[0..n], &self.terminal);
-                        self.last_output_ms = now_ms;
-                        for ([_]Slot{ .Left, .Right }) |slot| {
-                            if (self.output.takeValue(slot)) |value| self.source.setOverride(slot, value);
-                        }
-                        if (self.output.damaged) {
-                            // Repaint in the same write as the erase, so the
-                            // terminal never renders a frame without the bar.
-                            // Unless the child is holding a saved cursor, which
-                            // the paint would overwrite: then wait for a pause.
-                            if (self.output.atBoundary() and !self.output.cursor_saved) {
-                                self.paint();
-                            } else {
-                                self.requestPaint(now_ms);
+                // Keep reading while reads come back full, which means the
+                // pty had more than one read's worth waiting. A short read
+                // ends the round: the pty is empty, and asking again would
+                // only cost an EAGAIN.
+                var drained: usize = 0;
+                while (drained < drain_limit) {
+                    switch (sys.readNonBlocking(self.master, &out_buf) catch return) {
+                        .bytes => |n| {
+                            drained += n;
+                            // A short read means the pty had nothing more;
+                            // asking again would only cost an EAGAIN.
+                            if (n < out_buf.len) drained = drain_limit;
+                            self.output.feed(out_buf[0..n], &self.terminal);
+                            self.last_output_ms = now_ms;
+                            for ([_]Slot{ .Left, .Right }) |slot| {
+                                if (self.output.takeValue(slot)) |value| self.source.setOverride(slot, value);
                             }
-                        }
-                    },
-                    .would_block => {},
-                    .eof => {
-                        self.terminal.flush();
-                        return;
-                    },
+                            if (self.output.damaged) {
+                                // Repaint in the same write as the erase, so
+                                // the terminal never renders a frame without
+                                // the bar. Unless the child is holding a saved
+                                // cursor, which the paint would overwrite:
+                                // then wait for a pause.
+                                if (self.output.atBoundary() and !self.output.cursor_saved) {
+                                    self.paint();
+                                } else {
+                                    self.requestPaint(now_ms);
+                                }
+                            }
+                        },
+                        .would_block => break,
+                        .eof => {
+                            self.terminal.flush();
+                            return;
+                        },
+                    }
                 }
             }
 
