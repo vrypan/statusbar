@@ -61,10 +61,7 @@ eval "$(statusbar init zsh)"
 
 ## Documentation
 
-- [Usage](docs/usage.md): commands, options, `--exec`, completions,
-  environment
-- [Config file](docs/config.md): lines, slots, templates, commands, colors
-  and markup
-- [Updating the bar](docs/set.md): `statusbar set` and its escape sequence
-- [Starship](docs/starship.md): moving the prompt into the bar
-- [Internals](docs/internals.md): how it works, and its limitations
+Start with the [user guide](docs/README.md): single-command bars, configured
+layouts, live slots, Starship, and themes. Detailed references are available
+for [configuration](docs/config.md), [runtime slot updates](docs/set.md),
+[Starship](docs/starship.md), and [internals and limitations](docs/internals.md).

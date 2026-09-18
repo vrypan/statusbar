@@ -8,14 +8,14 @@ preserved; the duplicate load reading on the right is removed.
 | --- | --- |
 | pure.config | Transparent background, blue host, purple clock, muted divider |
 | tokyo-night.config | Dark blue background, blue badges, half-block border |
-| gruvbox.config | Warm orange/yellow/aqua segments, heavier divider |
+| gruvbox.config | Warm orange/yellow/aqua rounded Powerline segments |
 | pastel-powerline.config | Purple/rose/peach segments with Powerline arrows |
 
 These are statusbar adaptations inspired by the linked Starship presets,
-not Starship configuration files. Starship is not required. Pastel needs
-Powerline glyphs, usually provided by a Nerd Font; the other three introduce
-no special font requirement beyond ordinary Unicode. Existing weather
-symbols still depend on your terminal's font fallback.
+not Starship configuration files. Starship is not required. Gruvbox and
+Pastel need Powerline glyphs, usually provided by a Nerd Font; Pure and Tokyo
+Night introduce no special font requirement beyond ordinary Unicode. Existing
+weather symbols still depend on your terminal's font fallback.
 
 From the repository root, try one in a fresh terminal outside an existing
 statusbar session:
