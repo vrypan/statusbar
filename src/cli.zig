@@ -90,7 +90,7 @@ const commands = [_]zecli.CommandSpec{
         .arguments = &.{
             .{ .name = "SHELL", .description = "zsh", .required = true, .completion = .{ .values = &.{"zsh"} } },
         },
-        .flags = &.{.{ .name = "starship-slot", .value = .int, .value_name = "N", .description = "Slot for Starship prompt text (default: 3)" }},
+        .flags = &.{.{ .name = "starship-slot", .value = .string, .value_name = "N", .description = "Slot for Starship prompt text (default: 3)" }},
         .double_dash = .positionals,
         .extra_help = "Outside a statusbar session, prints nothing.\n",
     },

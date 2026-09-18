@@ -159,15 +159,12 @@ fn setSlot(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stde
         if (n > 0) try text.append(arena, ' ');
         try text.appendSlice(arena, word);
     }
-    for (text.items) |*byte| {
-        if (byte.* == '\t' or byte.* == '\n' or byte.* == '\r') byte.* = ' ';
-    }
-    if (std.mem.trim(u8, text.items, " \t\r\n").len == 0) text.clearRetainingCapacity();
+    text.items.len = normalizeSlotText(text.items).len;
     if (text.items.len > @import("output.zig").max_value) return usageError(stderr, command, "TEXT must be at most 1024 bytes");
 
     // Outside a session there is no bar to update, and nothing is written.
     const line_text = @import("environment.zig").get("STATUSBAR_LINES") orelse return 0;
-    const line_count = std.fmt.parseInt(usize, line_text, 10) catch return usageError(stderr, command, "STATUSBAR_LINES is malformed");
+    const line_count = parseSlot(line_text) orelse return usageError(stderr, command, "STATUSBAR_LINES is malformed");
     const max_slot = std.math.mul(usize, line_count, 2) catch return usageError(stderr, command, "STATUSBAR_LINES is malformed");
     if (slot > max_slot) return usageError(stderr, command, "SLOT does not exist in this session");
     const encoder = std.base64.standard.Encoder;
@@ -186,10 +183,12 @@ fn setSlot(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stde
 fn shellInit(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
     const args = command.positionals();
     if (!std.mem.eql(u8, args[0], "zsh")) return usageError(stderr, command, "init supports zsh");
-    const slot = command.getValue(usize, "starship-slot") orelse 3;
-    if (slot < 1) return usageError(stderr, command, "--starship-slot must be a positive decimal integer");
+    const slot = if (command.getValue([]const u8, "starship-slot")) |raw|
+        parseSlot(raw) orelse return usageError(stderr, command, "--starship-slot must be a positive decimal integer")
+    else
+        3;
     const line_text = @import("environment.zig").get("STATUSBAR_LINES") orelse return 0;
-    const line_count = std.fmt.parseInt(usize, line_text, 10) catch return usageError(stderr, command, "STATUSBAR_LINES is malformed");
+    const line_count = parseSlot(line_text) orelse return usageError(stderr, command, "STATUSBAR_LINES is malformed");
     const max_slot = std.math.mul(usize, line_count, 2) catch return usageError(stderr, command, "STATUSBAR_LINES is malformed");
     if (slot > max_slot) return usageError(stderr, command, "--starship-slot does not exist in this session");
 
@@ -215,6 +214,17 @@ fn parseSlot(text: []const u8) ?usize {
     return if (n > 0) n else null;
 }
 
+/// Drops surrounding line breaks, then keeps the value on one row. Spaces
+/// are meaningful padding and remain an override.
+fn normalizeSlotText(text: []u8) []u8 {
+    const trimmed = std.mem.trim(u8, text, "\r\n");
+    std.mem.copyForwards(u8, text[0..trimmed.len], trimmed);
+    for (text[0..trimmed.len]) |*byte| {
+        if (byte.* == '\t' or byte.* == '\n' or byte.* == '\r') byte.* = ' ';
+    }
+    return text[0..trimmed.len];
+}
+
 const zsh_init =
     \\# statusbar integration for zsh: eval "$(statusbar init zsh)"
     \\#
@@ -234,10 +244,10 @@ const zsh_init =
     \\    if [[ $out == *$'\n'* ]]; then
     \\      rest=${out%$'\n'*}
     \\      out=${out##*$'\n'}
+    \\      # Starship marks escape codes with %{ %} and doubles literal percent
+    \\      # signs for zsh; prompt expansion turns that back into plain output.
+    \\      @STATUSBAR@ set @SLOT@ "${(%)rest}"
     \\    fi
-    \\    # Starship marks escape codes with %{ %} and doubles literal percent
-    \\    # signs for zsh; prompt expansion turns that back into plain output.
-    \\    @STATUSBAR@ set @SLOT@ "${(%)rest}"
     \\    print -rn -- "$newline$out"
     \\  }
     \\
@@ -330,4 +340,18 @@ test "the built-in config parses" {
     var cfg = try config.parse(std.testing.allocator, default_config, &diag);
     defer cfg.deinit();
     try std.testing.expectEqual(@as(u16, 2), cfg.definedLines());
+}
+
+test "slot syntax and padding normalization are strict" {
+    try std.testing.expectEqual(@as(?usize, 5), parseSlot("5"));
+    for ([_][]const u8{ "", "0", "+1", "-1", "1x", "999999999999999999999999999999" }) |value| {
+        try std.testing.expect(parseSlot(value) == null);
+    }
+
+    var spaces = [_]u8{ ' ', ' ', ' ' };
+    try std.testing.expectEqualStrings("   ", normalizeSlotText(&spaces));
+    var line_breaks = [_]u8{ '\r', '\n', '\n' };
+    try std.testing.expectEqualStrings("", normalizeSlotText(&line_breaks));
+    var mixed = [_]u8{ '\n', ' ', 'a', '\t', 'b', '\r', ' ', '\n' };
+    try std.testing.expectEqualStrings(" a b  ", normalizeSlotText(&mixed));
 }

@@ -101,7 +101,7 @@ pub const Source = struct {
     pub fn setOverride(self: *Source, n: usize, value: []const u8) void {
         if (n >= self.override_lens.len or value.len > output.max_value) return;
         const trimmed = std.mem.trim(u8, value, "\r\n");
-        if (std.mem.trim(u8, trimmed, " \t").len == 0) {
+        if (trimmed.len == 0) {
             self.override_lens[n] = null;
         } else {
             copyOnOneLine(self.overrides[n][0..trimmed.len], trimmed);
@@ -301,5 +301,5 @@ test "values stay on one line in their slot" {
     try std.testing.expectEqualStrings("left\tright", source.content.line(0));
     source.setOverride(0, " \t ");
     _ = source.rebuild();
-    try std.testing.expectEqualStrings("left\tright", source.content.line(0));
+    try std.testing.expectEqualStrings("   \tright", source.content.line(0));
 }

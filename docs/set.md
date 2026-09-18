@@ -8,8 +8,8 @@ Each configured row has two numbered slots:
 | 2   | 3    | 4     |
 | 3   | 5    | 6     |
 
-`statusbar set N [TEXT...]` replaces a slot. With no text, or text containing
-only whitespace, it restores the config or `--exec` value:
+`statusbar set N [TEXT...]` replaces a slot. With no text, or a value made
+only of CR/LF line breaks, it restores the config or `--exec` value:
 
 ```sh
 statusbar set 3 "$(git branch --show-current)"
@@ -22,8 +22,9 @@ the terminal is short. Updating a hidden slot persists and appears when its
 row becomes visible. A slot outside the session's configured range is an
 error and never creates another row.
 
-Words are joined with spaces. Tabs and line breaks become spaces, while
-quoted leading and trailing padding is preserved. Values are limited to 1024
+Words are joined with spaces. Tabs and interior line breaks become spaces,
+while quoted spaces, including an all-space value, are preserved as padding.
+Values are limited to 1024
 bytes. Markup and raw SGR colors work in values. Outside a statusbar session,
 a syntactically valid command writes nothing and exits successfully, so shell
 hooks can call it unconditionally.
