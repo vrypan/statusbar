@@ -18,7 +18,14 @@ Add one line to `~/.zshrc`:
 eval "$(statusbar init zsh)"
 ```
 
-That's all; there's nothing to change in `starship.toml`. Inside a statusbar
+By default the prompt details go to slot 3, the left side of row 2. Select
+another existing slot, including a right-side slot, with:
+
+```zsh
+eval "$(statusbar init zsh --starship-slot 5)"
+```
+
+There is nothing to change in `starship.toml`. Inside a statusbar
 session, each prompt runs starship as usual and splits the result: every
 line but the last goes to the bar's left slot, and the last line (with
 starship's default layout, the prompt character) stays in the terminal. The
@@ -57,7 +64,7 @@ statusbar_precmd() {
   out=$(STARSHIP_SHELL= starship prompt \
     --terminal-width="$COLUMNS" --jobs="$STARSHIP_JOBS_COUNT" \
     --status="${STARSHIP_CMD_STATUS:-}" --cmd-duration="${STARSHIP_DURATION:-}")
-  statusbar set left "${out%$'\n'*}"     # drop the last line: ❯
+  statusbar set 3 "${out%$'\n'*}"     # drop the last line: ❯
 }
 precmd_functions+=(statusbar_precmd)
 ```
@@ -76,8 +83,7 @@ precmd_functions+=(statusbar_precmd)
 - `statusbar set` does nothing outside a statusbar session, so the hook needs
   no check of its own.
 
-Use `statusbar set right` instead to put the prompt on the right side of the
-bar.
+Use an even slot, such as `statusbar set 4`, to put the prompt on the right.
 
 #### Choosing what goes in the bar
 
@@ -95,7 +101,7 @@ statusbar = "$directory$git_branch$git_status$cmd_duration$status"
   out=$(STARSHIP_SHELL= starship prompt --profile statusbar \
     --terminal-width="$COLUMNS" --jobs="$STARSHIP_JOBS_COUNT" \
     --status="${STARSHIP_CMD_STATUS:-}" --cmd-duration="${STARSHIP_DURATION:-}")
-  statusbar set left "$out"
+  statusbar set 3 "$out"
 ```
 
 A profile is only a format string; modules keep their settings from the rest
@@ -167,9 +173,9 @@ see [config.md](config.md).
 Set up the split by hand with a profile, as in
 [Choosing what goes in the bar](#choosing-what-goes-in-the-bar).
 
-**Nothing reaches the bar.** Check that `echo $STATUSBAR_LINES` prints a
-number in the session, that `statusbar init zsh` prints code there, and that
-`statusbar set left test` shows `test`. A statusbar started before you
+**Nothing reaches the bar.** Check that `echo $STATUSBAR_LINES` prints at
+least 2 in the session, that `statusbar init zsh` prints code there, and that
+`statusbar set 3 test` shows `test`. A statusbar started before you
 updated it may need a restart.
 
 **The right side is misaligned.** statusbar counts most wide characters and

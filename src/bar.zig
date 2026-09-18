@@ -9,19 +9,33 @@
 const std = @import("std");
 const markup = @import("markup.zig");
 
-pub const max_lines = 2;
 pub const max_line_bytes = 1024;
 
 pub const Content = struct {
-    lines: [max_lines][max_line_bytes]u8 = undefined,
-    lens: [max_lines]usize = .{ 0, 0 },
+    allocator: std.mem.Allocator,
+    lines: [][max_line_bytes]u8,
+    lens: []usize,
+
+    pub fn init(allocator: std.mem.Allocator, count: usize) !Content {
+        const lines = try allocator.alloc([max_line_bytes]u8, count);
+        errdefer allocator.free(lines);
+        const lens = try allocator.alloc(usize, count);
+        @memset(lens, 0);
+        return .{ .allocator = allocator, .lines = lines, .lens = lens };
+    }
+
+    pub fn deinit(self: *Content) void {
+        self.allocator.free(self.lines);
+        self.allocator.free(self.lens);
+        self.* = undefined;
+    }
 
     /// Takes the first lines of a command's output. Returns whether anything
     /// visible changed.
     pub fn set(self: *Content, text: []const u8) bool {
         var changed = false;
         var it = std.mem.splitScalar(u8, std.mem.trimEnd(u8, text, "\n"), '\n');
-        for (0..max_lines) |n| {
+        for (0..self.lines.len) |n| {
             const raw = it.next() orelse "";
             const trimmed = std.mem.trimEnd(u8, raw, "\r");
             const kept = trimmed[0..@min(trimmed.len, max_line_bytes)];
@@ -35,14 +49,21 @@ pub const Content = struct {
     pub fn line(self: *const Content, n: usize) []const u8 {
         return self.lines[n][0..self.lens[n]];
     }
+
+    pub fn setLine(self: *Content, n: usize, text: []const u8) bool {
+        const kept = text[0..@min(text.len, max_line_bytes)];
+        const changed = !std.mem.eql(u8, kept, self.line(n));
+        @memcpy(self.lines[n][0..kept.len], kept);
+        self.lens[n] = kept.len;
+        return changed;
+    }
 };
 
 /// How each bar line is drawn, apart from its text.
 pub const Look = struct {
     /// SGR parameters for each line, e.g. "7" for reverse.
-    styles: [max_lines][]const u8 = .{ "", "" },
-    /// A line with a rule is filled with that text instead of its content.
-    rules: [max_lines]?[]const u8 = .{ null, null },
+    styles: [][]const u8,
+    rules: []?[]const u8,
     palette: markup.Palette = .{},
 };
 
@@ -63,11 +84,7 @@ pub fn paint(w: *std.Io.Writer, content: *const Content, look: *const Look, firs
         // pending-wrap state, where an erase would clear the last cell.
         const style = look.styles[n];
         try w.print("\x1b[{d};1H\x1b[0;{s}m\x1b[2K", .{ first_row + n, style });
-        if (look.rules[n]) |rule| {
-            try writeRule(w, rule, cols);
-        } else {
-            try writeLine(w, content.line(n), cols, style, look.palette);
-        }
+        try writeLine(w, content.line(n), cols, style, look.palette, look.rules[n]);
     }
     try w.writeAll("\x1b[0m\x1b8");
     if (autowrap) try w.writeAll("\x1b[?7h");
@@ -91,7 +108,7 @@ pub fn splitSlots(text: []const u8) [2][]const u8 {
 
 /// One bar line: markup expanded, then split into `left \t right`. Styling
 /// does not carry from the left slot into the gap after it.
-fn writeLine(w: *std.Io.Writer, text: []const u8, cols: u16, style: []const u8, palette: markup.Palette) !void {
+fn writeLine(w: *std.Io.Writer, text: []const u8, cols: u16, style: []const u8, palette: markup.Palette, rule: ?[]const u8) !void {
     var expanded_buf: [4096]u8 = undefined;
     const slots = splitSlots(markup.expand(text, &expanded_buf, palette));
 
@@ -104,20 +121,26 @@ fn writeLine(w: *std.Io.Writer, text: []const u8, cols: u16, style: []const u8, 
         if (place.width == 0) continue;
         if (place.col > cursor) {
             try w.print("\x1b[0;{s}m", .{style});
-            try w.splatByteAll(' ', place.col - cursor);
+            try writeFill(w, rule, place.col - cursor);
             cursor = place.col;
         }
         cursor += try writeClipped(w, slot, place.width, style);
+    }
+    if (rule != null and cursor < cols) {
+        try w.print("\x1b[0;{s}m", .{style});
+        try writeFill(w, rule, cols - cursor);
     }
 }
 
 /// Repeats `rule` across the line, leaving out a final repetition that would
 /// not fit whole.
-fn writeRule(w: *std.Io.Writer, rule: []const u8, cols: u16) !void {
+fn writeFill(w: *std.Io.Writer, maybe_rule: ?[]const u8, cols: usize) !void {
+    const rule = maybe_rule orelse return w.splatByteAll(' ', cols);
     const width = try writeClipped(null, rule, std.math.maxInt(usize), "");
-    if (width == 0) return;
+    if (width == 0 or width > cols) return w.splatByteAll(' ', cols);
     var used: usize = 0;
-    while (used + width <= cols) : (used += width) try w.writeAll(rule);
+    while (used + width <= cols) : (used += width) _ = try writeClipped(w, rule, width, "");
+    try w.splatByteAll(' ', cols - used);
 }
 
 /// Places the slots on a line `cols` wide. When space runs out the right slot
@@ -320,7 +343,7 @@ fn rendered(text: []const u8, cols: u16) ![]const u8 {
         var buf: [1024]u8 = undefined;
     };
     var w: std.Io.Writer = .fixed(&S.buf);
-    try writeLine(&w, text, cols, "", .{});
+    try writeLine(&w, text, cols, "", .{}, null);
     // Drop the style resets in the gaps to compare the visible text.
     const out = w.buffered();
     const T = struct {
@@ -387,7 +410,8 @@ test "SGR resets distinguish colors from top-level zero" {
 }
 
 test "content truncation cannot emit a partial escape sequence" {
-    var content: Content = .{};
+    var content = try Content.init(std.testing.allocator, 1);
+    defer content.deinit();
     var text: [max_line_bytes + 6]u8 = undefined;
     @memset(text[0 .. max_line_bytes - 2], 'a');
     @memcpy(text[max_line_bytes - 2 .. max_line_bytes + 6], "\x1b[31mxyz");
@@ -401,7 +425,8 @@ test "content truncation cannot emit a partial escape sequence" {
 }
 
 test "content keeps the first lines and reports changes" {
-    var content: Content = .{};
+    var content = try Content.init(std.testing.allocator, 2);
+    defer content.deinit();
     try std.testing.expect(content.set("one\r\ntwo\nthree\n"));
     try std.testing.expectEqualStrings("one", content.line(0));
     try std.testing.expectEqualStrings("two", content.line(1));
@@ -417,12 +442,15 @@ test "emoji presentation takes two cells" {
 }
 
 test "the paint clips instead of wrapping and restores autowrap" {
-    var content: Content = .{};
+    var content = try Content.init(std.testing.allocator, 1);
+    defer content.deinit();
     _ = content.set("x");
     var buf: [512]u8 = undefined;
     for ([_]bool{ true, false }) |autowrap| {
         var w: std.Io.Writer = .fixed(&buf);
-        try paint(&w, &content, &.{}, 24, 1, 80, "", autowrap);
+        var styles = [_][]const u8{""};
+        var rules = [_]?[]const u8{null};
+        try paint(&w, &content, &.{ .styles = &styles, .rules = &rules }, 24, 1, 80, "", autowrap);
         const out = w.buffered();
         try std.testing.expect(std.mem.startsWith(u8, out, "\x1b7\x1b[?7l"));
         try std.testing.expectEqual(autowrap, std.mem.endsWith(u8, out, "\x1b8\x1b[?7h"));
@@ -433,9 +461,35 @@ test "the paint clips instead of wrapping and restores autowrap" {
 test "rules repeat across the width" {
     var buf: [256]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    try writeRule(&w, "─", 5);
+    try writeFill(&w, "─", 5);
     try std.testing.expectEqualStrings("─────", w.buffered());
     w.end = 0;
-    try writeRule(&w, "-=", 5);
-    try std.testing.expectEqualStrings("-=-=", w.buffered());
+    try writeFill(&w, "-=", 5);
+    try std.testing.expectEqualStrings("-=-= ", w.buffered());
+    w.end = 0;
+    try writeFill(&w, "", 5);
+    try std.testing.expectEqualStrings("     ", w.buffered());
+    w.end = 0;
+    try writeFill(&w, "\x1b[31m", 5);
+    try std.testing.expectEqualStrings("     ", w.buffered());
+}
+
+test "rules fill around both slots" {
+    const S = struct {
+        var buf: [256]u8 = undefined;
+    };
+    var w: std.Io.Writer = .fixed(&S.buf);
+    try writeLine(&w, " Build \t 65% ", 20, "", .{}, "─");
+    var visible: [256]u8 = undefined;
+    var out: std.Io.Writer = .fixed(&visible);
+    var i: usize = 0;
+    while (i < w.buffered().len) {
+        if (w.buffered()[i] == 0x1b) {
+            i = escapeSequence(w.buffered(), i).end;
+            continue;
+        }
+        try out.writeByte(w.buffered()[i]);
+        i += 1;
+    }
+    try std.testing.expectEqualStrings(" Build ──────── 65% ", out.buffered());
 }

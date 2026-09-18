@@ -35,7 +35,8 @@ without startup files:
 ./zig-out/bin/statusbar --config "$PWD/samples/themes/tokyo-night.config" -- /bin/zsh -f
 ```
 
-All variants reserve two rows. The rules are static decoration, not meters.
+All variants define two rows. Their rules fill unused space and can frame
+left and right labels on the same row.
 On narrow terminals the right side clips first, as in the existing design.
 Weather uses the original wttr.in command and may remain empty until it
 responds. These alternatives don't change its network behavior.
@@ -45,4 +46,3 @@ Inspiration:
 - https://starship.rs/presets/tokyo-night
 - https://starship.rs/presets/gruvbox-rainbow
 - https://starship.rs/presets/pastel-powerline
-

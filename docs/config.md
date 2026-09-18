@@ -53,7 +53,6 @@ interval = 10
 
 | Key        | Meaning                                                        |
 |------------|----------------------------------------------------------------|
-| `lines`    | bar height, 1 or 2 (default: the highest `[line.N]`)           |
 | `interval` | refresh for commands without their own, in seconds (default 5) |
 | `style`    | style for lines without their own, e.g. `bg=#1e1e2e`           |
 
@@ -63,20 +62,24 @@ interval = 10
 in `#[fg=accent]` or `style = fg=rule`. A value is any color the markup
 accepts, but not another name.
 
-## `[line.1]`, `[line.2]`
+## `[line.N]`
 
-Line 1 is the bar's upper row.
+Line sections define the height and must be consecutive from `[line.1]`.
+They may appear in any order in the file and render in numeric order. An
+empty section still reserves its row. The maximum is 65533 rows.
 
 | Key     | Meaning                                         |
 |---------|-------------------------------------------------|
 | `left`  | template for the left slot                      |
 | `right` | template for the right slot                     |
-| `rule`  | fill the line with this text instead, e.g. `─`  |
+| `rule`  | repeat this pattern through space outside the slots, e.g. `─` |
 | `style` | style for this line, e.g. `fg=rule`             |
 
-When a line is too narrow, the right slot is clipped first; the left slot is
-kept longest. [`statusbar set`](set.md) can replace the slots of the last
-line that isn't a rule.
+Every line may have `left`, `right`, and `rule` together. The rule fills the
+gap and any unused edge; without one those cells are spaces. Only complete
+patterns are repeated and a remainder stays blank. When a line is too
+narrow, the right slot is clipped first; the left slot is kept longest.
+[`statusbar set`](set.md) addresses any slot by number.
 
 ## `[command.NAME]`
 
@@ -90,7 +93,8 @@ schedule, so a slow one never holds up the clock or the others; one that
 runs past its interval (at least 5 seconds) is killed.
 
 Commands run in statusbar's working directory, not your shell's, with stdin
-and stderr on `/dev/null`, and see `STATUSBAR_COLUMNS` and `STATUSBAR_LINES`.
+and stderr on `/dev/null`. `STATUSBAR_COLUMNS` is the current width and
+`STATUSBAR_LINES` is the configured row count, even while rows are hidden.
 
 ## Templates
 

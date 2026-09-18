@@ -6,9 +6,8 @@
 //! command runs on its own interval, so a slow one never holds up the rest,
 //! and the clock is re-read at the start of each second.
 //!
-//! Programs inside the session can replace the left or right slot of the
-//! bar's last text line with the StatusBarLeft and StatusBarRight user
-//! variables. Clearing a value brings back what was there.
+//! Programs inside the session can replace any numbered slot. Clearing a
+//! value brings back what the config or exec command put there.
 
 const std = @import("std");
 const posix = std.posix;
@@ -28,15 +27,14 @@ pub const Source = struct {
     output_lens: [config.max_commands]usize = @splat(0),
     /// Null in `--exec` mode.
     cfg: ?*const config.Config,
-    /// Visible bar lines.
+    /// Desired bar lines.
     lines: u16,
-    content: bar.Content = .{},
+    content: bar.Content,
     /// The `--exec` command's latest output.
-    exec_output: [bar.max_lines * (bar.max_line_bytes + 1)]u8 = undefined,
+    exec_output: []u8,
     exec_output_len: usize = 0,
-    /// StatusBarLeft and StatusBarRight, when set.
-    overrides: [2][output.max_value]u8 = undefined,
-    override_lens: [2]?usize = .{ null, null },
+    overrides: [][output.max_value]u8,
+    override_lens: []?usize,
     clock_next_ms: ?i64 = null,
     /// Output arrived since the content was last built.
     stale: bool = false,
@@ -45,7 +43,17 @@ pub const Source = struct {
         const commands = try gpa.alloc(status.Command, 1);
         errdefer gpa.free(commands);
         commands[0] = try status.Command.init(gpa, io, command, interval_ms, lines, cols);
-        return .{ .gpa = gpa, .io = io, .commands = commands, .cfg = null, .lines = lines };
+        errdefer commands[0].deinit(io);
+        const capacity = try std.math.mul(usize, lines, bar.max_line_bytes + 1);
+        const exec_output = try gpa.alloc(u8, capacity);
+        errdefer gpa.free(exec_output);
+        var content = try bar.Content.init(gpa, lines);
+        errdefer content.deinit();
+        const overrides = try gpa.alloc([output.max_value]u8, @as(usize, lines) * 2);
+        errdefer gpa.free(overrides);
+        const override_lens = try gpa.alloc(?usize, @as(usize, lines) * 2);
+        @memset(override_lens, null);
+        return .{ .gpa = gpa, .io = io, .commands = commands, .cfg = null, .lines = lines, .content = content, .exec_output = exec_output, .overrides = overrides, .override_lens = override_lens };
     }
 
     pub fn initConfig(gpa: std.mem.Allocator, io: std.Io, cfg: *const config.Config, lines: u16, cols: u16) !Source {
@@ -58,7 +66,13 @@ pub const Source = struct {
             commands[n] = try status.Command.init(gpa, io, spec.run, cfg.commandInterval(n), lines, cols);
             started += 1;
         }
-        var self: Source = .{ .gpa = gpa, .io = io, .commands = commands, .cfg = cfg, .lines = lines, .stale = true };
+        var content = try bar.Content.init(gpa, lines);
+        errdefer content.deinit();
+        const overrides = try gpa.alloc([output.max_value]u8, @as(usize, lines) * 2);
+        errdefer gpa.free(overrides);
+        const override_lens = try gpa.alloc(?usize, @as(usize, lines) * 2);
+        @memset(override_lens, null);
+        var self: Source = .{ .gpa = gpa, .io = io, .commands = commands, .cfg = cfg, .lines = lines, .content = content, .exec_output = @constCast(&.{}), .overrides = overrides, .override_lens = override_lens, .stale = true };
         if (cfg.usesClock()) self.clock_next_ms = 0;
         return self;
     }
@@ -66,6 +80,10 @@ pub const Source = struct {
     pub fn deinit(self: *Source) void {
         for (self.commands) |*command| command.deinit(self.io);
         self.gpa.free(self.commands);
+        if (self.exec_output.len > 0) self.gpa.free(self.exec_output);
+        self.content.deinit();
+        self.gpa.free(self.overrides);
+        self.gpa.free(self.override_lens);
     }
 
     pub fn setColumns(self: *Source, cols: u16) void {
@@ -77,13 +95,13 @@ pub const Source = struct {
         if (self.clock_next_ms != null) self.clock_next_ms = 0;
     }
 
-    /// Replaces a slot of the last text line; an empty value restores it.
+    /// Replaces a numbered slot; an empty value restores it.
     /// Surrounding line breaks are dropped, as prompt tools often add one,
     /// and inner ones become spaces so a value stays on its line.
-    pub fn setOverride(self: *Source, slot: output.Slot, value: []const u8) void {
-        const n = @intFromEnum(slot);
+    pub fn setOverride(self: *Source, n: usize, value: []const u8) void {
+        if (n >= self.override_lens.len or value.len > output.max_value) return;
         const trimmed = std.mem.trim(u8, value, "\r\n");
-        if (trimmed.len == 0) {
+        if (std.mem.trim(u8, trimmed, " \t").len == 0) {
             self.override_lens[n] = null;
         } else {
             copyOnOneLine(self.overrides[n][0..trimmed.len], trimmed);
@@ -158,52 +176,41 @@ pub const Source = struct {
     }
 
     fn rebuild(self: *Source) bool {
-        var buf: [bar.max_lines * 4096]u8 = undefined;
-        var w: std.Io.Writer = .fixed(&buf);
-        const target = self.overrideLine();
         if (self.cfg) |cfg| {
             const now = currentTime();
-            for (&cfg.line, 0..) |*line, n| {
-                if (n > 0) w.writeByte('\n') catch break;
-                if (line.rule != null) continue;
-                const replace = target == n;
-                if (if (replace) self.override(0) else null) |value| {
-                    w.writeAll(value) catch break;
+            var changed = false;
+            for (cfg.line, 0..) |*line, n| {
+                var buf: [4096]u8 = undefined;
+                var w: std.Io.Writer = .fixed(&buf);
+                if (self.override(n * 2)) |value| {
+                    w.writeAll(value) catch {};
                 } else self.writeTemplate(&w, &line.left, &now);
-                w.writeByte('\t') catch break;
-                if (if (replace) self.override(1) else null) |value| {
-                    w.writeAll(value) catch break;
+                w.writeByte('\t') catch {};
+                if (self.override(n * 2 + 1)) |value| {
+                    w.writeAll(value) catch {};
                 } else self.writeTemplate(&w, &line.right, &now);
+                changed = self.content.setLine(n, w.buffered()) or changed;
             }
+            return changed;
         } else {
+            var buf: [bar.max_line_bytes * 2 + 1]u8 = undefined;
             var it = std.mem.splitScalar(u8, std.mem.trimEnd(u8, self.exec_output[0..self.exec_output_len], "\n"), '\n');
-            for (0..bar.max_lines) |n| {
-                if (n > 0) w.writeByte('\n') catch break;
+            var changed = false;
+            for (0..self.lines) |n| {
                 const line = std.mem.trimEnd(u8, it.next() orelse "", "\r");
-                if (target != n or (self.override(0) == null and self.override(1) == null)) {
-                    w.writeAll(line) catch break;
+                if (self.override(n * 2) == null and self.override(n * 2 + 1) == null) {
+                    changed = self.content.setLine(n, line) or changed;
                     continue;
                 }
+                var w: std.Io.Writer = .fixed(&buf);
                 const slots = bar.splitSlots(line);
-                w.writeAll(self.override(0) orelse slots[0]) catch break;
-                w.writeByte('\t') catch break;
-                w.writeAll(self.override(1) orelse slots[1]) catch break;
+                w.writeAll(self.override(n * 2) orelse slots[0]) catch {};
+                w.writeByte('\t') catch {};
+                w.writeAll(self.override(n * 2 + 1) orelse slots[1]) catch {};
+                changed = self.content.setLine(n, w.buffered()) or changed;
             }
+            return changed;
         }
-        return self.content.set(w.buffered());
-    }
-
-    /// The last visible line that is not a rule, which user variables replace.
-    fn overrideLine(self: *const Source) ?usize {
-        var n: usize = self.lines;
-        while (n > 0) {
-            n -= 1;
-            if (self.cfg) |cfg| {
-                if (cfg.line[n].rule != null) continue;
-            }
-            return n;
-        }
-        return null;
     }
 
     fn writeTemplate(self: *const Source, w: *std.Io.Writer, template: *const config.Template, now: *const Tm) void {
@@ -277,14 +284,22 @@ test "strftime conversions and literal percent signs" {
 }
 
 test "values stay on one line in their slot" {
-    var source: Source = .{ .gpa = std.testing.allocator, .io = undefined, .commands = &.{}, .cfg = null, .lines = 1 };
+    var content = try bar.Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    var exec_output: [bar.max_line_bytes + 1]u8 = undefined;
+    var overrides: [2][output.max_value]u8 = undefined;
+    var override_lens: [2]?usize = .{ null, null };
+    var source: Source = .{ .gpa = std.testing.allocator, .io = undefined, .commands = &.{}, .cfg = null, .lines = 1, .content = content, .exec_output = &exec_output, .overrides = &overrides, .override_lens = &override_lens };
     const text = "left\tright\n";
     @memcpy(source.exec_output[0..text.len], text);
     source.exec_output_len = text.len;
-    source.setOverride(.Left, "\nfirst\nsecond\tthird\n");
+    source.setOverride(0, "\nfirst\nsecond\tthird\n");
     try std.testing.expect(source.rebuild());
     try std.testing.expectEqualStrings("first second third\tright", source.content.line(0));
-    source.setOverride(.Left, "\n");
+    source.setOverride(0, "\n");
+    _ = source.rebuild();
+    try std.testing.expectEqualStrings("left\tright", source.content.line(0));
+    source.setOverride(0, " \t ");
     _ = source.rebuild();
     try std.testing.expectEqualStrings("left\tright", source.content.line(0));
 }

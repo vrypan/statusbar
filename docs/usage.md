@@ -2,8 +2,8 @@
 
 ```
 statusbar [run] [options] [-- COMMAND...]
-statusbar set <left|right> [TEXT...]
-eval "$(statusbar init zsh)"
+statusbar set <N> [TEXT...]
+eval "$(statusbar init zsh [--starship-slot N])"
 statusbar config [--path] [--default | --config PATH]
 statusbar completion <bash|zsh|fish>
 ```
@@ -13,8 +13,8 @@ each one's options.
 
 ## `run`
 
-Runs a command, by default `$SHELL`, in a pty one or two rows shorter than
-the terminal, and keeps a status bar in the rows it gave up. The session
+Runs a command, by default `$SHELL`, in a pty shortened by the configured
+rows that fit, and keeps a status bar in the rows it gave up. The session
 ends when the command exits, with the command's exit status.
 
 `run` is the default command, so it can be left out:
@@ -24,23 +24,25 @@ always follows `--`.
 | Option                  | Meaning                                                                 |
 |-------------------------|-------------------------------------------------------------------------|
 | `-c`, `--config PATH`   | config file; see [config.md](config.md) for where it is looked for, and the built-in default |
-| `-n`, `--lines N`       | bar height, 1 or 2 (default: from the config, else 1)                   |
+| `-n`, `--lines N`       | row count for `--exec` only (default 1; maximum 65533)                  |
 | `-e`, `--exec COMMAND`  | fill the bar from one shell command instead of the config's lines       |
 | `-i`, `--interval SECS` | how often commands rerun (default 1 with `--exec`, else the config's)   |
 | `-s`, `--style STYLE`   | bar style, as SGR parameters (`7`) or markup attributes (`fg=blue,bold`); `''` for none |
 
-Options take their value as the next argument (`-n 2`), and long options
-also after `=` (`--lines=2`). Options override the config file.
+Options take their value as the next argument (`-n 3`), and long options
+also after `=` (`--lines=3`). `--lines` requires `--exec`; config height
+comes from its `[line.N]` sections.
 
 ## `set`
 
-`statusbar set left|right [TEXT...]` replaces a slot of the bar from inside a
+`statusbar set N [TEXT...]` replaces a numbered slot of the bar from inside a
 session. See [set.md](set.md).
 
 ## `init`
 
 `statusbar init zsh` prints the zsh integration that moves starship's prompt
-into the bar. See [starship.md](starship.md).
+into slot 3. `--starship-slot N` selects another slot. See
+[starship.md](starship.md).
 
 ## `config`
 
@@ -84,7 +86,7 @@ statusbar completion fish > ~/.config/fish/completions/statusbar.fish
 
 A single shell command can fill the bar instead of a config's `[line.N]`
 sections. It runs under `/bin/sh -c` every `--interval` seconds, and each
-output line fills one bar row, so `-n 2` shows the first two lines.
+output line fills one bar row, so `-n 3` shows the first three lines.
 
 A line holds up to two slots, separated by a tab: `left` or
 `left<TAB>right`. [Markup](config.md#markup), raw SGR colors and OSC 8
@@ -104,6 +106,6 @@ sections shows `date` the same way.
 
 | Variable            | Set for                   | Meaning                                  |
 |---------------------|---------------------------|------------------------------------------|
-| `STATUSBAR_LINES`   | the child and bar commands | bar height; marks a statusbar session   |
+| `STATUSBAR_LINES`   | the child and bar commands | desired rows; marks a statusbar session |
 | `STATUSBAR_COLUMNS` | bar commands              | the bar's width                          |
 | `STATUSBAR_CONFIG`  | read by statusbar         | config file, when `--config` isn't given |

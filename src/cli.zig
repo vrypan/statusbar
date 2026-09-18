@@ -2,8 +2,8 @@
 //! completion.
 //!
 //!     statusbar [run] [options] [-- COMMAND...]
-//!     statusbar set <left|right> [TEXT...]
-//!     statusbar init zsh
+//!     statusbar set <N> [TEXT...]
+//!     statusbar init zsh [--starship-slot N]
 //!     statusbar config [--path] [--default | --config PATH]
 //!     statusbar completion <bash|zsh|fish>
 
@@ -32,8 +32,7 @@ const run_flags = [_]zecli.FlagSpec{
         .short = 'n',
         .value = .int,
         .value_name = "N",
-        .description = "Bar height, 1 or 2 (default: from the config)",
-        .completion = .{ .values = &.{ "1", "2" } },
+        .description = "Bar height with --exec (default: 1)",
     },
     .{
         .name = "exec",
@@ -71,10 +70,10 @@ const commands = [_]zecli.CommandSpec{
     },
     .{
         .name = "set",
-        .description = "Replace the left or right slot of the bar from inside a session",
-        .usage = "statusbar set <left|right> [TEXT...]",
+        .description = "Replace a numbered slot of the bar from inside a session",
+        .usage = "statusbar set <N> [TEXT...]",
         .arguments = &.{
-            .{ .name = "SLOT", .description = "left or right", .required = true, .completion = .{ .values = &.{ "left", "right" } } },
+            .{ .name = "SLOT", .description = "positive slot number", .required = true },
             .{ .name = "TEXT", .description = "Text for the slot; words are joined with spaces", .repeatable = true },
         },
         .double_dash = .positionals,
@@ -91,6 +90,7 @@ const commands = [_]zecli.CommandSpec{
         .arguments = &.{
             .{ .name = "SHELL", .description = "zsh", .required = true, .completion = .{ .values = &.{"zsh"} } },
         },
+        .flags = &.{.{ .name = "starship-slot", .value = .int, .value_name = "N", .description = "Slot for Starship prompt text (default: 3)" }},
         .double_dash = .positionals,
         .extra_help = "Outside a statusbar session, prints nothing.\n",
     },
@@ -133,7 +133,7 @@ pub const application = application: {
         .flags = &root_flags,
         .commands = &commands,
         .extra_help =
-        \\Runs a shell in a pty one or two rows shorter than the terminal, and keeps
+        \\Runs a shell in a pty with rows reserved at the bottom, and keeps
         \\a status bar in the rows it gave up. `run` is the default command.
         ++ "\n",
     });
@@ -171,7 +171,7 @@ test "run is the default command" {
         .{ &.{}, "run" },
         .{ &.{ "-n", "1" }, "run" },
         .{ &.{ "--", "set" }, "run" },
-        .{ &.{ "set", "left" }, "set" },
+        .{ &.{ "set", "1" }, "set" },
         .{ &.{ "run", "-n", "1" }, "run" },
         .{ &.{"--help"}, "--help" },
         .{ &.{"-V"}, "-V" },

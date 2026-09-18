@@ -20,7 +20,6 @@ const c = std.c;
 const sys = @import("sys.zig");
 const tty = @import("tty.zig");
 const Output = @import("output.zig").Output;
-const Slot = @import("output.zig").Slot;
 const Input = @import("input.zig").Input;
 const bar = @import("bar.zig");
 const config = @import("config.zig");
@@ -115,10 +114,16 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         try Source.initConfig(gpa, io, opts.cfg.?, opts.lines, outer_ws.col);
     defer source.deinit();
 
-    var look: bar.Look = .{};
-    var style_bufs: [bar.max_lines][256]u8 = undefined;
+    const styles = try gpa.alloc([]const u8, opts.lines);
+    defer gpa.free(styles);
+    const rules = try gpa.alloc(?[]const u8, opts.lines);
+    defer gpa.free(rules);
+    @memset(rules, null);
+    const style_bufs = try gpa.alloc([256]u8, opts.lines);
+    defer gpa.free(style_bufs);
+    var look: bar.Look = .{ .styles = styles, .rules = rules };
     if (opts.cfg) |cfg| look.palette = cfg.palette();
-    for (0..bar.max_lines) |n| {
+    for (0..opts.lines) |n| {
         var spec = opts.style;
         if (opts.command == null) {
             const line = &opts.cfg.?.line[n];
@@ -148,11 +153,20 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         .master = pty.master,
         .lines = opts.lines,
         .layout = layout,
-        .output = .{ .bar = layout.bar, .rows = layout.child.row },
+        .output = .{ .bar = layout.bar, .rows = layout.child.row, .max_slot = @as(usize, opts.lines) * 2, .update_handler = .{ .context = &source, .callback = receiveSlotUpdate } },
         .input = .{ .bar = layout.bar, .rows = layout.child.row },
         .source = &source,
         .look = &look,
+        .paint_buffer = paint_buffer: {
+            const buffer = try gpa.create(std.Io.Writer.Allocating);
+            buffer.* = .init(gpa);
+            break :paint_buffer buffer;
+        },
     };
+    defer {
+        proxy.paint_buffer.deinit();
+        gpa.destroy(proxy.paint_buffer);
+    }
     proxy.reserveRows(outer_ws.row);
     defer proxy.releaseRows();
 
@@ -174,7 +188,7 @@ const Layout = struct {
     child: posix.winsize,
 
     fn of(outer: posix.winsize, lines: u16) Layout {
-        const bar_rows: u16 = if (outer.row >= lines + 2) lines else 0;
+        const bar_rows: u16 = @min(lines, outer.row -| 2);
         var child = outer;
         child.row = outer.row - bar_rows;
         if (bar_rows > 0 and outer.ypixel > 0) {
@@ -309,6 +323,7 @@ const Proxy = struct {
     input: Input,
     source: *Source,
     look: *const bar.Look,
+    paint_buffer: *std.Io.Writer.Allocating,
 
     terminal: TerminalSink = undefined,
     pending_input: PendingInput = .{},
@@ -385,10 +400,9 @@ const Proxy = struct {
         var region_buf: [32]u8 = undefined;
         var region: std.Io.Writer = .fixed(&region_buf);
         self.output.writeRegion(&WriterSink{ .w = &region });
-        var buf: [16 * 1024]u8 = undefined;
-        var w: std.Io.Writer = .fixed(&buf);
-        bar.paint(&w, &self.source.content, self.look, self.layout.barRow(), self.layout.bar, self.layout.cols, region.buffered(), self.output.autowrap) catch {};
-        self.terminal.write(w.buffered());
+        self.paint_buffer.writer.end = 0;
+        bar.paint(&self.paint_buffer.writer, &self.source.content, self.look, self.layout.barRow(), self.layout.bar, self.layout.cols, region.buffered(), self.output.autowrap) catch return;
+        self.terminal.write(self.paint_buffer.writer.buffered());
         self.paint_requested_ms = null;
         self.output.damaged = false;
     }
@@ -454,9 +468,6 @@ const Proxy = struct {
                             if (n < out_buf.len) drained = drain_limit;
                             self.output.feed(out_buf[0..n], &self.terminal);
                             self.last_output_ms = now_ms;
-                            for ([_]Slot{ .Left, .Right }) |slot| {
-                                if (self.output.takeValue(slot)) |value| self.source.setOverride(slot, value);
-                            }
                             if (self.output.damaged) {
                                 // Repaint in the same write as the erase, so
                                 // the terminal never renders a frame without
@@ -532,6 +543,11 @@ const Proxy = struct {
     }
 };
 
+fn receiveSlotUpdate(context: *anyopaque, slot: usize, value: []const u8) void {
+    const source: *Source = @ptrCast(@alignCast(context));
+    source.setOverride(slot, value);
+}
+
 fn minTimeout(a: i64, b: i64) i64 {
     if (a < 0) return b;
     if (b < 0) return a;
@@ -581,8 +597,34 @@ test "layout places the bar and gives it up on tiny terminals" {
     try std.testing.expectEqual(@as(u16, 22), layout.child.row);
     try std.testing.expectEqual(@as(u16, 23), layout.barRow());
     const tiny = Layout.of(.{ .row = 3, .col = 80, .xpixel = 0, .ypixel = 0 }, 2);
-    try std.testing.expectEqual(@as(u16, 0), tiny.bar);
-    try std.testing.expectEqual(@as(u16, 3), tiny.child.row);
+    try std.testing.expectEqual(@as(u16, 1), tiny.bar);
+    try std.testing.expectEqual(@as(u16, 2), tiny.child.row);
+    for ([_]u16{ 0, 1, 2 }) |rows| {
+        const hidden = Layout.of(.{ .row = rows, .col = 80, .xpixel = 0, .ypixel = 0 }, 3);
+        try std.testing.expectEqual(@as(u16, 0), hidden.bar);
+        try std.testing.expectEqual(rows, hidden.child.row);
+    }
+    const five = Layout.of(.{ .row = 5, .col = 80, .xpixel = 0, .ypixel = 0 }, 8);
+    try std.testing.expectEqual(@as(u16, 3), five.bar);
+    try std.testing.expectEqual(@as(u16, 2), five.child.row);
+}
+
+test "large paints retain their complete terminal restoration" {
+    const count = 100;
+    var content = try bar.Content.init(std.testing.allocator, count);
+    defer content.deinit();
+    const styles = try std.testing.allocator.alloc([]const u8, count);
+    defer std.testing.allocator.free(styles);
+    @memset(styles, "");
+    const rules = try std.testing.allocator.alloc(?[]const u8, count);
+    defer std.testing.allocator.free(rules);
+    @memset(rules, "─");
+    var writer: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer writer.deinit();
+    try bar.paint(&writer.writer, &content, &.{ .styles = styles, .rules = rules }, 1, count, 200, "", true);
+    try std.testing.expect(writer.writer.buffered().len > 16 * 1024);
+    try std.testing.expect(std.mem.endsWith(u8, writer.writer.buffered(), "\x1b[0m\x1b8\x1b[?7h"));
+    try std.testing.expect(std.mem.indexOf(u8, writer.writer.buffered(), "\x1b[100;1H") != null);
 }
 
 fn schedulerProxy() Proxy {

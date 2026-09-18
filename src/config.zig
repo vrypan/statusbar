@@ -1,6 +1,5 @@
 //! The config file.
 //!
-//!     lines = 2
 //!     interval = 5
 //!     style = fg=text
 //!
@@ -30,12 +29,13 @@
 //! at the default interval. `%` sequences are strftime(3) conversions, and
 //! `%%` is a literal percent sign.
 //!
-//! Everything the parser returns borrows from the source text.
+//! Strings returned by the parser borrow from the source text. The `line`
+//! slice is allocator-owned and must be released with `deinit`.
 
 const std = @import("std");
 const markup = @import("markup.zig");
 
-pub const max_lines = 2;
+pub const max_lines = 65533;
 pub const max_commands = 16;
 pub const max_colors = 32;
 const max_parts = 32;
@@ -79,17 +79,23 @@ pub const Command = struct {
 };
 
 pub const Config = struct {
-    lines: ?u16 = null,
+    allocator: ?std.mem.Allocator = null,
     style: ?[]const u8 = null,
     interval_ms: i64 = 5000,
     colors: [max_colors]markup.Color = undefined,
     colors_len: usize = 0,
-    line: [max_lines]Line = .{ .{}, .{} },
-    /// The highest [line.N] in the file. Without any, the config only sets
-    /// options and colors.
-    defined_lines: u16 = 0,
+    line: []Line = &.{},
     commands: [max_commands]Command = undefined,
     commands_len: usize = 0,
+
+    pub fn deinit(self: *Config) void {
+        if (self.allocator) |allocator| allocator.free(self.line);
+        self.* = undefined;
+    }
+
+    pub fn definedLines(self: *const Config) u16 {
+        return @intCast(self.line.len);
+    }
 
     pub fn palette(self: *const Config) markup.Palette {
         return .{ .colors = self.colors[0..self.colors_len] };
@@ -132,9 +138,14 @@ const RawLine = struct {
     right_at: usize = 0,
 };
 
-pub fn parse(text: []const u8, diag: *Diagnostic) Error!Config {
-    var config: Config = .{};
-    var raw: [max_lines]RawLine = .{ .{}, .{} };
+pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) (Error || std.mem.Allocator.Error)!Config {
+    const row_count = try countRows(allocator, text, diag);
+    var config: Config = .{ .allocator = allocator, .line = try allocator.alloc(Line, row_count) };
+    errdefer config.deinit();
+    @memset(config.line, .{});
+    const raw = try allocator.alloc(RawLine, row_count);
+    defer allocator.free(raw);
+    @memset(raw, .{});
     var section: Section = .root;
 
     var number: usize = 0;
@@ -159,16 +170,14 @@ pub fn parse(text: []const u8, diag: *Diagnostic) Error!Config {
         switch (section) {
             .root => {
                 if (eql(key, "lines")) {
-                    const lines = std.fmt.parseInt(u16, value, 10) catch 0;
-                    if (lines < 1 or lines > max_lines) return fail(diag, "lines must be 1 or 2");
-                    config.lines = lines;
+                    return fail(diag, "lines is no longer supported; height follows the [line.N] sections");
                 } else if (eql(key, "position")) {
                     return fail(diag, "position is no longer supported; the bar is always at the bottom");
                 } else if (eql(key, "interval")) {
                     config.interval_ms = try parseInterval(value, diag);
                 } else if (eql(key, "style")) {
                     config.style = value;
-                } else return fail(diag, "unknown option; expected lines, interval or style");
+                } else return fail(diag, "unknown option; expected interval or style");
             },
             .colors => {
                 if (config.colors_len == max_colors) return fail(diag, "too many colors");
@@ -184,7 +193,6 @@ pub fn parse(text: []const u8, diag: *Diagnostic) Error!Config {
                     target.right = value;
                     target.right_at = number;
                 } else if (eql(key, "rule")) {
-                    if (value.len == 0) return fail(diag, "rule needs a character, such as ─");
                     config.line[n].rule = value;
                 } else if (eql(key, "style")) {
                     config.line[n].style = value;
@@ -209,7 +217,7 @@ pub fn parse(text: []const u8, diag: *Diagnostic) Error!Config {
             return error.InvalidConfig;
         }
     }
-    for (&raw, &config.line) |*source, *line| {
+    for (raw, config.line) |*source, *line| {
         diag.line = source.left_at;
         line.left = try compile(&config, source.left, diag);
         diag.line = source.right_at;
@@ -223,8 +231,7 @@ fn parseSection(config: *Config, name: []const u8, diag: *Diagnostic) Error!Sect
     if (eql(name, "colors")) return .colors;
     if (std.mem.startsWith(u8, name, "line.")) {
         const n = std.fmt.parseInt(usize, name[5..], 10) catch 0;
-        if (n < 1 or n > max_lines) return fail(diag, "lines are [line.1] and [line.2]");
-        config.defined_lines = @max(config.defined_lines, @as(u16, @intCast(n)));
+        if (n < 1 or n > config.line.len) return fail(diag, "line sections must be consecutive from [line.1]");
         return .{ .line = n - 1 };
     }
     if (std.mem.startsWith(u8, name, "command.")) {
@@ -237,6 +244,34 @@ fn parseSection(config: *Config, name: []const u8, diag: *Diagnostic) Error!Sect
         return .{ .command = config.commands_len - 1 };
     }
     return fail(diag, "unknown section; expected [colors], [line.N] or [command.NAME]");
+}
+
+/// Validates row indices before allocating storage. This rejects a sparse
+/// `[line.65533]` using only storage proportional to the config text.
+fn countRows(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) (Error || std.mem.Allocator.Error)!usize {
+    var indices: std.ArrayList(usize) = .empty;
+    defer indices.deinit(allocator);
+    var number: usize = 0;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |source_line| {
+        number += 1;
+        const line = std.mem.trim(u8, source_line, " \t\r");
+        if (line.len < 2 or line[0] != '[' or line[line.len - 1] != ']') continue;
+        const name = std.mem.trim(u8, line[1 .. line.len - 1], " \t");
+        if (!std.mem.startsWith(u8, name, "line.")) continue;
+        diag.line = number;
+        const suffix = name[5..];
+        if (suffix.len == 0) return fail(diag, "line number must be a positive decimal integer");
+        for (suffix) |byte| if (byte < '0' or byte > '9') return fail(diag, "line number must be a positive decimal integer");
+        const n = std.fmt.parseInt(usize, suffix, 10) catch return fail(diag, "line number must be a positive decimal integer");
+        if (n < 1 or n > max_lines) return fail(diag, "line number must be between 1 and 65533");
+        for (indices.items) |seen| if (seen == n) return fail(diag, "this line section is already defined");
+        try indices.append(allocator, n);
+    }
+    var highest: usize = 0;
+    for (indices.items) |n| highest = @max(highest, n);
+    if (highest != indices.items.len) return fail(diag, "line sections must be consecutive from [line.1]");
+    return highest;
 }
 
 fn compile(config: *Config, text: []const u8, diag: *Diagnostic) Error!Template {
@@ -332,7 +367,6 @@ fn fail(diag: *Diagnostic, message: []const u8) Error {
 
 const example =
     \\# statusbar
-    \\lines = 2
     \\style = fg=text
     \\
     \\[colors]
@@ -353,12 +387,12 @@ const example =
 
 test "a full config parses" {
     var diag: Diagnostic = .{};
-    const config = try parse(example, &diag);
-    try std.testing.expectEqual(@as(?u16, 2), config.lines);
+    var config = try parse(std.testing.allocator, example, &diag);
+    defer config.deinit();
     try std.testing.expectEqualStrings("fg=text", config.style.?);
     try std.testing.expectEqualStrings("#89b4fa", config.colors[0].value);
     try std.testing.expectEqualStrings("─", config.line[0].rule.?);
-    try std.testing.expectEqual(@as(u16, 2), config.defined_lines);
+    try std.testing.expectEqual(@as(u16, 2), config.definedLines());
     try std.testing.expect(config.usesClock());
 
     // load, then the two inline commands in order of first use.
@@ -383,7 +417,8 @@ test "a full config parses" {
 
 test "nested parentheses and escaped hashes in templates" {
     var diag: Diagnostic = .{};
-    const config = try parse("[line.1]\nleft = ##(x) #(echo $(date +%s)) #(unclosed", &diag);
+    var config = try parse(std.testing.allocator, "[line.1]\nleft = ##(x) #(echo $(date +%s)) #(unclosed", &diag);
+    defer config.deinit();
     const parts = config.line[0].left.items();
     try std.testing.expectEqual(@as(usize, 3), parts.len);
     try std.testing.expectEqualStrings("##(x) ", parts[0].text);
@@ -393,9 +428,9 @@ test "nested parentheses and escaped hashes in templates" {
 
 test "errors name the line" {
     const cases = [_]struct { []const u8, usize }{
-        .{ "lines = 3", 1 },
+        .{ "lines = 2", 1 },
         .{ "\n\nposition = bottom", 3 },
-        .{ "[line.3]", 1 },
+        .{ "[line.1]\n[line.3]", 2 },
         .{ "[colours]", 1 },
         .{ "[line.1]\nleft\n", 2 },
         .{ "[command.x]\ninterval = 0", 2 },
@@ -404,8 +439,31 @@ test "errors name the line" {
     };
     for (cases) |case| {
         var diag: Diagnostic = .{};
-        try std.testing.expectError(error.InvalidConfig, parse(case[0], &diag));
+        try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, case[0], &diag));
         try std.testing.expectEqual(case[1], diag.line);
         try std.testing.expect(diag.message.len > 0);
     }
+}
+
+test "rows may be declared in any order but must be consecutive and unique" {
+    var diag: Diagnostic = .{};
+    var config = try parse(std.testing.allocator, "[line.3]\nleft=c\n[line.1]\nleft=a\n[line.2]\nleft=b", &diag);
+    defer config.deinit();
+    try std.testing.expectEqual(@as(usize, 3), config.line.len);
+    try std.testing.expectEqualStrings("a", config.line[0].left.items()[0].text);
+    try std.testing.expectEqualStrings("c", config.line[2].left.items()[0].text);
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.1]\n[line.1]", &diag));
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.65533]", &diag));
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.65534]", &diag));
+}
+
+test "many rows allocate to the actual configured count" {
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(std.testing.allocator);
+    for (1..101) |n| try text.print(std.testing.allocator, "[line.{d}]\nleft = row {d}\n", .{ n, n });
+    var diag: Diagnostic = .{};
+    var config = try parse(std.testing.allocator, text.items, &diag);
+    defer config.deinit();
+    try std.testing.expectEqual(@as(usize, 100), config.line.len);
+    try std.testing.expectEqualStrings("row 100", config.line[99].left.items()[0].text);
 }

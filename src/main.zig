@@ -60,7 +60,7 @@ pub fn main(init: std.process.Init) !u8 {
 /// `statusbar [run]`: the session itself.
 fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
     const lines: ?u16 = if (command.getValue(usize, "lines")) |n| lines: {
-        if (n < 1 or n > 2) return usageError(stderr, command, "--lines must be 1 or 2");
+        if (n < 1 or n > config.max_lines) return usageError(stderr, command, "--lines must be between 1 and 65533");
         break :lines @intCast(n);
     } else null;
     const interval_ms: ?i64 = if (command.getValue(f64, "interval")) |secs| interval: {
@@ -68,6 +68,7 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
         break :interval @intFromFloat(secs * 1000);
     } else null;
     const exec = command.getValue([]const u8, "exec");
+    if (lines != null and exec == null) return usageError(stderr, command, "--lines requires --exec");
     const style = command.getValue([]const u8, "style");
 
     const loaded = loadConfig(arena, io, command.getValue([]const u8, "config"), stderr) catch |err| {
@@ -78,14 +79,14 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
 
     // Precedence: command-line flags, then the config file (or the built-in
     // one), then defaults.
-    const templates = exec == null and cfg.defined_lines > 0;
+    const templates = exec == null and cfg.line.len > 0;
     if (interval_ms) |ms| cfg.interval_ms = ms;
     const child = command.passthrough() orelse &.{};
     const argv = try arena.alloc([]const u8, child.len);
     for (child, argv) |arg, *slot| slot.* = arg;
     const opts: proxy.Options = .{
         .argv = argv,
-        .lines = lines orelse cfg.lines orelse (if (templates) cfg.defined_lines else 1),
+        .lines = lines orelse (if (templates) cfg.definedLines() else 1),
         .command = if (templates) null else exec orelse "date",
         .interval_ms = interval_ms orelse 1000,
         .cfg = cfg,
@@ -145,31 +146,34 @@ fn printCompletion(command: *const zecli.Command, stdout: *Io.Writer, stderr: *I
     return 0;
 }
 
-/// `statusbar set left|right [TEXT...]`: sends the slot's user variable to the
+/// `statusbar set N [TEXT...]`: sends the slot's user variable to the
 /// terminal of the statusbar session this runs in. Words are joined with
 /// spaces, as `echo` would. It writes to /dev/tty rather than stdout, so a
 /// prompt tool capturing stdout never gets the sequence in its prompt.
 fn setSlot(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
     const args = command.positionals();
-    const name: []const u8 = if (std.mem.eql(u8, args[0], "left"))
-        "StatusBarLeft"
-    else if (std.mem.eql(u8, args[0], "right"))
-        "StatusBarRight"
-    else
-        return usageError(stderr, command, "SLOT must be left or right");
-
-    // Outside a session there is no bar to update, and nothing is written.
-    if (!@import("environment.zig").contains("STATUSBAR_LINES")) return 0;
+    const slot = parseSlot(args[0]) orelse return usageError(stderr, command, "SLOT must be a positive decimal integer");
 
     var text: std.ArrayList(u8) = .empty;
     for (args[1..], 0..) |word, n| {
         if (n > 0) try text.append(arena, ' ');
         try text.appendSlice(arena, word);
     }
+    for (text.items) |*byte| {
+        if (byte.* == '\t' or byte.* == '\n' or byte.* == '\r') byte.* = ' ';
+    }
+    if (std.mem.trim(u8, text.items, " \t\r\n").len == 0) text.clearRetainingCapacity();
+    if (text.items.len > @import("output.zig").max_value) return usageError(stderr, command, "TEXT must be at most 1024 bytes");
+
+    // Outside a session there is no bar to update, and nothing is written.
+    const line_text = @import("environment.zig").get("STATUSBAR_LINES") orelse return 0;
+    const line_count = std.fmt.parseInt(usize, line_text, 10) catch return usageError(stderr, command, "STATUSBAR_LINES is malformed");
+    const max_slot = std.math.mul(usize, line_count, 2) catch return usageError(stderr, command, "STATUSBAR_LINES is malformed");
+    if (slot > max_slot) return usageError(stderr, command, "SLOT does not exist in this session");
     const encoder = std.base64.standard.Encoder;
     const encoded = try arena.alloc(u8, encoder.calcSize(text.items.len));
     _ = encoder.encode(encoded, text.items);
-    const sequence = try std.fmt.allocPrint(arena, "\x1b]1337;SetUserVar={s}={s}\x07", .{ name, encoded });
+    const sequence = try std.fmt.allocPrint(arena, "\x1b]1337;SetUserVar=StatusBarSlot{d}={s}\x07", .{ slot, encoded });
 
     const tty = Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .write_only }) catch return 0;
     defer tty.close(io);
@@ -182,13 +186,19 @@ fn setSlot(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stde
 fn shellInit(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
     const args = command.positionals();
     if (!std.mem.eql(u8, args[0], "zsh")) return usageError(stderr, command, "init supports zsh");
-    if (!@import("environment.zig").contains("STATUSBAR_LINES")) return 0;
+    const slot = command.getValue(usize, "starship-slot") orelse 3;
+    if (slot < 1) return usageError(stderr, command, "--starship-slot must be a positive decimal integer");
+    const line_text = @import("environment.zig").get("STATUSBAR_LINES") orelse return 0;
+    const line_count = std.fmt.parseInt(usize, line_text, 10) catch return usageError(stderr, command, "STATUSBAR_LINES is malformed");
+    const max_slot = std.math.mul(usize, line_count, 2) catch return usageError(stderr, command, "STATUSBAR_LINES is malformed");
+    if (slot > max_slot) return usageError(stderr, command, "--starship-slot does not exist in this session");
 
     // Call this exact binary, as starship's own init does, so the hook works
     // whether or not statusbar is on PATH.
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const self_path = @import("sys.zig").selfExePath(io, &path_buf) orelse "statusbar";
-    try stdout.writeAll(try std.mem.replaceOwned(u8, arena, zsh_init, "@STATUSBAR@", try shellQuote(arena, self_path)));
+    const with_path = try std.mem.replaceOwned(u8, arena, zsh_init, "@STATUSBAR@", try shellQuote(arena, self_path));
+    try stdout.writeAll(try std.mem.replaceOwned(u8, arena, with_path, "@SLOT@", try std.fmt.allocPrint(arena, "{d}", .{slot})));
     try stdout.flush();
     return 0;
 }
@@ -196,6 +206,13 @@ fn shellInit(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, st
 /// Single-quotes a word for the shell.
 fn shellQuote(arena: std.mem.Allocator, word: []const u8) ![]const u8 {
     return std.fmt.allocPrint(arena, "'{s}'", .{try std.mem.replaceOwned(u8, arena, word, "'", "'\\''")});
+}
+
+fn parseSlot(text: []const u8) ?usize {
+    if (text.len == 0) return null;
+    for (text) |byte| if (byte < '0' or byte > '9') return null;
+    const n = std.fmt.parseInt(usize, text, 10) catch return null;
+    return if (n > 0) n else null;
 }
 
 const zsh_init =
@@ -220,7 +237,7 @@ const zsh_init =
     \\    fi
     \\    # Starship marks escape codes with %{ %} and doubles literal percent
     \\    # signs for zsh; prompt expansion turns that back into plain output.
-    \\    @STATUSBAR@ set left "${(%)rest}"
+    \\    @STATUSBAR@ set @SLOT@ "${(%)rest}"
     \\    print -rn -- "$newline$out"
     \\  }
     \\
@@ -249,7 +266,7 @@ const LoadedConfig = struct {
 fn builtInConfig(arena: std.mem.Allocator) !LoadedConfig {
     const cfg = try arena.create(config.Config);
     var diag: config.Diagnostic = .{};
-    cfg.* = try config.parse(default_config, &diag);
+    cfg.* = try config.parse(arena, default_config, &diag);
     return .{ .path = null, .text = default_config, .config = cfg };
 }
 
@@ -274,7 +291,8 @@ fn loadConfig(arena: std.mem.Allocator, io: Io, flag: ?[]const u8, stderr: *Io.W
     if (text.ptr == default_config.ptr) source = null;
     const cfg = try arena.create(config.Config);
     var diag: config.Diagnostic = .{};
-    cfg.* = config.parse(text, &diag) catch {
+    cfg.* = config.parse(arena, text, &diag) catch |err| {
+        if (err == error.OutOfMemory) return err;
         if (diag.line > 0) {
             try stderr.print("statusbar: {s}:{d}: {s}\n", .{ path, diag.line, diag.message });
         } else {
@@ -309,6 +327,7 @@ test {
 
 test "the built-in config parses" {
     var diag: config.Diagnostic = .{};
-    const cfg = try config.parse(default_config, &diag);
-    try std.testing.expectEqual(@as(u16, 2), cfg.defined_lines);
+    var cfg = try config.parse(std.testing.allocator, default_config, &diag);
+    defer cfg.deinit();
+    try std.testing.expectEqual(@as(u16, 2), cfg.definedLines());
 }

@@ -22,21 +22,26 @@ const max_seq = 64;
 const max_params = 16;
 
 /// iTerm2's user variables, which WezTerm understands too. The proxy keeps
-/// the two it owns and forwards every other OSC.
+/// the numbered slot variables it owns and forwards every other OSC.
 ///
-///     ESC ] 1337 ; SetUserVar=StatusBarLeft=<base64> BEL
+///     ESC ] 1337 ; SetUserVar=StatusBarSlot3=<base64> BEL
 const user_var_prefix = "1337;SetUserVar=StatusBar";
 pub const max_value = 1024;
 
 const esc = 0x1b;
 
-pub const Slot = enum(u1) { Left, Right };
+pub const UpdateHandler = struct {
+    context: *anyopaque,
+    callback: *const fn (*anyopaque, usize, []const u8) void,
+};
 
 pub const Output = struct {
     /// Bar rows below the child. With none, nothing is rewritten.
     bar: u16,
     /// The child's screen height.
     rows: u16,
+    max_slot: usize = 2,
+    update_handler: ?UpdateHandler = null,
 
     /// DECOM: while set, the child addresses rows relative to its own margins,
     /// which already exclude the bar.
@@ -54,7 +59,6 @@ pub const Output = struct {
     /// needs to know what to put back.
     autowrap: bool = true,
 
-    /// The latest StatusBarLeft and StatusBarRight values.
     values: [2][max_value]u8 = undefined,
     value_lens: [2]usize = .{ 0, 0 },
     value_changed: [2]bool = .{ false, false },
@@ -294,28 +298,38 @@ pub const Output = struct {
 
     /// Returns a slot value set since the last call, or null if there is none.
     /// An empty value clears the slot.
-    pub fn takeValue(self: *Output, slot: Slot) ?[]const u8 {
-        const n = @intFromEnum(slot);
-        if (!self.value_changed[n]) return null;
-        self.value_changed[n] = false;
-        return self.values[n][0..self.value_lens[n]];
+    pub fn takeValue(self: *Output, slot: usize) ?[]const u8 {
+        if (slot >= self.values.len or !self.value_changed[slot]) return null;
+        self.value_changed[slot] = false;
+        return self.values[slot][0..self.value_lens[slot]];
     }
 
-    /// `StatusBarLeft=<base64>` or `StatusBarRight=<base64>`. Anything else
-    /// under the prefix, or a value that does not decode, is dropped.
+    /// `StatusBarSlotN=<base64>`. Anything else under the prefix, or a value
+    /// that does not decode, is dropped without exposing the owned payload.
     fn finishUserVar(self: *Output) void {
         if (self.payload_overflow) return;
         const payload = self.payload[0..self.payload_len];
         const eq = std.mem.indexOfScalar(u8, payload, '=') orelse return;
-        const slot = std.meta.stringToEnum(Slot, payload[0..eq]) orelse return;
+        const name = payload[0..eq];
+        if (!std.mem.startsWith(u8, name, "Slot")) return;
+        const digits = name[4..];
+        if (digits.len == 0 or (digits.len > 1 and digits[0] == '0')) return;
+        for (digits) |byte| if (byte < '0' or byte > '9') return;
+        const slot = std.fmt.parseInt(usize, digits, 10) catch return;
+        if (slot < 1 or slot > self.max_slot) return;
         const encoded = payload[eq + 1 ..];
         const decoder = std.base64.standard.Decoder;
         const size = decoder.calcSizeForSlice(encoded) catch return;
-        const n = @intFromEnum(slot);
-        if (size > self.values[n].len) return;
-        decoder.decode(self.values[n][0..size], encoded) catch return;
-        self.value_lens[n] = size;
-        self.value_changed[n] = true;
+        if (size > max_value) return;
+        var decoded: [max_value]u8 = undefined;
+        decoder.decode(decoded[0..size], encoded) catch return;
+        if (self.update_handler) |handler| {
+            handler.callback(handler.context, slot - 1, decoded[0..size]);
+        } else if (slot <= self.values.len) {
+            @memcpy(self.values[slot - 1][0..size], decoded[0..size]);
+            self.value_lens[slot - 1] = size;
+            self.value_changed[slot - 1] = true;
+        }
     }
 
     /// Carries an incomplete scalar over read boundaries. Only the leading
@@ -677,17 +691,17 @@ test "an unrestored cursor save is tracked" {
 
 test "status bar user variables are taken and never forwarded" {
     // "left side" and "right" in base64.
-    const input = "a\x1b]1337;SetUserVar=StatusBarLeft=bGVmdCBzaWRl\x07b" ++
-        "\x1b]1337;SetUserVar=StatusBarRight=cmlnaHQ=\x1b\\c";
+    const input = "a\x1b]1337;SetUserVar=StatusBarSlot1=bGVmdCBzaWRl\x07b" ++
+        "\x1b]1337;SetUserVar=StatusBarSlot2=cmlnaHQ=\x1b\\c";
     var chunk: usize = 1;
     while (chunk <= input.len) : (chunk += 1) {
         var out: Output = .{ .bar = 1, .rows = 10 };
         const got = try translate(&out, input, chunk);
         defer std.testing.allocator.free(got);
         try std.testing.expectEqualStrings("abc", got);
-        try std.testing.expectEqualStrings("left side", out.takeValue(.Left).?);
-        try std.testing.expectEqualStrings("right", out.takeValue(.Right).?);
-        try std.testing.expect(out.takeValue(.Left) == null);
+        try std.testing.expectEqualStrings("left side", out.takeValue(0).?);
+        try std.testing.expectEqualStrings("right", out.takeValue(1).?);
+        try std.testing.expect(out.takeValue(0) == null);
         try std.testing.expect(out.atBoundary());
     }
 }
@@ -714,11 +728,53 @@ test "other OSCs and user variables pass through" {
 
 test "an empty value clears and a bad one is ignored" {
     var out: Output = .{ .bar = 1, .rows = 10 };
-    const got = try translate(&out, "\x1b]1337;SetUserVar=StatusBarLeft=\x07\x1b]1337;SetUserVar=StatusBarRight=%%%\x07\x1b]1337;SetUserVar=StatusBarMiddle=eA==\x07", 3);
+    const got = try translate(&out, "\x1b]1337;SetUserVar=StatusBarSlot1=\x07\x1b]1337;SetUserVar=StatusBarSlot2=%%%\x07\x1b]1337;SetUserVar=StatusBarMiddle=eA==\x07\x1b]1337;SetUserVar=StatusBarLeft=eA==\x07\x1b]1337;SetUserVar=StatusBarRight=eA==\x07", 3);
     defer std.testing.allocator.free(got);
     try std.testing.expectEqualStrings("", got);
-    try std.testing.expectEqualStrings("", out.takeValue(.Left).?);
-    try std.testing.expect(out.takeValue(.Right) == null);
+    try std.testing.expectEqualStrings("", out.takeValue(0).?);
+    try std.testing.expect(out.takeValue(1) == null);
+}
+
+test "malformed out of range and oversized numbered updates are dropped" {
+    const input = "\x1b]1337;SetUserVar=StatusBarSlot0=eA==\x07" ++
+        "\x1b]1337;SetUserVar=StatusBarSlot+1=eA==\x07" ++
+        "\x1b]1337;SetUserVar=StatusBarSlot999999999999999999999999=eA==\x07" ++
+        "\x1b]1337;SetUserVar=StatusBarSlot3=eA==\x07" ++
+        "\x1b]1337;SetUserVar=StatusBarSlot1=" ++ ("A" ** 1400) ++ "\x07" ++
+        "\x1b]1337;SetUserVar=StatusBarSlot1=" ++ ("A" ** 2100) ++ "\x07";
+    var out: Output = .{ .bar = 1, .rows = 10, .max_slot = 2 };
+    const got = try translate(&out, input, 1);
+    defer std.testing.allocator.free(got);
+    try std.testing.expectEqualStrings("", got);
+    try std.testing.expect(out.takeValue(0) == null);
+    try std.testing.expect(out.takeValue(1) == null);
+}
+
+test "numbered slot updates are delivered in order from one read" {
+    const SlotCollector = struct {
+        slots: [6]usize = undefined,
+        values: [6][16]u8 = undefined,
+        lens: [6]usize = @splat(0),
+        len: usize = 0,
+
+        fn receive(context: *anyopaque, slot: usize, value: []const u8) void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.slots[self.len] = slot;
+            @memcpy(self.values[self.len][0..value.len], value);
+            self.lens[self.len] = value.len;
+            self.len += 1;
+        }
+    };
+    var updates: SlotCollector = .{};
+    var out: Output = .{ .bar = 3, .rows = 21, .max_slot = 6, .update_handler = .{ .context = &updates, .callback = SlotCollector.receive } };
+    var sink: Collector = .{};
+    defer sink.bytes.deinit(std.testing.allocator);
+    out.feed("\x1b]1337;SetUserVar=StatusBarSlot1=b25l\x07\x1b]1337;SetUserVar=StatusBarSlot2=dHdv\x1b\\\x1b]1337;SetUserVar=StatusBarSlot3=dGhyZWU=\x07\x1b]1337;SetUserVar=StatusBarSlot4=Zm91cg==\x07\x1b]1337;SetUserVar=StatusBarSlot5=Zml2ZQ==\x07\x1b]1337;SetUserVar=StatusBarSlot6=c2l4\x07", &sink);
+    try std.testing.expectEqual(@as(usize, 6), updates.len);
+    for (0..6) |n| try std.testing.expectEqual(n, updates.slots[n]);
+    try std.testing.expectEqualStrings("one", updates.values[0][0..updates.lens[0]]);
+    try std.testing.expectEqualStrings("six", updates.values[5][0..updates.lens[5]]);
+    try std.testing.expectEqual(@as(usize, 0), sink.bytes.items.len);
 }
 
 test "autowrap is tracked" {

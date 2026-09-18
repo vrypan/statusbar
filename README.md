@@ -1,8 +1,9 @@
 # statusbar
 
-A status bar for any terminal. `statusbar` runs your shell in a pty one or
-two rows shorter than the window, and keeps a bar in the rows it gave up at
-the bottom. Full-screen programs and scrollback keep working.
+A status bar for any terminal. `statusbar` runs your shell in a smaller pty
+and keeps configured rows at the bottom of the window. The bar yields rows
+when the terminal is too short. Full-screen programs and scrollback keep
+working.
 
 ```
 ❯ make test

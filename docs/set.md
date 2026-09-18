@@ -1,62 +1,57 @@
 # Updating the bar from inside a session
 
-Programs running in a statusbar session can replace the left or right slot
-of the bar's last text line, meaning the last line that isn't a rule:
+Each configured row has two numbered slots:
+
+| Row | Left | Right |
+|-----|------|-------|
+| 1   | 1    | 2     |
+| 2   | 3    | 4     |
+| 3   | 5    | 6     |
+
+`statusbar set N [TEXT...]` replaces a slot. With no text, or text containing
+only whitespace, it restores the config or `--exec` value:
 
 ```sh
-statusbar set left  "$(git branch --show-current)"
-statusbar set right "build ✓"
-statusbar set right                     # restore the template
+statusbar set 3 "$(git branch --show-current)"
+statusbar set 4 "build ✓"
+statusbar set 4
 ```
 
-- Words are joined with spaces, as `echo` would.
-- An empty value restores what the config or `--exec` put in the slot.
-- Values stay on one line: surrounding line breaks are dropped, and inner
-  ones and tabs become spaces.
-- [Markup](config.md#markup) and raw SGR colors work in values.
-- Outside a statusbar session, the command writes nothing and exits
-  successfully, so hooks can call it unconditionally.
+Slots exist for every desired row, including rows temporarily hidden because
+the terminal is short. Updating a hidden slot persists and appears when its
+row becomes visible. A slot outside the session's configured range is an
+error and never creates another row.
 
-The command writes to `/dev/tty`, not stdout, so it also works from tools
-that capture a command's output, such as a starship custom module:
+Words are joined with spaces. Tabs and line breaks become spaces, while
+quoted leading and trailing padding is preserved. Values are limited to 1024
+bytes. Markup and raw SGR colors work in values. Outside a statusbar session,
+a syntactically valid command writes nothing and exits successfully, so shell
+hooks can call it unconditionally.
+
+The command writes to `/dev/tty`, not stdout, so it also works from tools that
+capture command output:
 
 ```toml
 [custom.statusbar]
-command = "statusbar set right \"$(git branch --show-current)\""
-when    = true
+command = "statusbar set 4 \"$(git branch --show-current)\""
+when = true
 ```
-
-Or on every prompt in zsh:
-
-```zsh
-statusbar_precmd() { statusbar set right "$(git branch --show-current)"; }
-precmd_functions+=(statusbar_precmd)
-```
-
-To move starship's whole prompt into the bar, use
-[`statusbar init zsh`](starship.md) instead.
 
 ## The escape sequence
 
-`statusbar set` sends iTerm2's user-variable sequence, which WezTerm also
-understands:
+The one-based slot number is part of an iTerm2-style user variable:
 
 ```
-ESC ] 1337 ; SetUserVar=StatusBarLeft=<base64> BEL
-ESC ] 1337 ; SetUserVar=StatusBarRight=<base64> BEL
+ESC ] 1337 ; SetUserVar=StatusBarSlotN=<base64> BEL
 ```
 
-The value is base64-encoded, so it can hold any bytes. ST (`ESC \`) works as
-the terminator too. Any program can send the sequence directly:
+ST (`ESC \\`) also terminates it. For example:
 
 ```sh
-printf '\e]1337;SetUserVar=StatusBarRight=%s\a' "$(printf %s 'build ✓' | base64 | tr -d '\n')"
+printf '\e]1337;SetUserVar=StatusBarSlot4=%s\a' "$(printf %s 'build ✓' | base64 | tr -d '\n')"
 ```
 
-statusbar keeps `StatusBarLeft` and `StatusBarRight` for itself and forwards
-every other OSC, including other user variables, to the terminal. Outside
-statusbar, terminals ignore the sequence or store it as a user variable.
-
-Anything that can print to the terminal can send these, including a file
-shown with `cat` or a remote host over ssh, so treat bar content as
-display-only.
+statusbar consumes valid numbered slot variables and drops malformed or
+out-of-range variables under its `StatusBar` namespace. It forwards unrelated
+OSC sequences and user variables to the terminal. Updates are one-way and
+have no acknowledgement.

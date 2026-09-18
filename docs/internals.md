@@ -6,7 +6,7 @@ runs, and forwards both directions.
 ```
 terminal emulator     the child's screen, and the bar below it
     |
-statusbar             allocates a pty 1 or 2 rows shorter than the terminal
+statusbar             allocates a pty shorter by the visible bar rows
     |
 shell
 ```
@@ -27,10 +27,11 @@ shell
   leaves out the bar's rows, and mouse clicks on the bar are dropped.
 - The bar is painted with autowrap off, so text that the terminal draws wider
   than statusbar measured is clipped at the right edge rather than wrapping.
-- `StatusBarLeft` and `StatusBarRight` user variables are taken out of the
+- Numbered `StatusBarSlotN` user variables are taken out of the
   output stream; see [set.md](set.md).
-- On a resize the child's pty follows the terminal, and the bar gives up its
-  rows when the terminal is too short to spare them.
+- On a resize the child's pty follows the terminal. The visible row count is
+  the smaller of the configured count and the terminal height minus two.
+  Hidden rows retain their content and numbered-slot overrides.
 
 ## Limitations
 
