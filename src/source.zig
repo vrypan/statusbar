@@ -257,7 +257,7 @@ fn currentTime() Tm {
 /// copied as is, without a trip through libc.
 fn formatTime(w: *std.Io.Writer, text: []const u8, tm: *const Tm) void {
     if (std.mem.indexOfScalar(u8, text, '%') == null) {
-        w.writeAll(text) catch {};
+        writeOneLine(w, text);
         return;
     }
     var format: [1024]u8 = undefined;
@@ -266,7 +266,16 @@ fn formatTime(w: *std.Io.Writer, text: []const u8, tm: *const Tm) void {
     format[text.len] = 0;
     var out: [2048]u8 = undefined;
     const n = strftime(&out, out.len, format[0..text.len :0], tm);
-    w.writeAll(out[0..n]) catch {};
+    writeOneLine(w, out[0..n]);
+}
+
+/// Templates always occupy one status-bar row. A block template may be laid
+/// out over several source lines, so fold its layout whitespace at render time.
+fn writeOneLine(w: *std.Io.Writer, text: []const u8) void {
+    for (text) |byte| switch (byte) {
+        '\t', '\n', '\r' => w.writeByte(' ') catch return,
+        else => w.writeByte(byte) catch return,
+    };
 }
 
 test "strftime conversions and literal percent signs" {
@@ -281,6 +290,9 @@ test "strftime conversions and literal percent signs" {
     w.end = 0;
     formatTime(&w, "plain #[bold]", &tm);
     try std.testing.expectEqualStrings("plain #[bold]", w.buffered());
+    w.end = 0;
+    formatTime(&w, "first\n\tsecond", &tm);
+    try std.testing.expectEqualStrings("first  second", w.buffered());
 }
 
 test "values stay on one line in their slot" {

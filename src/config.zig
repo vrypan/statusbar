@@ -22,7 +22,8 @@
 //! `interval` is the refresh for commands that don't set their own, in
 //! seconds. Lines starting with `#` or `;` are comments; a `#` later on a line is part
 //! of the value, since markup and colors use it. A value in double quotes
-//! keeps its leading and trailing spaces.
+//! keeps its leading and trailing spaces. A `value = |` block takes its
+//! following indented lines as its value.
 //!
 //! Templates mix text, markup and command output. `#(name)` is the first line
 //! of the named command's output; `#(anything else)` runs as a shell command
@@ -139,6 +140,7 @@ const RawLine = struct {
 };
 
 pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) (Error || std.mem.Allocator.Error)!Config {
+    const Input = struct { source: []const u8, number: usize };
     const row_count = try countRows(allocator, text, diag);
     var config: Config = .{ .allocator = allocator, .line = try allocator.alloc(Line, row_count) };
     errdefer config.deinit();
@@ -150,9 +152,19 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
 
     var number: usize = 0;
     var it = std.mem.splitScalar(u8, text, '\n');
-    while (it.next()) |source_line| {
-        number += 1;
+    var queued: ?Input = null;
+    while (true) {
+        const input = if (queued) |item| block: {
+            queued = null;
+            break :block item;
+        } else block: {
+            const source_line = it.next() orelse break;
+            number += 1;
+            break :block Input{ .source = source_line, .number = number };
+        };
+        number = input.number;
         diag.line = number;
+        const source_line = input.source;
         const line = std.mem.trim(u8, source_line, " \t\r");
         if (line.len == 0 or line[0] == '#' or line[0] == ';') continue;
 
@@ -164,8 +176,50 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
 
         const eq = std.mem.indexOfScalar(u8, line, '=') orelse return fail(diag, "expected key = value");
         const key = std.mem.trim(u8, line[0..eq], " \t");
-        const value = unquote(std.mem.trim(u8, line[eq + 1 ..], " \t"));
+        var raw_value = std.mem.trim(u8, line[eq + 1 ..], " \t");
         if (key.len == 0) return fail(diag, "missing key before =");
+
+        if (eql(raw_value, "|")) {
+            const opening_line = number;
+            var start: ?usize = null;
+            var end: usize = undefined;
+            while (it.next()) |continued_source_line| {
+                number += 1;
+                const continued = std.mem.trim(u8, continued_source_line, " \t\r");
+                const indented = continued_source_line.len > 0 and (continued_source_line[0] == ' ' or continued_source_line[0] == '\t');
+                if (continued.len > 0 and !indented) {
+                    queued = .{ .source = continued_source_line, .number = number };
+                    break;
+                }
+                if (start == null) start = @intFromPtr(continued_source_line.ptr) - @intFromPtr(text.ptr);
+                end = @intFromPtr(continued_source_line.ptr) - @intFromPtr(text.ptr) + continued_source_line.len;
+            }
+            if (start == null) {
+                diag.line = opening_line;
+                return fail(diag, "a block value needs indented content");
+            }
+            raw_value = text[start.?..end];
+        }
+
+        // A quoted value can contain a shell command formatted over several
+        // physical lines. All source lines are slices of `text`, so the
+        // completed value can still borrow its storage without allocation.
+        if (raw_value.len > 0 and raw_value[0] == '"' and !isClosedQuote(raw_value)) {
+            const start = @intFromPtr(raw_value.ptr) - @intFromPtr(text.ptr);
+            var closed = false;
+            while (it.next()) |continued_source_line| {
+                number += 1;
+                const continued = std.mem.trim(u8, continued_source_line, " \t\r");
+                if (endsWithQuote(continued)) {
+                    const end = @intFromPtr(continued.ptr) - @intFromPtr(text.ptr) + continued.len;
+                    raw_value = text[start..end];
+                    closed = true;
+                    break;
+                }
+            }
+            if (!closed) return fail(diag, "unterminated quoted value");
+        }
+        const value = unquote(raw_value);
 
         switch (section) {
             .root => {
@@ -253,9 +307,22 @@ fn countRows(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
     defer indices.deinit(allocator);
     var number: usize = 0;
     var it = std.mem.splitScalar(u8, text, '\n');
+    var block = false;
     while (it.next()) |source_line| {
         number += 1;
+        if (block) {
+            const trimmed = std.mem.trim(u8, source_line, " \t\r");
+            const indented = source_line.len > 0 and (source_line[0] == ' ' or source_line[0] == '\t');
+            if (trimmed.len == 0 or indented) continue;
+            block = false;
+        }
         const line = std.mem.trim(u8, source_line, " \t\r");
+        if (std.mem.indexOfScalar(u8, line, '=')) |eq| {
+            if (eql(std.mem.trim(u8, line[eq + 1 ..], " \t"), "|")) {
+                block = true;
+                continue;
+            }
+        }
         if (line.len < 2 or line[0] != '[' or line[line.len - 1] != ']') continue;
         const name = std.mem.trim(u8, line[1 .. line.len - 1], " \t");
         if (!std.mem.startsWith(u8, name, "line.")) continue;
@@ -354,6 +421,14 @@ fn unquote(value: []const u8) []const u8 {
     return value;
 }
 
+fn isClosedQuote(value: []const u8) bool {
+    return value.len >= 2 and value[0] == '"' and value[value.len - 1] == '"';
+}
+
+fn endsWithQuote(value: []const u8) bool {
+    return value.len > 0 and value[value.len - 1] == '"';
+}
+
 fn eql(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
 }
@@ -424,6 +499,76 @@ test "nested parentheses and escaped hashes in templates" {
     try std.testing.expectEqualStrings("##(x) ", parts[0].text);
     try std.testing.expectEqualStrings("echo $(date +%s)", config.commands[parts[1].command].run);
     try std.testing.expectEqualStrings(" #(unclosed", parts[2].text);
+}
+
+test "quoted values may span physical lines" {
+    var diag: Diagnostic = .{};
+    var config = try parse(std.testing.allocator,
+        \\[command.x]
+        \\run = "first command ||
+        \\  second command"
+        \\interval = 10
+    , &diag);
+    defer config.deinit();
+    try std.testing.expectEqualStrings("first command ||\n  second command", config.commands[0].run);
+    try std.testing.expectEqual(@as(i64, 10_000), config.commandInterval(0));
+}
+
+test "blocks preserve lines and end at the next key" {
+    var diag: Diagnostic = .{};
+    var config = try parse(std.testing.allocator,
+        \\[command.x]
+        \\run = |
+        \\  first command || exit
+        \\  second command
+        \\interval = 10
+        \\[line.1]
+        \\right = #(x)
+    , &diag);
+    defer config.deinit();
+    try std.testing.expectEqualStrings("  first command || exit\n  second command", config.commands[0].run);
+    try std.testing.expectEqual(@as(i64, 10_000), config.commandInterval(0));
+}
+
+test "command blocks do not create line sections" {
+    var diag: Diagnostic = .{};
+    var config = try parse(std.testing.allocator,
+        \\[command.x]
+        \\run = |
+        \\  printf '[line.999]'
+        \\[line.1]
+        \\left = #(x)
+    , &diag);
+    defer config.deinit();
+    try std.testing.expectEqual(@as(u16, 1), config.definedLines());
+}
+
+test "an empty command block is rejected" {
+    var diag: Diagnostic = .{};
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[command.x]\nrun = |", &diag));
+    try std.testing.expectEqual(@as(usize, 2), diag.line);
+    try std.testing.expectEqualStrings("a block value needs indented content", diag.message);
+}
+
+test "line templates accept block values" {
+    var diag: Diagnostic = .{};
+    var config = try parse(std.testing.allocator,
+        \\[line.1]
+        \\right = |
+        \\  #[bold]first
+        \\  second
+    , &diag);
+    defer config.deinit();
+    const parts = config.line[0].right.items();
+    try std.testing.expectEqual(@as(usize, 1), parts.len);
+    try std.testing.expectEqualStrings("  #[bold]first\n  second", parts[0].text);
+}
+
+test "an unclosed quoted value reports its opening line" {
+    var diag: Diagnostic = .{};
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[command.x]\nrun = \"never closed", &diag));
+    try std.testing.expectEqual(@as(usize, 2), diag.line);
+    try std.testing.expectEqualStrings("unterminated quoted value", diag.message);
 }
 
 test "errors name the line" {

@@ -88,6 +88,19 @@ narrow, the right slot is clipped first; the left slot is kept longest.
 | `run`      | shell command, run with `/bin/sh -c`                        |
 | `interval` | seconds between runs (default: the top-level `interval`)    |
 
+For a readable multi-line value, use `= |` followed by indented lines. The
+block ends at the next unindented key or section. Commands retain their line
+breaks for the shell; line templates fold line breaks and tabs into spaces
+when rendered. Typed values such as `interval` still need one valid value.
+
+```ini
+[command.example]
+run = |
+  first-command || exit
+  second-command
+interval = 60
+```
+
 The first line of the latest output is used. Each command runs on its own
 schedule, so a slow one never holds up the clock or the others; one that
 runs past its interval (at least 5 seconds) is killed.
@@ -110,6 +123,7 @@ Templates mix text, markup and command output:
 ## Syntax
 
 - Wrap a value in double quotes to keep leading or trailing spaces.
+- Any value may use a `|` block; see [commands](#commandname) for its syntax.
 - Lines starting with `#` or `;` are comments. A `#` anywhere else is part of
   the value, since markup and colors use it, so a comment can't follow a
   value on the same line.
