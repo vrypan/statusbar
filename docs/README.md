@@ -115,6 +115,13 @@ and language versions—into a bar slot:
 eval "$(statusbar init zsh)"
 ```
 
+For Fish, initialize Starship first:
+
+```fish
+starship init fish | source
+statusbar init fish | source
+```
+
 By default this uses slot 3, the left side of line 2. Choose a different slot
 when designing a larger layout:
 

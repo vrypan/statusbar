@@ -59,6 +59,14 @@ To put starship's prompt in the bar, add this to `~/.zshrc`:
 eval "$(statusbar init zsh)"
 ```
 
+Fish uses its native prompt function; put these after one another in
+`~/.config/fish/config.fish`:
+
+```fish
+starship init fish | source
+statusbar init fish | source
+```
+
 ## Documentation
 
 Start with the [user guide](docs/README.md): single-command bars, configured

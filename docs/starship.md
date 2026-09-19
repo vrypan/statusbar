@@ -44,6 +44,26 @@ character still turns red after a failed command and follows vi keymaps.
 
 Run `statusbar init zsh` inside a session to read the code it installs.
 
+## Fish
+
+Fish has a native prompt function, so it does not need Bash-style command
+traps. Initialize Starship first, then replace its left prompt with statusbar's
+splitter in `~/.config/fish/config.fish`:
+
+```fish
+starship init fish | source
+statusbar init fish | source
+```
+
+The same `--starship-slot N` option selects another existing slot:
+
+```fish
+statusbar init fish --starship-slot 5 | source
+```
+
+The integration keeps Starship's final prompt line and moves preceding lines
+to the bar. Starship's right prompt remains untouched.
+
 ## Doing it by hand
 
 The sections below build the same thing from parts, for when you want a

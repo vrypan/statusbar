@@ -165,6 +165,45 @@ def check_zsh(binary):
     print("zsh -f integration passed")
 
 
+def check_fish(binary):
+    fish = shutil.which("fish")
+    if fish is None:
+        print("fish integration skipped: fish unavailable")
+        return
+
+    env = os.environ.copy()
+    env["STATUSBAR_LINES"] = "3"
+    quoted_binary = shlex.quote(binary)
+    with tempfile.TemporaryDirectory() as directory:
+        starship = os.path.join(directory, "starship")
+        with open(starship, "w", encoding="utf-8") as file:
+            file.write("#!/bin/sh\ncase $STARSHIP_TEST_MODE in\n  multi) printf 'bar%%literal\\nprompt' ;;\n  one) printf 'one%%literal' ;;\nesac\n")
+        os.chmod(starship, 0o755)
+        fenv = env.copy()
+        fenv["PATH"] = directory + os.pathsep + fenv.get("PATH", "")
+
+        for slot, option in ((3, ""), (5, "--starship-slot 5")):
+            script = (
+                f"set -gx STARSHIP_TEST_MODE multi; {quoted_binary} init fish {option} | source; "
+                "fish_prompt"
+            )
+            code, data = capture_pty([fish, "-N", "-c", script], fenv)
+            assert code == 0, data
+            assert osc_value(data, slot) == b"bar%literal", data
+            assert b"prompt" in data
+
+        script = (
+            f"set -gx STARSHIP_TEST_MODE one; {quoted_binary} init fish | source; "
+            "fish_prompt"
+        )
+        code, data = capture_pty([fish, "-N", "-c", script], fenv)
+        assert code == 0, data
+        assert b"SetUserVar=StatusBarSlot" not in data
+        assert b"one%literal" in data, data
+
+    print("fish integration passed")
+
+
 def stop(pid, fd):
     try:
         os.write(fd, b"EXIT\n")
@@ -203,6 +242,7 @@ def main():
     assert b"STATUSBAR_LINES is malformed" in invalid.stderr
 
     check_zsh(binary)
+    check_fish(binary)
     config = """\
 [line.1]
 left = one

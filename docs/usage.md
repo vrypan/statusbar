@@ -3,7 +3,7 @@
 ```
 statusbar [run] [options] [-- COMMAND...]
 statusbar set <N> [TEXT...]
-eval "$(statusbar init zsh [--starship-slot N])"
+statusbar init <zsh|fish> [--starship-slot N]
 statusbar config [--path] [--default | --config PATH]
 statusbar completion <bash|zsh|fish>
 ```
@@ -40,8 +40,8 @@ session. See [set.md](set.md).
 
 ## `init`
 
-`statusbar init zsh` prints the zsh integration that moves starship's prompt
-into slot 3. `--starship-slot N` selects another slot. See
+`statusbar init zsh` or `statusbar init fish` prints integration that moves
+Starship's prompt into slot 3. `--starship-slot N` selects another slot. See
 [starship.md](starship.md).
 
 ## `config`

@@ -3,7 +3,7 @@
 //!
 //!     statusbar [run] [options] [-- COMMAND...]
 //!     statusbar set <N> [TEXT...]
-//!     statusbar init zsh [--starship-slot N]
+//!     statusbar init <zsh|fish> [--starship-slot N]
 //!     statusbar config [--path] [--default | --config PATH]
 //!     statusbar completion <bash|zsh|fish>
 
@@ -86,9 +86,9 @@ const commands = [_]zecli.CommandSpec{
     .{
         .name = "init",
         .description = "Print shell code that moves starship's prompt into the bar",
-        .usage = "eval \"$(statusbar init zsh)\"",
+        .usage = "statusbar init <zsh|fish> [--starship-slot N]",
         .arguments = &.{
-            .{ .name = "SHELL", .description = "zsh", .required = true, .completion = .{ .values = &.{"zsh"} } },
+            .{ .name = "SHELL", .description = "zsh or fish", .required = true, .completion = .{ .values = &.{ "zsh", "fish" } } },
         },
         .flags = &.{.{ .name = "starship-slot", .value = .string, .value_name = "N", .description = "Slot for Starship prompt text (default: 3)" }},
         .double_dash = .positionals,
