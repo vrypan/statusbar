@@ -2,3 +2,4 @@
 zig-pkg/
 zig-out/
 dist/
+.DS_Store
