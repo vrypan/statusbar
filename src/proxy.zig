@@ -92,9 +92,11 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     const layout = Layout.of(outer_ws, opts.lines);
 
     const pty = try sys.openPty(io, &outer_term, &layout.child);
+    var master_open = true;
+    var slave_open = true;
     errdefer {
-        sys.close(io, pty.master);
-        sys.close(io, pty.slave);
+        if (master_open) sys.close(io, pty.master);
+        if (slave_open) sys.close(io, pty.slave);
     }
     try sys.setNonBlocking(pty.master, true);
     try sys.setCloexec(pty.master);
@@ -148,6 +150,10 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         tty.restore(raw);
     }
 
+    var renderer = try bar.Renderer.init(gpa);
+    defer renderer.deinit();
+    try renderer.resize(layout.bar, layout.cols);
+    try renderer.prepare(&source.content, &look, true);
     var proxy: Proxy = .{
         .io = io,
         .master = pty.master,
@@ -157,25 +163,27 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         .input = .{ .bar = layout.bar, .rows = layout.child.row },
         .source = &source,
         .look = &look,
-        .paint_buffer = paint_buffer: {
-            const buffer = try gpa.create(std.Io.Writer.Allocating);
-            buffer.* = .init(gpa);
-            break :paint_buffer buffer;
-        },
+        .renderer = &renderer,
     };
-    defer {
-        proxy.paint_buffer.deinit();
-        gpa.destroy(proxy.paint_buffer);
-    }
-    proxy.reserveRows(outer_ws.row);
     defer proxy.releaseRows();
+    try proxy.reserveRows(outer_ws.row);
 
     const pid = c.fork();
     if (pid < 0) return error.ForkFailed;
     if (pid == 0) childExec(pty, &executable);
     sys.close(io, pty.slave);
+    slave_open = false;
 
-    proxy.pump(sig_fds[0], pid) catch {};
+    proxy.pump(sig_fds[0], pid) catch |err| {
+        // A fatal renderer error must not leave the child running or retry an
+        // impossible allocation on every poll. Close the master before waiting:
+        // a dying child can be blocked draining its terminal output on macOS.
+        sys.killGroup(pid, .KILL);
+        sys.close(io, pty.master);
+        master_open = false;
+        _ = sys.waitFor(pid);
+        return err;
+    };
     sys.close(io, pty.master);
     return sys.waitFor(pid).code;
 }
@@ -323,7 +331,7 @@ const Proxy = struct {
     input: Input,
     source: *Source,
     look: *const bar.Look,
-    paint_buffer: *std.Io.Writer.Allocating,
+    renderer: *bar.Renderer,
 
     terminal: TerminalSink = undefined,
     pending_input: PendingInput = .{},
@@ -339,8 +347,9 @@ const Proxy = struct {
     /// Makes room for the bar without hiding what is already on screen. The
     /// bar takes blank rows below the cursor; only when there are too few of
     /// those does the top of the screen scroll into scrollback.
-    fn reserveRows(self: *Proxy, outer_rows: u16) void {
+    fn reserveRows(self: *Proxy, outer_rows: u16) !void {
         self.terminal = .{ .io = self.io };
+        self.output.damaged = true;
         const bar_rows = self.layout.bar;
         if (bar_rows > 0) {
             const row = @min(self.queryCursorRow() orelse outer_rows, outer_rows);
@@ -351,7 +360,7 @@ const Proxy = struct {
             self.output.writeRegion(&self.terminal);
             self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H", .{row - up}) catch "");
         }
-        self.paint();
+        try self.paint();
         self.terminal.flush();
         self.source.refreshNow(self.now());
     }
@@ -396,20 +405,21 @@ const Proxy = struct {
         if (self.paint_requested_ms == null) self.paint_requested_ms = now_ms;
     }
 
-    fn paint(self: *Proxy) void {
+    fn paint(self: *Proxy) !void {
         var region_buf: [32]u8 = undefined;
         var region: std.Io.Writer = .fixed(&region_buf);
         self.output.writeRegion(&WriterSink{ .w = &region });
-        self.paint_buffer.writer.end = 0;
-        bar.paint(&self.paint_buffer.writer, &self.source.content, self.look, self.layout.barRow(), self.layout.bar, self.layout.cols, region.buffered(), self.output.autowrap) catch return;
-        self.terminal.write(self.paint_buffer.writer.buffered());
+        const bytes = try self.renderer.build(self.layout.barRow(), region.buffered(), self.output.autowrap, self.output.damaged);
+        self.terminal.write(bytes);
+        if (self.terminal.broken) return error.TerminalWriteFailed;
+        self.renderer.commit();
         self.paint_requested_ms = null;
         self.output.damaged = false;
     }
 
-    fn paintIfDue(self: *Proxy, now_ms: i64) void {
+    fn paintIfDue(self: *Proxy, now_ms: i64) !void {
         if (self.paintTimeout(now_ms) != 0) return;
-        self.paint();
+        try self.paint();
     }
 
     fn paintTimeout(self: *const Proxy, now_ms: i64) i64 {
@@ -450,7 +460,7 @@ const Proxy = struct {
             now_ms = self.now();
 
             if (sig.revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
-                self.drainSignals(sig_r, pid, now_ms);
+                try self.drainSignals(sig_r, pid, now_ms);
             }
 
             if (out.revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
@@ -475,7 +485,7 @@ const Proxy = struct {
                                 // cursor, which the paint would overwrite:
                                 // then wait for a pause.
                                 if (self.output.atBoundary() and !self.output.cursor_saved) {
-                                    self.paint();
+                                    try self.paint();
                                 } else {
                                     self.requestPaint(now_ms);
                                 }
@@ -490,9 +500,12 @@ const Proxy = struct {
                 }
             }
 
-            if (self.source.update(command_fds, now_ms)) self.requestPaint(now_ms);
+            if (self.source.update(command_fds, now_ms)) {
+                try self.renderer.prepare(&self.source.content, self.look, false);
+                self.requestPaint(now_ms);
+            }
 
-            self.paintIfDue(now_ms);
+            try self.paintIfDue(now_ms);
             self.terminal.flush();
             if (self.terminal.broken) return;
 
@@ -520,7 +533,7 @@ const Proxy = struct {
         }
     }
 
-    fn drainSignals(self: *Proxy, sig_r: sys.Fd, pid: c.pid_t, now_ms: i64) void {
+    fn drainSignals(self: *Proxy, sig_r: sys.Fd, pid: c.pid_t, now_ms: i64) !void {
         var buf: [64]u8 = undefined;
         const n = sys.read(sig_r, &buf) catch return;
         var resized = false;
@@ -536,10 +549,12 @@ const Proxy = struct {
         self.input = .{ .bar = self.layout.bar, .rows = self.layout.child.row };
         self.source.setColumns(ws.col);
         self.source.refreshNow(now_ms);
+        try self.renderer.resize(self.layout.bar, self.layout.cols);
+        try self.renderer.prepare(&self.source.content, self.look, true);
         // Terminals drop the margins on resize; put them back before the
         // child redraws, if the stream allows it right now.
         self.requestPaint(now_ms);
-        if (self.output.atBoundary()) self.paint();
+        if (self.output.atBoundary()) try self.paint();
     }
 };
 
@@ -633,6 +648,29 @@ fn schedulerProxy() Proxy {
     proxy.paint_requested_ms = null;
     proxy.last_output_ms = 0;
     return proxy;
+}
+
+test "semantically identical paint clears the pending scheduler request" {
+    var content = try bar.Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    _ = content.set("same");
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{null};
+    var renderer = try bar.Renderer.init(std.testing.allocator);
+    defer renderer.deinit();
+    try renderer.resize(1, 20);
+    try renderer.prepare(&content, &.{ .styles = &styles, .rules = &rules }, true);
+    _ = try renderer.build(11, "", true, true);
+    renderer.commit();
+    var proxy = schedulerProxy();
+    proxy.layout = Layout.of(.{ .row = 11, .col = 20, .xpixel = 0, .ypixel = 0 }, 1);
+    proxy.renderer = &renderer;
+    proxy.terminal = .{ .io = undefined }; // Empty output never invokes I/O.
+    proxy.paint_requested_ms = 0;
+    try proxy.paint();
+    try std.testing.expectEqual(@as(usize, 0), proxy.terminal.len);
+    try std.testing.expectEqual(@as(?i64, null), proxy.paint_requested_ms);
+    try std.testing.expectEqual(@as(i64, -1), proxy.paintTimeout(1000));
 }
 
 test "paint timeout waits for a safe output boundary" {

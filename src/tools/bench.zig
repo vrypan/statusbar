@@ -5,6 +5,64 @@
 const std = @import("std");
 const Output = @import("output").Output;
 const Input = @import("input").Input;
+const bar = @import("bar");
+
+fn renderBench(io: std.Io, out: *std.Io.Writer) !void {
+    var counted = std.testing.FailingAllocator.init(std.heap.smp_allocator, .{});
+    const gpa = counted.allocator();
+    var content = try bar.Content.init(gpa, 4);
+    defer content.deinit();
+    _ = content.set("#[fg=blue,bold]host#[default]\t12:00\nλ 日本\tmain\n\x1b]8;;https://example.test\x07headline\x1b]8;;\x07\nCPU 20%\tMEM 60%");
+    var styles = [_][]const u8{ "", "", "", "" };
+    var rules = [_]?[]const u8{ "─", null, null, null };
+    const look: bar.Look = .{ .styles = &styles, .rules = &rules };
+    var renderer = try bar.Renderer.init(gpa);
+    defer renderer.deinit();
+    try renderer.resize(4, 120);
+    try renderer.prepare(&content, &look, true);
+    _ = try renderer.build(21, "\x1b[1;20r", true, true);
+    renderer.commit();
+    // Warm both staging rows and capacities used by alternating inputs.
+    for (0..4) |n| {
+        _ = content.setLine(3, if (n % 2 == 0) "CPU 21%\tMEM 60%" else "CPU 20%\tMEM 60%");
+        try renderer.prepare(&content, &look, false);
+        _ = try renderer.build(21, "\x1b[1;20r", true, false);
+        renderer.commit();
+    }
+    const repeats = 10000;
+    inline for (.{ "full", "identical", "one-row", "patch" }) |mode| {
+        for (0..3) |_| {
+            const allocations = counted.allocations;
+            const allocated = counted.allocated_bytes;
+            var bytes: usize = 0;
+            var rows: usize = 0;
+            var parsed: usize = 0;
+            const start = std.Io.Clock.now(.awake, io).toNanoseconds();
+            for (0..repeats) |n| {
+                const changed = content.setLine(3, if (std.mem.eql(u8, mode, "one-row") and n % 2 == 0) "CPU 21%\tMEM 60%" else "CPU 20%\tMEM 60%");
+                if (changed) {
+                    try renderer.prepare(&content, &look, false);
+                    parsed += renderer.parsed_rows;
+                }
+                if (std.mem.eql(u8, mode, "patch")) {
+                    if (n % 2 == 0) renderer.patch(3, .{ .slot = .left }, .{ .bold = true }) else renderer.restore(3, .{ .slot = .left });
+                }
+                if (changed or std.mem.eql(u8, mode, "full") or std.mem.eql(u8, mode, "patch")) {
+                    const output = try renderer.build(21, "\x1b[1;20r", true, std.mem.eql(u8, mode, "full"));
+                    bytes += output.len;
+                    rows += renderer.emitted_rows;
+                    std.mem.doNotOptimizeAway(output);
+                    renderer.commit();
+                }
+            }
+            const elapsed = std.Io.Clock.now(.awake, io).toNanoseconds() - start;
+            const expected: usize = if (std.mem.eql(u8, mode, "full")) 4 else if (std.mem.eql(u8, mode, "identical")) 0 else 1;
+            if (rows != expected * repeats or counted.allocations != allocations or counted.allocated_bytes != allocated) return error.RendererRegression;
+            if (parsed != (if (std.mem.eql(u8, mode, "one-row")) @as(usize, repeats) else 0)) return error.UnexpectedParsing;
+            try out.print("render {s}: {d} ns/update, {d} bytes/update, {d} rows/update, parsed={d}, allocs={d} bytes={d} storage={d} peak={d}\n", .{ mode, @divTrunc(elapsed, repeats), bytes / repeats, rows / repeats, parsed / repeats, counted.allocations - allocations, counted.allocated_bytes - allocated, counted.allocated_bytes - counted.freed_bytes, renderer.budget.peak });
+        }
+    }
+}
 
 const Sink = struct {
     total: usize = 0,
@@ -58,6 +116,7 @@ pub fn main(init: std.process.Init) !u8 {
         const mb_per_s = @as(f64, @floatFromInt(done)) * 1000.0 / @as(f64, @floatFromInt(elapsed));
         try stdout.print("  {s:<7} {d:>8.0} MB/s  (sink {d})\n", .{ @tagName(kind), mb_per_s, sink.total });
     }
+    try renderBench(init.io, stdout);
     try stdout.flush();
     return 0;
 }

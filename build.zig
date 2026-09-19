@@ -15,6 +15,8 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     mod.addOptions("build_options", options);
+    const zunic = b.dependency("zunic", .{}).module("zunic");
+    mod.addImport("zunic", zunic);
     const zecli = b.dependency("zecli", .{});
     mod.addImport("zecli", zecli.module("cli"));
     mod.addImport("completion", zecli.module("completion"));
@@ -36,12 +38,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    for ([_][]const u8{ "output", "input" }) |name| {
-        bench_mod.addImport(name, b.createModule(.{
+    for ([_][]const u8{ "output", "input", "bar" }) |name| {
+        const dependency = b.createModule(.{
             .root_source_file = b.path(b.fmt("src/{s}.zig", .{name})),
             .target = target,
             .optimize = optimize,
-        }));
+        });
+        dependency.addImport("zunic", zunic);
+        bench_mod.addImport(name, dependency);
     }
     const bench = b.addExecutable(.{ .name = "statusbar-bench", .root_module = bench_mod });
     b.step("bench", "Benchmark the translators").dependOn(&b.addRunArtifact(bench).step);

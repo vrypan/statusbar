@@ -4,6 +4,10 @@
     .fingerprint = 0x7b494927cd0cc4b4,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
+        .zunic = .{
+            .url = "git+https://github.com/vrypan/zunic.git#2ec52c05ea8eda6a62204c11120baff09ab6a49a",
+            .hash = "zunic-0.5.0-yeyUTQnOAAFkzjXRgvW4KsrZIlaSIta1AfGfLL9hW7ud",
+        },
         .zecli = .{
             .url = "git+https://github.com/vrypan/zecli.git?ref=v0.4.1#95eac759082a8612f27f7b137a5d99ad2c7bc5f1",
             .hash = "zecli-0.4.0-j151k7hDAwCgbgSebqmkkZ6Iyd3noZ2DaioUArcjww2C",

@@ -34,6 +34,58 @@ shell
   the smaller of the configured count and the terminal height minus two.
   Hidden rows retain their content and numbered-slot overrides.
 
+## Rendering the bar
+
+Only the statusbar has a cell grid; the child's output remains a proxied byte
+stream. Each visible row keeps three owned versions: base content, desired
+appearance, and the last queued paint. Cells record graphemes, terminal width,
+style, hyperlink and left/right/fill ownership. Wide graphemes also have a
+continuation cell, so clipping and appearance changes cannot split them.
+
+Ordinary updates rebuild only source rows whose bytes changed, compare their
+cells, and repaint only rows whose appearance changed. Identical updates emit
+nothing. Startup, resize and screen damage repaint all visible rows. Damage
+repair uses existing cells without parsing content again. Paints still use the
+same safe output boundaries and cursor-save timing as before.
+
+Internal slot and column-range operations can patch and restore styles without
+changing content. Patches survive unrelated-row updates, equivalent content
+rebuilds, and damage repair. A semantic base change resets that row's patches;
+resize rebuilds the grid. Flash timers and within-row selective writes are not
+implemented yet.
+
+### Unicode and styles
+
+Grapheme segmentation and widths use the pinned remote zunic v0.5.0 dependency
+(Unicode 17). Combining sequences, flags and joined emoji are kept whole. A
+style or OSC 8 hyperlink change inside a grapheme takes effect at the next
+grapheme, never halfway through the current one. Standalone zero-width clusters
+are omitted; non-renderable clusters with a display width use a replacement
+character. Widths account for text/emoji presentation: bare `▪` uses one
+column, while `▪` followed by VS16 uses two. Supported variation bases followed
+by VS15 request text presentation.
+
+Styles are semantic values, not replayed escape strings. Supported attributes
+include default/indexed/RGB foreground and background, underline color and
+style, bold, dim, italic, blink, reverse, hidden, strikethrough and overline.
+Unknown SGR attributes are ignored. Invalid escapes and unsafe hyperlinks are
+filtered. Left, right and rule text have independent style/link state. Terminal
+default colors remain defaults rather than being guessed as RGB values.
+
+### Resource limits and measurement
+
+Renderer-owned heap allocations share a 64 MiB budget, including all three
+grids, parsing scratch, staging and queued paint storage. An allocation or
+budget failure ends the session through terminal cleanup rather than leaving
+a partial snapshot as the last painted state. Established-capacity updates
+reuse storage; preparation reserves space before emission and snapshot commit.
+
+`zig build bench -Doptimize=ReleaseFast` measures full paints, identical updates,
+single-row changes and style-only patches. It reports time, emitted bytes and
+rows, parsed rows and allocations. The cell model reduces terminal output for
+small changes but costs memory and CPU compared with the old string renderer;
+byte savings alone are not a wall-clock speedup.
+
 ## Limitations
 
 - Repaints save and restore the cursor with DECSC/DECRC, the single save slot
@@ -43,6 +95,6 @@ shell
 - When the window grows, terminals that add blank rows at the bottom (rather
   than pulling lines back from scrollback) can leave a copy of the old bar in
   the child's area until it is overwritten.
-- Character widths are estimated: East Asian wide characters, most emoji,
-  and characters followed by VS16 count as two cells. A terminal that draws
-  a symbol at another width can misalign the right slot.
+- Character widths are estimated using zunic's presentation-aware grapheme
+  policy. A terminal using another Unicode
+  version or width policy can still misalign the right slot.

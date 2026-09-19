@@ -8,6 +8,9 @@
 
 const std = @import("std");
 const markup = @import("markup.zig");
+test {
+    _ = @import("styled_text.zig");
+}
 
 pub const max_line_bytes = 1024;
 
@@ -67,364 +70,389 @@ pub const Look = struct {
     palette: markup.Palette = .{},
 };
 
-/// `autowrap` is the child's DECAWM, restored after the paint. DECSC does not
-/// save it.
-pub fn paint(w: *std.Io.Writer, content: *const Content, look: *const Look, first_row: u16, lines: u16, cols: u16, region: []const u8, autowrap: bool) !void {
-    // Save, restore the margins the terminal may have dropped, then leave
-    // origin mode and any line-drawing character set for the paint.
-    // Without autowrap, text that turns out wider than measured (the terminal
-    // and statusbar can disagree about a character's width) is clipped at the
-    // right edge. With it, the overflow would wrap onto the first column of
-    // the bottom row and overwrite the start of the bar.
-    try w.writeAll("\x1b7\x1b[?7l");
-    try w.writeAll(region);
-    try w.writeAll("\x1b[?6l\x1b(B");
-    for (0..lines) |n| {
-        // Erase first: after a full-width line the cursor sits in the
-        // pending-wrap state, where an erase would clear the last cell.
-        const style = look.styles[n];
-        try w.print("\x1b[{d};1H\x1b[0;{s}m\x1b[2K", .{ first_row + n, style });
-        try writeLine(w, content.line(n), cols, style, look.palette, look.rules[n]);
+pub const cells = @import("cells.zig");
+const styled = @import("styled_text.zig");
+
+pub const State = struct {
+    base: cells.Row = .{},
+    desired: cells.Row = .{},
+    painted: cells.Row = .{},
+    changes: std.ArrayList(cells.Changes) = .empty,
+    summary: cells.Changes = .{},
+    raw: [max_line_bytes]u8 = undefined,
+    raw_len: ?usize = null,
+    painted_valid: bool = false,
+    selected: bool = false,
+    pending: bool = true,
+    output_bound: usize = 0,
+    fn deinit(self: *State, gpa: std.mem.Allocator) void {
+        self.base.deinit(gpa);
+        self.desired.deinit(gpa);
+        self.painted.deinit(gpa);
+        self.changes.deinit(gpa);
     }
-    try w.writeAll("\x1b[0m\x1b8");
-    if (autowrap) try w.writeAll("\x1b[?7h");
-}
-
-const left = 0;
-const right = 1;
-
-const Placement = struct {
-    col: usize = 0,
-    /// Cells the slot may use; zero hides it.
-    width: usize = 0,
 };
 
-/// Splits a line at its first tab into the left and right slots. Any further
-/// tabs stay in the right slot, where they print as spaces.
-pub fn splitSlots(text: []const u8) [2][]const u8 {
-    const tab = std.mem.indexOfScalar(u8, text, '\t') orelse return .{ text, "" };
-    return .{ text[0..tab], text[tab + 1 ..] };
-}
+/// Persistent row-local grids. Damage serialization never reads source text.
+pub const Renderer = struct {
+    parent: std.mem.Allocator,
+    budget: *cells.Budget,
+    scratch: *styled.Scratch,
+    rows: []State = &.{},
+    cols: u16 = 0,
+    staging: cells.Row = .{},
+    writer: std.Io.Writer.Allocating,
+    parsed_rows: usize = 0,
+    emitted_rows: usize = 0,
 
-/// One bar line: markup expanded, then split into `left \t right`. Styling
-/// does not carry from the left slot into the gap after it.
-fn writeLine(w: *std.Io.Writer, text: []const u8, cols: u16, style: []const u8, palette: markup.Palette, rule: ?[]const u8) !void {
-    var expanded_buf: [4096]u8 = undefined;
-    const slots = splitSlots(markup.expand(text, &expanded_buf, palette));
-
-    var widths: [2]usize = undefined;
-    for (slots, 0..) |slot, n| widths[n] = try writeClipped(null, slot, std.math.maxInt(usize), style);
-    const places = layout(widths, cols);
-
-    var cursor: usize = 0;
-    for (slots, places) |slot, place| {
-        if (place.width == 0) continue;
-        if (place.col > cursor) {
-            try w.print("\x1b[0;{s}m", .{style});
-            try writeFill(w, rule, place.col - cursor);
-            cursor = place.col;
-        }
-        cursor += try writeClipped(w, slot, place.width, style);
+    pub fn init(parent: std.mem.Allocator) !Renderer {
+        const budget = try parent.create(cells.Budget);
+        errdefer parent.destroy(budget);
+        budget.* = .{ .parent = parent };
+        const scratch = try budget.allocator().create(styled.Scratch);
+        scratch.* = .{};
+        errdefer budget.allocator().destroy(scratch);
+        var writer: std.Io.Writer.Allocating = .init(budget.allocator());
+        errdefer writer.deinit();
+        try writer.ensureTotalCapacity(128);
+        return .{ .parent = parent, .budget = budget, .scratch = scratch, .writer = writer };
     }
-    if (rule != null and cursor < cols) {
-        try w.print("\x1b[0;{s}m", .{style});
-        try writeFill(w, rule, cols - cursor);
+    pub fn deinit(self: *Renderer) void {
+        const gpa = self.budget.allocator();
+        for (self.rows) |*row| row.deinit(gpa);
+        gpa.free(self.rows);
+        self.staging.deinit(gpa);
+        self.writer.deinit();
+        self.scratch.deinit(gpa);
+        gpa.destroy(self.scratch);
+        std.debug.assert(self.budget.live == 0);
+        self.parent.destroy(self.budget);
     }
-}
-
-/// Repeats `rule` across the line, leaving out a final repetition that would
-/// not fit whole.
-fn writeFill(w: *std.Io.Writer, maybe_rule: ?[]const u8, cols: usize) !void {
-    const rule = maybe_rule orelse return w.splatByteAll(' ', cols);
-    const width = try writeClipped(null, rule, std.math.maxInt(usize), "");
-    if (width == 0 or width > cols) return w.splatByteAll(' ', cols);
-    var used: usize = 0;
-    while (used + width <= cols) : (used += width) _ = try writeClipped(w, rule, width, "");
-    try w.splatByteAll(' ', cols - used);
-}
-
-/// Places the slots on a line `cols` wide. When space runs out the right slot
-/// is clipped, and the left slot is kept longest.
-fn layout(widths: [2]usize, cols: usize) [2]Placement {
-    var places: [2]Placement = .{ .{}, .{} };
-    places[left] = .{ .col = 0, .width = @min(widths[left], cols) };
-    if (widths[right] > 0) {
-        const left_end = places[left].width;
-        const gap: usize = if (left_end > 0) 1 else 0;
-        const width = @min(widths[right], cols -| (left_end + gap));
-        places[right] = .{ .col = cols - width, .width = width };
+    /// Geometry invalidates paint history and appearance patches.
+    pub fn resize(self: *Renderer, count: u16, cols: u16) !void {
+        const gpa = self.budget.allocator();
+        const count_cells = try std.math.mul(usize, count, cols);
+        const minimum = try std.math.mul(usize, count_cells, 3 * @sizeOf(cells.Cell));
+        if (minimum > self.budget.limit) return error.RendererMemoryLimit;
+        const rows = try gpa.alloc(State, count);
+        @memset(rows, .{});
+        for (self.rows) |*row| row.deinit(gpa);
+        gpa.free(self.rows);
+        self.rows = rows;
+        self.cols = cols;
     }
-    return places;
-}
-
-/// Writes `text` without letting it occupy more than `cols` cells, and returns
-/// the cells used. With no writer it only measures. Escape sequences are
-/// copied but take no space; SGR resets are followed by the bar style again so
-/// a command's colors never strip the bar's background. Other control
-/// characters are dropped, since they could move the cursor.
-fn writeClipped(maybe_w: ?*std.Io.Writer, text: []const u8, cols: usize, style: []const u8) !usize {
-    var discard_buf: [64]u8 = undefined;
-    var discarding: std.Io.Writer.Discarding = .init(&discard_buf);
-    const w = maybe_w orelse &discarding.writer;
-    var used: usize = 0;
-    var i: usize = 0;
-    while (i < text.len) {
-        const b = text[i];
-        if (b == 0x1b) {
-            const sequence = escapeSequence(text, i);
-            const seq = text[i..sequence.end];
-            // Only styling and hyperlinks are safe to let through.
-            if (sequence.kind == .sgr) {
-                try w.writeAll(seq);
-                if (isReset(seq[2 .. seq.len - 1]) and style.len > 0) try w.print("\x1b[{s}m", .{style});
-            } else if (sequence.kind == .osc8) {
-                try w.writeAll(seq);
+    /// Rebuild only changed raw rows. Invalidation means presentation changes,
+    /// never screen damage. Summaries describe this preparation only.
+    pub fn prepare(self: *Renderer, content: *const Content, look: *const Look, invalidate: bool) !void {
+        const gpa = self.budget.allocator();
+        self.parsed_rows = 0;
+        for (self.rows, 0..) |*row, n| {
+            row.summary = .{};
+            @memset(row.changes.items, .{});
+            const raw = content.line(n);
+            if (!invalidate and row.raw_len != null and std.mem.eql(u8, raw, row.raw[0..row.raw_len.?])) continue;
+            self.parsed_rows += 1;
+            try self.layout(&self.staging, raw, look.styles[n], look.rules[n], look.palette);
+            try row.changes.resize(gpa, self.cols);
+            for (row.changes.items, 0..) |*change, col| {
+                change.* = if (invalidate or row.raw_len == null) .{} else self.staging.difference(row.base, col);
+                row.summary.merge(change.*);
             }
-            i = sequence.end;
-            continue;
-        }
-        if (b == '\t') {
-            if (used + 1 > cols) break;
-            try w.writeByte(' ');
-            used += 1;
-            i += 1;
-            continue;
-        }
-        if (b < 0x20 or b == 0x7f) {
-            i += 1;
-            continue;
-        }
-        const len = std.unicode.utf8ByteSequenceLength(b) catch {
-            i += 1;
-            continue;
-        };
-        if (i + len > text.len) break;
-        const cp = std.unicode.utf8Decode(text[i .. i + len]) catch {
-            i += 1;
-            continue;
-        };
-        var width = cellWidth(cp);
-        // VS16 asks for emoji presentation, which terminals draw two cells
-        // wide: ☁️ is U+2601 U+FE0F.
-        if (width == 1 and std.mem.startsWith(u8, text[i + len ..], "\u{fe0f}")) width = 2;
-        if (used + width > cols) break;
-        try w.writeAll(text[i .. i + len]);
-        used += width;
-        i += len;
-    }
-    return used;
-}
-
-fn isReset(params: []const u8) bool {
-    if (params.len == 0) return true;
-    var fields = std.mem.splitScalar(u8, params, ';');
-    var parts: [32][]const u8 = undefined;
-    var len: usize = 0;
-    while (fields.next()) |field| {
-        // A fixed buffer is plenty for an SGR sequence and avoids allocating
-        // while rendering command output. Conservatively ignore excessive
-        // parameters rather than risking a false reset.
-        if (len == parts.len) return false;
-        parts[len] = field;
-        len += 1;
-    }
-    var i: usize = 0;
-    while (i < len) : (i += 1) {
-        const part = parts[i];
-        if (part.len == 0 or std.mem.eql(u8, part, "0")) return true;
-        // Colon-form colors are one parameter: their zero-valued components
-        // are not reset parameters.
-        if (std.mem.indexOfScalar(u8, part, ':') != null) continue;
-        if (std.mem.eql(u8, part, "38") or std.mem.eql(u8, part, "48") or std.mem.eql(u8, part, "58")) {
-            if (i + 1 >= len) continue;
-            if (std.mem.eql(u8, parts[i + 1], "5")) {
-                i += @min(@as(usize, 2), len - i - 1);
-            } else if (std.mem.eql(u8, parts[i + 1], "2")) {
-                i += @min(@as(usize, 4), len - i - 1);
-            }
-        }
-    }
-    return false;
-}
-
-const EscapeKind = enum { invalid, sgr, osc8 };
-const EscapeSequence = struct { end: usize, kind: EscapeKind };
-
-/// Parses one complete escape sequence. Invalid sequences are consumed without
-/// being emitted; when another ESC starts, leave it for the next iteration so
-/// a valid sequence after malformed command output can still be recognized.
-fn escapeSequence(text: []const u8, start: usize) EscapeSequence {
-    var i = start + 1;
-    if (i >= text.len) return .{ .end = i, .kind = .invalid };
-    switch (text[i]) {
-        '[' => {
-            i += 1;
-            var params_valid = true;
-            while (i < text.len) : (i += 1) {
-                const b = text[i];
-                if (b == 0x1b) return .{ .end = i, .kind = .invalid };
-                if (b < 0x20 or b == 0x7f) return .{ .end = i + 1, .kind = .invalid };
-                if (b >= 0x40 and b <= 0x7e) {
-                    const params = text[start + 2 .. i];
-                    if (b == 'm' and params_valid and validSgrParams(params)) return .{ .end = i + 1, .kind = .sgr };
-                    return .{ .end = i + 1, .kind = .invalid };
+            const replace = invalidate or row.raw_len == null or row.summary.any();
+            if (replace) {
+                try row.desired.reserveCopy(gpa, self.staging);
+                try row.painted.reserveCopy(gpa, self.staging);
+                std.mem.swap(cells.Row, &row.base, &self.staging);
+                row.desired.copyReserved(row.base);
+                row.pending = true;
+                // Bound every possible StylePatch; links/text cannot be changed
+                // by a patch. Reserve outside diff/serialization.
+                row.output_bound = 64;
+                for (row.base.cells.items) |cell| {
+                    if (cell.kind == .continuation) continue;
+                    row.output_bound += 192 + cell.glyph.len + cell.params.len + cell.uri.len;
                 }
-                // Private markers and intermediates are not SGR parameters.
-                if (!std.ascii.isDigit(b) and b != ';' and b != ':') params_valid = false;
             }
-            return .{ .end = i, .kind = .invalid };
-        },
-        ']' => {
-            i += 1;
-            while (i < text.len) : (i += 1) {
-                const b = text[i];
-                if (b == 0x07) return .{ .end = i + 1, .kind = if (validOsc8(text[start + 2 .. i])) .osc8 else .invalid };
-                if (b == 0x1b) {
-                    if (i + 1 < text.len and text[i + 1] == '\\') return .{ .end = i + 2, .kind = if (validOsc8(text[start + 2 .. i])) .osc8 else .invalid };
-                    return .{ .end = i, .kind = .invalid };
-                }
-                if (b < 0x20 or b == 0x7f) return .{ .end = i + 1, .kind = .invalid };
-            }
-            return .{ .end = i, .kind = .invalid };
-        },
-        // DCS, APC, PM, SOS, and every other escape are never bar content.
-        else => return .{ .end = i + 1, .kind = .invalid },
-    }
-}
-
-fn validSgrParams(params: []const u8) bool {
-    for (params) |b| if (!std.ascii.isDigit(b) and b != ';' and b != ':') return false;
-    return true;
-}
-
-fn validOsc8(payload: []const u8) bool {
-    if (!std.mem.startsWith(u8, payload, "8;")) return false;
-    const second = std.mem.indexOfScalarPos(u8, payload, 2, ';') orelse return false;
-    // Both the optional parameter string and URI must be free of controls.
-    for (payload[2..second]) |b| if (b < 0x20 or b == 0x7f) return false;
-    for (payload[second + 1 ..]) |b| if (b < 0x20 or b == 0x7f) return false;
-    return true;
-}
-
-/// A small wcwidth: combining marks take no cell, East Asian wide characters
-/// and most emoji take two.
-fn cellWidth(cp: u21) usize {
-    return switch (cp) {
-        0x0300...0x036f, 0x200b...0x200f, 0xfe00...0xfe0f, 0x20d0...0x20ff => 0,
-        0x1100...0x115f,
-        0x2e80...0x303e,
-        0x3041...0xa4cf,
-        0xac00...0xd7a3,
-        0xf900...0xfaff,
-        0xfe30...0xfe4f,
-        0xff00...0xff60,
-        0xffe0...0xffe6,
-        0x1f300...0x1f64f,
-        0x1f900...0x1f9ff,
-        0x20000...0x3fffd,
-        => 2,
-        else => 1,
-    };
-}
-
-// --- tests -----------------------------------------------------------------
-
-fn clipped(text: []const u8, cols: u16, style: []const u8) ![]const u8 {
-    const S = struct {
-        var buf: [512]u8 = undefined;
-    };
-    var w: std.Io.Writer = .fixed(&S.buf);
-    _ = try writeClipped(&w, text, cols, style);
-    return w.buffered();
-}
-
-fn rendered(text: []const u8, cols: u16) ![]const u8 {
-    const S = struct {
-        var buf: [1024]u8 = undefined;
-    };
-    var w: std.Io.Writer = .fixed(&S.buf);
-    try writeLine(&w, text, cols, "", .{}, null);
-    // Drop the style resets in the gaps to compare the visible text.
-    const out = w.buffered();
-    const T = struct {
-        var buf: [1024]u8 = undefined;
-    };
-    var len: usize = 0;
-    var i: usize = 0;
-    while (i < out.len) {
-        if (out[i] == 0x1b) {
-            i = escapeSequence(out, i).end;
-            continue;
+            @memcpy(row.raw[0..raw.len], raw);
+            row.raw_len = raw.len;
+            if (invalidate) row.painted_valid = false;
         }
-        T.buf[len] = out[i];
-        len += 1;
-        i += 1;
+        var capacity: usize = 128;
+        for (self.rows) |row| capacity = try std.math.add(usize, capacity, row.output_bound);
+        try self.writer.ensureTotalCapacity(capacity);
     }
-    return T.buf[0..len];
+    fn layout(self: *Renderer, row: *cells.Row, raw: []const u8, style: []const u8, rule: ?[]const u8, palette: markup.Palette) !void {
+        var base: cells.Style = .{};
+        styled.sgr(&base, .{}, style);
+        try row.reset(self.budget.allocator(), self.cols, base);
+        if (rule) |pattern| {
+            try self.scratch.reserve(self.budget.allocator(), pattern.len);
+            const bound = try std.math.add(usize, 16 * 1024, try std.math.mul(usize, pattern.len, 3));
+            try row.data.ensureTotalCapacity(self.budget.allocator(), bound);
+        }
+        var expanded_buf: [4096]u8 = undefined;
+        const slots = splitSlots(markup.expand(raw, &expanded_buf, palette));
+        try self.scratch.parse(slots[0], base);
+        const left_width = fitting(self.scratch, self.cols);
+        _ = place(row, self.scratch, 0, left_width, .left);
+        const gap: usize = if (left_width > 0) 1 else 0;
+        try self.scratch.parse(slots[1], base);
+        const right_width = fitting(self.scratch, self.cols -| (left_width + gap));
+        const right_start = self.cols - right_width;
+        _ = place(row, self.scratch, right_start, right_width, .right);
+        if (rule) |pattern| {
+            try self.scratch.parse(pattern, base);
+            const width = fitting(self.scratch, std.math.maxInt(u16));
+            const space = right_start - left_width;
+            if (width == 0 or width > space) return;
+            _ = place(row, self.scratch, left_width, width, .fill);
+            var col = left_width + width;
+            while (col + width <= right_start) : (col += width) {
+                @memcpy(row.cells.items[col..][0..width], row.cells.items[left_width..][0..width]);
+            }
+        }
+    }
+    pub fn patch(self: *Renderer, row: usize, target: cells.Target, value: cells.StylePatch) void {
+        cells.patch(&self.rows[row].desired, target, value);
+        self.rows[row].pending = true;
+    }
+    pub fn restore(self: *Renderer, row: usize, target: cells.Target) void {
+        cells.restore(&self.rows[row].desired, self.rows[row].base, target);
+        self.rows[row].pending = true;
+    }
+    /// Construct a complete batch using storage reserved during preparation.
+    /// Nothing in painted is changed here, even if construction fails.
+    pub fn build(self: *Renderer, first_row: u16, region: []const u8, autowrap: bool, force: bool) ![]const u8 {
+        self.writer.writer.end = 0;
+        self.emitted_rows = 0;
+        for (self.rows) |*row| {
+            row.selected = force or !row.painted_valid or (row.pending and !row.desired.visuallyEqual(row.painted));
+            if (row.selected) {
+                self.emitted_rows += 1;
+            }
+        }
+        if (self.emitted_rows == 0 and !force) return "";
+        var fixed = std.Io.Writer.fixed(self.writer.writer.buffer);
+        const w = &fixed;
+        try w.writeAll("\x1b7\x1b[?7l");
+        try w.writeAll(region);
+        try w.writeAll("\x1b[?6l\x1b(B\x1b]8;;\x1b\\");
+        for (self.rows, 0..) |row, n| {
+            if (!row.selected) continue;
+            try w.print("\x1b[{d};1H", .{first_row + n});
+            try eraseStyle(row.desired).write(w);
+            try w.writeAll("\x1b[2K");
+            try serialize(w, row.desired);
+        }
+        try w.writeAll("\x1b]8;;\x1b\\\x1b[0m\x1b8");
+        if (autowrap) try w.writeAll("\x1b[?7h");
+        self.writer.writer.end = fixed.end;
+        return w.buffered();
+    }
+    pub fn commit(self: *Renderer) void {
+        for (self.rows) |*row| {
+            row.pending = false;
+            if (!row.selected) continue;
+            row.painted.copyReserved(row.desired);
+            row.painted_valid = true;
+            row.selected = false;
+        }
+    }
+};
+
+pub fn splitSlots(value: []const u8) [2][]const u8 {
+    const tab = std.mem.indexOfScalar(u8, value, '\t') orelse return .{ value, "" };
+    return .{ value[0..tab], value[tab + 1 ..] };
+}
+fn fitting(scratch: *styled.Scratch, max: usize) usize {
+    var it = scratch.iterator();
+    var width: usize = 0;
+    while (it.next()) |glyph| {
+        if (width + glyph.columns > max) break;
+        width += glyph.columns;
+    }
+    return width;
+}
+fn place(row: *cells.Row, scratch: *styled.Scratch, start: usize, width: usize, owner: cells.Owner) usize {
+    var it = scratch.iterator();
+    var col = start;
+    while (it.next()) |glyph| {
+        if (col + glyph.columns > start + width) break;
+        row.put(col, glyph, owner);
+        col += glyph.columns;
+    }
+    return col - start;
+}
+fn eraseStyle(row: cells.Row) cells.Style {
+    if (row.cells.items.len == 0) return .{};
+    const last = row.cells.items[row.cells.items.len - 1];
+    return if (last.kind == .blank) last.style else .{};
+}
+fn serialize(w: *std.Io.Writer, row: cells.Row) !void {
+    const erased = eraseStyle(row);
+    var style: ?cells.Style = erased;
+    var link: cells.Span = .{};
+    var params: cells.Span = .{};
+    var owner: cells.Owner = .fill;
+    // EL has already established this tail, including its background. Avoid
+    // sending redundant spaces while still serializing all styled slot spaces.
+    var end = row.cells.items.len;
+    const simple_erase = cells.Style.eql(erased, .{ .fg = erased.fg, .bg = erased.bg });
+    while (simple_erase and end > 0 and row.cells.items[end - 1].kind == .blank and cells.Style.eql(row.cells.items[end - 1].style, erased)) end -= 1;
+    for (row.cells.items[0..end]) |cell| {
+        if (cell.kind == .continuation) continue;
+        if (!std.mem.eql(u8, link.get(row.data.items), cell.uri.get(row.data.items)) or !std.mem.eql(u8, params.get(row.data.items), cell.params.get(row.data.items)) or owner != cell.owner) {
+            if (link.len > 0) try w.writeAll("\x1b]8;;\x1b\\");
+            if (cell.uri.len > 0) try w.print("\x1b]8;{s};{s}\x1b\\", .{ cell.params.get(row.data.items), cell.uri.get(row.data.items) });
+            link = cell.uri;
+            params = cell.params;
+            owner = cell.owner;
+        }
+        if (style == null or !cells.Style.eql(style.?, cell.style)) {
+            try cell.style.write(w);
+            style = cell.style;
+        }
+        if (cell.kind == .blank) try w.writeByte(' ') else try w.writeAll(cell.glyph.get(row.data.items));
+    }
+    if (link.len > 0) try w.writeAll("\x1b]8;;\x1b\\");
 }
 
-test "slots are aligned left and right" {
-    try std.testing.expectEqualStrings("host", try rendered("host", 20));
-    try std.testing.expectEqualStrings("host           12:00", try rendered("host\t12:00", 20));
-    try std.testing.expectEqualStrings("               12:00", try rendered("\t12:00", 20));
-    try std.testing.expectEqualStrings("a              b c d", try rendered("a\tb\tc\td", 20));
+/// Full painter for tests. The proxy uses persistent Renderer state.
+pub fn paint(w: *std.Io.Writer, content: *const Content, look: *const Look, first_row: u16, lines: u16, cols: u16, region: []const u8, autowrap: bool) !void {
+    var renderer = try Renderer.init(std.heap.page_allocator);
+    defer renderer.deinit();
+    try renderer.resize(lines, cols);
+    try renderer.prepare(content, look, true);
+    try w.writeAll(try renderer.build(first_row, region, autowrap, true));
 }
 
-test "narrow lines clip the right slot first" {
-    try std.testing.expectEqualStrings("hostname 12", try rendered("hostname\t12:00", 11));
-    try std.testing.expectEqualStrings("hostn", try rendered("hostname\t12:00", 5));
+test "incremental base, desired patches and painted snapshots" {
+    const gpa = std.testing.allocator;
+    var content = try Content.init(gpa, 3);
+    defer content.deinit();
+    _ = content.set("one\ntwo\nhidden");
+    var styles = [_][]const u8{ "", "", "" };
+    var rules = [_]?[]const u8{ null, null, null };
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var r = try Renderer.init(gpa);
+    defer r.deinit();
+    try r.resize(2, 12);
+    try r.prepare(&content, &look, false);
+    try std.testing.expectEqual(@as(usize, 2), r.parsed_rows);
+    _ = try r.build(23, "", true, false);
+    r.commit();
+    r.patch(0, .{ .slot = .left }, .{ .bold = true });
+    _ = content.setLine(1, "new");
+    try r.prepare(&content, &look, false);
+    try std.testing.expectEqual(@as(usize, 1), r.parsed_rows);
+    try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
+    _ = try r.build(23, "", true, true);
+    r.commit();
+    try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
+    _ = content.setLine(0, "\x1b[0mone");
+    try r.prepare(&content, &look, false);
+    try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
+    try std.testing.expectEqualStrings("", try r.build(23, "", true, false));
+    _ = content.setLine(0, "other");
+    try r.prepare(&content, &look, false);
+    try std.testing.expect(!r.rows[0].desired.cells.items[0].style.bold);
+    r.restore(0, .{ .slot = .left });
+    _ = try r.build(23, "", true, false);
+    try std.testing.expectEqual(@as(usize, 1), r.emitted_rows);
+    r.commit();
+    _ = content.setLine(2, "new hidden");
+    try r.prepare(&content, &look, false);
+    try std.testing.expectEqual(@as(usize, 0), r.parsed_rows);
+    try std.testing.expectEqualStrings("", try r.build(23, "", true, false));
+    _ = content.setLine(1, "temporary");
+    try r.prepare(&content, &look, false);
+    _ = content.setLine(1, "new");
+    try r.prepare(&content, &look, false);
+    try std.testing.expectEqualStrings("", try r.build(23, "", true, false));
+    try r.resize(3, 12);
+    try r.prepare(&content, &look, true);
+    _ = try r.build(22, "", false, true);
+    try std.testing.expectEqual(@as(usize, 3), r.emitted_rows);
+    try std.testing.expect(std.mem.endsWith(u8, r.writer.writer.buffered(), "\x1b[0m\x1b8"));
 }
 
-test "markup and wide characters are measured by cells" {
-    try std.testing.expectEqualStrings("日本    x", try rendered("#[fg=blue,bold]日本#[default]\tx", 9));
-}
-
-test "text is clipped to the width in cells" {
-    try std.testing.expectEqualStrings("hello", try clipped("hello world", 5, ""));
-    try std.testing.expectEqualStrings("héll", try clipped("héllo", 4, ""));
-    try std.testing.expectEqualStrings("日本", try clipped("日本語", 5, ""));
-    try std.testing.expectEqualStrings("a b", try clipped("a\tb\x08\r", 10, ""));
-}
-
-test "styling passes through and resets keep the bar style" {
-    try std.testing.expectEqualStrings("\x1b[31mab\x1b[0m\x1b[7mc", try clipped("\x1b[31mab\x1b[0mc", 3, "7"));
-    // Cursor movement from a status command is not allowed to escape the bar.
-    try std.testing.expectEqualStrings("ab", try clipped("a\x1b[5;5Hb", 3, ""));
-}
-
-test "only complete SGR and OSC 8 escape sequences pass through" {
-    try std.testing.expectEqualStrings("a\x1b[31mb", try clipped("a\x1b[31mb", 2, ""));
-    try std.testing.expectEqualStrings("a\x1b]8;;https://example.test\x07b\x1b]8;;\x1b\\c", try clipped("a\x1b]8;;https://example.test\x07b\x1b]8;;\x1b\\c", 3, ""));
-    try std.testing.expectEqualStrings("abc", try clipped("a\x1b]2;title\x07b\x1b]52;c;clipboard\x1b\\c", 3, ""));
-    try std.testing.expectEqualStrings("ab", try clipped("a\x1b[?25mb", 2, ""));
-    try std.testing.expectEqualStrings("abc\x1b[32md", try clipped("a\x1b]8;;bad\x18b\x1b[31\x18c\x1b[32md", 4, ""));
-    try std.testing.expectEqualStrings("a\x1b[31mbcd", try clipped("a\x1b]8;;unterminated\x1b[31mbcd", 4, ""));
-}
-
-test "SGR resets distinguish colors from top-level zero" {
-    try std.testing.expectEqualStrings("\x1b[38;5;0ma", try clipped("\x1b[38;5;0ma", 1, "7"));
-    try std.testing.expectEqualStrings("\x1b[48;2;0;0;0ma", try clipped("\x1b[48;2;0;0;0ma", 1, "7"));
-    try std.testing.expectEqualStrings("\x1b[58:2::0:0:0ma", try clipped("\x1b[58:2::0:0:0ma", 1, "7"));
-    try std.testing.expectEqualStrings("\x1b[31;0m\x1b[7ma", try clipped("\x1b[31;0ma", 1, "7"));
-    try std.testing.expectEqualStrings("\x1b[m\x1b[7ma", try clipped("\x1b[ma", 1, "7"));
-}
-
-test "content truncation cannot emit a partial escape sequence" {
+test "text presentation progress squares leave the right slot aligned" {
     var content = try Content.init(std.testing.allocator, 1);
     defer content.deinit();
-    var text: [max_line_bytes + 6]u8 = undefined;
-    @memset(text[0 .. max_line_bytes - 2], 'a');
-    @memcpy(text[max_line_bytes - 2 .. max_line_bytes + 6], "\x1b[31mxyz");
-    _ = content.set(&text);
-    var buf: [max_line_bytes]u8 = undefined;
-    var w: std.Io.Writer = .fixed(&buf);
-    _ = try writeClipped(&w, content.line(0), max_line_bytes, "");
-    const out = w.buffered();
-    try std.testing.expectEqual(max_line_bytes - 2, out.len);
-    try std.testing.expect(std.mem.indexOfScalar(u8, out, 0x1b) == null);
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{"·"};
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try r.resize(1, 20);
+    _ = content.set("[▪▪▪]\t☁️ 12:00");
+    try r.prepare(&content, &look, true);
+    const row = r.rows[0].base;
+    for (1..4) |col| {
+        try std.testing.expectEqual(@as(u2, 1), row.cells.items[col].width);
+        try std.testing.expectEqual(.lead, row.cells.items[col].kind);
+    }
+    try std.testing.expectEqualStrings("]", row.cells.items[4].glyph.get(row.data.items));
+    for (5..12) |col| try std.testing.expectEqual(cells.Owner.fill, row.cells.items[col].owner);
+    try std.testing.expectEqual(cells.Owner.right, row.cells.items[12].owner);
+    try std.testing.expectEqual(.continuation, row.cells.items[13].kind);
+    const bytes = try r.build(24, "", true, true);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "[▪▪▪]·······☁️ 12:00") != null);
 }
 
-test "content keeps the first lines and reports changes" {
+test "owned Unicode layout clips whole graphemes and fills rules" {
+    var content = try Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    var styles = [_][]const u8{"44"};
+    var rules = [_]?[]const u8{"─"};
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try r.resize(1, 8);
+    _ = content.set("e\x1b[31m\u{301}\t界");
+    try r.prepare(&content, &look, false);
+    const row = r.rows[0].base;
+    try std.testing.expectEqualStrings("e\u{301}", row.cells.items[0].glyph.get(row.data.items));
+    try std.testing.expectEqual(cells.Owner.right, row.cells.items[6].owner);
+    try std.testing.expectEqual(.continuation, row.cells.items[7].kind);
+    try std.testing.expectEqualStrings("─", row.cells.items[1].glyph.get(row.data.items));
+    try std.testing.expectEqual(styled.Color.default, row.cells.items[0].style.fg);
+    _ = content.set("replacement");
+    try std.testing.expectEqualStrings("e\u{301}", row.cells.items[0].glyph.get(row.data.items));
+    try r.resize(1, 1);
+    _ = content.set("界");
+    try r.prepare(&content, &look, false);
+    try std.testing.expectEqual(cells.Owner.fill, r.rows[0].base.cells.items[0].owner);
+}
+test "failed batch cannot commit painted cells" {
+    var content = try Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    _ = content.set("abc");
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{null};
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try r.resize(1, 80);
+    try r.prepare(&content, &.{ .styles = &styles, .rules = &rules }, false);
+    const capacity = r.writer.writer.buffer;
+    r.writer.writer.buffer = capacity[0..4];
+    try std.testing.expectError(error.WriteFailed, r.build(24, "", true, false));
+    r.writer.writer.buffer = capacity;
+    try std.testing.expect(!r.rows[0].painted_valid);
+    _ = try r.build(24, "", true, false);
+    r.commit();
+    try std.testing.expect(r.rows[0].painted_valid);
+    try std.testing.expectError(error.RendererMemoryLimit, r.resize(65533, 65535));
+}
+test "zero visible rows retain explicit damage repair" {
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try std.testing.expectEqualStrings("", try r.build(1, "", true, false));
+    const bytes = try r.build(1, "\x1b[1;2r", true, true);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "\x1b[1;2r") != null);
+    try std.testing.expect(std.mem.endsWith(u8, bytes, "\x1b[0m\x1b8\x1b[?7h"));
+}
+test "content bounds and CRLF behavior are preserved" {
     var content = try Content.init(std.testing.allocator, 2);
     defer content.deinit();
     try std.testing.expect(content.set("one\r\ntwo\nthree\n"));
@@ -433,63 +461,125 @@ test "content keeps the first lines and reports changes" {
     try std.testing.expect(!content.set("one\ntwo\n"));
     try std.testing.expect(content.set("one\n"));
     try std.testing.expectEqualStrings("", content.line(1));
+    var long: [max_line_bytes + 8]u8 = undefined;
+    @memset(&long, 'a');
+    _ = content.setLine(0, &long);
+    try std.testing.expectEqual(max_line_bytes, content.line(0).len);
 }
-
-test "emoji presentation takes two cells" {
-    try std.testing.expectEqualStrings("a☁️", try clipped("a☁️b", 3, ""));
-    try std.testing.expectEqualStrings("a", try clipped("a☁️b", 2, ""));
-    try std.testing.expectEqualStrings("a☁b", try clipped("a☁b", 3, ""));
-}
-
-test "the paint clips instead of wrapping and restores autowrap" {
+test "layout compatibility for slots rules whitespace and clipping" {
     var content = try Content.init(std.testing.allocator, 1);
     defer content.deinit();
-    _ = content.set("x");
-    var buf: [512]u8 = undefined;
-    for ([_]bool{ true, false }) |autowrap| {
-        var w: std.Io.Writer = .fixed(&buf);
-        var styles = [_][]const u8{""};
-        var rules = [_]?[]const u8{null};
-        try paint(&w, &content, &.{ .styles = &styles, .rules = &rules }, 24, 1, 80, "", autowrap);
-        const out = w.buffered();
-        try std.testing.expect(std.mem.startsWith(u8, out, "\x1b7\x1b[?7l"));
-        try std.testing.expectEqual(autowrap, std.mem.endsWith(u8, out, "\x1b8\x1b[?7h"));
-        try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[0m\x1b8") != null);
-    }
-}
-
-test "rules repeat across the width" {
-    var buf: [256]u8 = undefined;
-    var w: std.Io.Writer = .fixed(&buf);
-    try writeFill(&w, "─", 5);
-    try std.testing.expectEqualStrings("─────", w.buffered());
-    w.end = 0;
-    try writeFill(&w, "-=", 5);
-    try std.testing.expectEqualStrings("-=-= ", w.buffered());
-    w.end = 0;
-    try writeFill(&w, "", 5);
-    try std.testing.expectEqualStrings("     ", w.buffered());
-    w.end = 0;
-    try writeFill(&w, "\x1b[31m", 5);
-    try std.testing.expectEqualStrings("     ", w.buffered());
-}
-
-test "rules fill around both slots" {
-    const S = struct {
-        var buf: [256]u8 = undefined;
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{null};
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    const cases = [_]struct { input: []const u8, rule: ?[]const u8 = null, cols: u16, visible: []const u8 }{
+        .{ .input = "host\t12:00", .cols = 20, .visible = "host           12:00" },
+        .{ .input = "\t12:00", .cols = 10, .visible = "     12:00" },
+        .{ .input = "hostname\t12:00", .cols = 10, .visible = "hostname 1" },
+        .{ .input = "hostname\t12:00", .cols = 5, .visible = "hostn" },
+        .{ .input = "a\tb\tc", .cols = 8, .visible = "a    b c" },
+        .{ .input = " Build \t 65% ", .rule = "-", .cols = 20, .visible = " Build -------- 65% " },
+        .{ .input = "", .rule = "-=", .cols = 5, .visible = "-=-= " },
+        .{ .input = "", .rule = "", .cols = 5, .visible = "     " },
+        .{ .input = "", .rule = "\x1b[31m", .cols = 5, .visible = "     " },
+        .{ .input = "", .rule = "\x1b[5;5H-", .cols = 3, .visible = "---" },
+        .{ .input = "", .rule = "界", .cols = 5, .visible = "界界 " },
+        .{ .input = "anything", .cols = 0, .visible = "" },
     };
-    var w: std.Io.Writer = .fixed(&S.buf);
-    try writeLine(&w, " Build \t 65% ", 20, "", .{}, "─");
-    var visible: [256]u8 = undefined;
-    var out: std.Io.Writer = .fixed(&visible);
-    var i: usize = 0;
-    while (i < w.buffered().len) {
-        if (w.buffered()[i] == 0x1b) {
-            i = escapeSequence(w.buffered(), i).end;
-            continue;
-        }
-        try out.writeByte(w.buffered()[i]);
-        i += 1;
+    for (cases) |c| {
+        _ = content.set(c.input);
+        rules[0] = c.rule;
+        try r.resize(1, c.cols);
+        try r.prepare(&content, &.{ .styles = &styles, .rules = &rules }, true);
+        const row = r.rows[0].base;
+        var buf: [256]u8 = undefined;
+        var w = std.Io.Writer.fixed(&buf);
+        for (row.cells.items) |cell| switch (cell.kind) {
+            .blank => try w.writeByte(' '),
+            .lead => try w.writeAll(cell.glyph.get(row.data.items)),
+            .continuation => {},
+        };
+        try std.testing.expectEqualStrings(c.visible, w.buffered());
     }
-    try std.testing.expectEqualStrings(" Build ──────── 65% ", out.buffered());
+}
+test "change kinds distinguish hyperlink appearance and ownership" {
+    var content = try Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{null};
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try r.resize(1, 1);
+    _ = content.set("x");
+    try r.prepare(&content, &look, false);
+    _ = try r.build(24, "", true, false);
+    r.commit();
+    _ = content.set("\tx");
+    try r.prepare(&content, &look, false);
+    try std.testing.expect(r.rows[0].summary.owner and !r.rows[0].summary.visual());
+    try std.testing.expectEqualStrings("", try r.build(24, "", true, false));
+    r.commit();
+    _ = content.set("\t\x1b[31mx");
+    try r.prepare(&content, &look, false);
+    try std.testing.expect(r.rows[0].summary.style and !r.rows[0].summary.glyph);
+    _ = content.set("\t\x1b[31m\x1b]8;;https://example.test\x07x");
+    try r.prepare(&content, &look, false);
+    try std.testing.expect(r.rows[0].summary.link and !r.rows[0].summary.glyph and !r.rows[0].summary.style);
+    const output = try r.build(24, "", true, false);
+    try std.testing.expect(std.mem.indexOf(u8, output, "https://example.test") != null);
+    try std.testing.expect(std.mem.endsWith(u8, output, "\x1b]8;;\x1b\\\x1b[0m\x1b8\x1b[?7h"));
+    r.commit();
+    r.patch(0, .{ .slot = .right }, .{ .bold = true });
+    try std.testing.expectEqual(@as(usize, 1), r.parsed_rows); // no new preparation
+    try std.testing.expect(!r.rows[0].base.changes(r.rows[0].desired).glyph);
+}
+fn allocationScenario(gpa: std.mem.Allocator) !void {
+    var r = try Renderer.init(gpa);
+    defer r.deinit();
+    var content = try Content.init(gpa, 2);
+    defer content.deinit();
+    _ = content.set("one\ntwo");
+    var styles = [_][]const u8{ "", "" };
+    var rules = [_]?[]const u8{ "\x1b[0m" ** 1100 ++ "─", null };
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    try r.resize(2, 12);
+    try r.prepare(&content, &look, true);
+    _ = try r.build(23, "", true, true);
+    r.commit();
+    try r.resize(2, 20);
+    try r.prepare(&content, &look, true);
+    _ = try r.build(23, "", true, true);
+    r.commit();
+}
+test "every allocation failure during initialization preparation and resize is cleaned" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, allocationScenario, .{});
+}
+test "nonadjacent selection uses one complete envelope and no-op commits settle" {
+    var content = try Content.init(std.testing.allocator, 3);
+    defer content.deinit();
+    _ = content.set("a\nb\nc");
+    var styles = [_][]const u8{ "", "", "" };
+    var rules = [_]?[]const u8{ null, null, null };
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try r.resize(3, 10);
+    try r.prepare(&content, &look, true);
+    _ = try r.build(22, "", true, true);
+    r.commit();
+    _ = content.setLine(0, "A");
+    _ = content.setLine(2, "C");
+    try r.prepare(&content, &look, false);
+    const bytes = try r.build(22, "", true, false);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, bytes, "\x1b7"));
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "\x1b[22;1H") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "\x1b[23;1H") == null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "\x1b[24;1H") != null);
+    r.commit();
+    r.patch(0, .{ .slot = .left }, .{ .bold = false });
+    try std.testing.expectEqualStrings("", try r.build(22, "", true, false));
+    r.commit();
+    try std.testing.expect(!r.rows[0].pending);
 }

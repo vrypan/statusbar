@@ -257,9 +257,15 @@ right = configured-six
 statusbar_bin=$1
 trap 'size=$(stty size); rows=${size%% *}; printf "__SIZE__:%s:%s\n" "$rows" "$STATUSBAR_LINES"' WINCH
 size=$(stty size); rows=${size%% *}; printf "__START__:%s:%s\n" "$rows" "$STATUSBAR_LINES"
-while IFS= read -r command; do
+while :; do
+  IFS= read -r command || continue
   case "$command" in
     SET) "$statusbar_bin" set 6 hidden-value; printf '__SET__\n' ;;
+    ROW) "$statusbar_bin" set 3 changed-row-two ;;
+    CLEAR) printf '\033[2J__CLEAR__\n' ;;
+    ALT) printf '\033[?1049h__ALT__\n' ;;
+    NORMAL) printf '\033[?1049l__NORMAL__\n' ;;
+    BYTES) printf '\033[32m__FORWARDED__\033[0m\n' ;;
     BAD) "$statusbar_bin" set 7 bad; printf '__BAD__:%s\n' "$?" ;;
     EXIT) exit 0 ;;
   esac
@@ -273,6 +279,30 @@ done
         argv = [binary, "-c", config_path, "--", "/bin/sh", "-c", script, "sh", binary]
         pid, master = spawn(argv)
         data = read_until(master, b"", b"__START__:21:3")
+        data = read_until(master, data, b"configured-six")
+        suffix = b"\x1b[0m\x1b8\x1b[?7h"
+        # Finish the content-bearing startup paint, not an earlier blank paint.
+        start = data.index(b"configured-six")
+        data = data[:start] + read_until(master, data[start:], suffix)
+
+        os.write(master, b"ROW\n")
+        batch = read_until(master, b"", b"changed-row-two")
+        batch = read_until(master, batch, suffix)
+        assert b"\x1b[23;1H" in batch, batch
+        assert b"\x1b[22;1H" not in batch and b"\x1b[24;1H" not in batch, batch
+
+        for command, marker in ((b"CLEAR\n", b"__CLEAR__"),
+                                (b"ALT\n", b"__ALT__"),
+                                (b"NORMAL\n", b"__NORMAL__")):
+            os.write(master, command)
+            batch = read_until(master, b"", marker)
+            batch = read_until(master, batch, suffix)
+            for row in (22, 23, 24):
+                assert f"\x1b[{row};1H".encode() in batch, batch
+
+        os.write(master, b"BYTES\n")
+        forwarded = b"\x1b[32m__FORWARDED__\x1b[0m"
+        assert forwarded in read_until(master, b"", forwarded)
 
         resize(master, 4)
         data = read_until(master, data, b"__SIZE__:2:3")
@@ -288,6 +318,15 @@ done
         os.write(master, b"BAD\n")
         data = read_until(master, data, b"__BAD__:2")
         assert b"StatusBarSlot7=" not in data, "invalid update was written"
+
+        # A huge width exceeds the bounded renderer budget during resize.
+        # It must terminate, restore terminal modes, and print a diagnostic.
+        before = termios.tcgetattr(master)
+        resize(master, 24, 65535)
+        failed = read_until(master, b"", b"statusbar: cannot start the terminal proxy", 20)
+        assert b"\x1b[r" in failed, failed
+        after = termios.tcgetattr(master)
+        assert after[3] & termios.ICANON and after[3] & termios.ECHO, (before, after)
     finally:
         if pid is not None:
             stop(pid, master)
