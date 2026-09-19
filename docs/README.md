@@ -18,6 +18,7 @@ This guide calls the visible parts of the bar *rows*. In a config file, each
 |---|---|
 | Show a clock or one command's output | [A single command](#start-with-one-command) |
 | Build a persistent personal layout | [Make a config](#make-a-config) |
+| Notice when a command's value changes | [Highlight changed values](#highlight-changed-values) |
 | Show changing directory or Git context | [Update slots from your shell](#put-live-context-in-a-slot) |
 | Move Starship's details out of the prompt | [Use Starship](#use-starship) |
 | Try a more visual look | [Try a theme](#try-a-theme) |
@@ -84,6 +85,39 @@ The terminal shows as many configured rows as fit while preserving at least
 two rows for the program inside it. Rows that do not fit are hidden and return
 when the terminal grows. [Configuration](config.md) explains templates,
 commands, markup, colors, rules, and all layout details.
+
+## Highlight changed values
+
+A named command can briefly highlight its slot whenever its displayed result
+changes. This is useful for weather, unread notifications, resource metrics,
+build state, or anything else that updates in the background:
+
+```ini
+[line.1]
+left = " Clock #(clock) "
+
+[command.clock]
+run = date '+%H:%M:%S'
+interval = 1
+track = true
+```
+
+The first result establishes a baseline; identical later results do nothing.
+With the `[highlight]` section from the built-in config, changes play a warm
+color pulse. Without that section, the fallback is a 500 ms bold flash. The
+whole slot is highlighted, including its label, while the rule and opposite
+slot retain their normal appearance.
+
+The built-in effect warms the foreground and background through twelve steps,
+then restores every cell's exact original style. Copy the default config to
+adjust its colors or speed:
+
+```sh
+statusbar config --default > ~/.config/statusbar/config
+```
+
+See [Highlight changes](config.md#highlight-changes) for the complete behavior
+and `[highlight]` reference.
 
 ## Put live context in a slot
 
@@ -179,7 +213,7 @@ restrained use of icons; see [their notes](../samples/themes/README.md).
 ## Reference and behavior
 
 - [Usage](usage.md) — commands, options, completions, `--exec`, and environment.
-- [Configuration](config.md) — rows, templates, commands, colors, markup, and rules.
+- [Configuration](config.md) — rows, commands, change highlights, colors, markup, and rules.
 - [Updating slots](set.md) — runtime updates from scripts and the terminal protocol.
 - [Starship](starship.md) — prompt integration and customization.
 - [Internals and limitations](internals.md) — PTY behavior, supported terminal

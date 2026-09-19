@@ -51,7 +51,17 @@ same safe output boundaries and cursor-save timing as before.
 Internal slot and column-range operations can patch and restore styles without
 changing content. Patches survive unrelated-row updates, equivalent content
 rebuilds, and damage repair. A semantic base change resets that row's patches;
-resize rebuilds the grid. Flash timers and within-row selective writes are not
+resize rebuilds the grid. Tracked commands use a separate monotonic deadline
+and applied-step index per visible slot. The default effect is bold for 500 ms;
+`[highlight]` can instead specify up to 16 background colors and either a
+constant foreground or a matching foreground sequence. Each step is derived
+from elapsed time, so delayed steps are skipped. Patches are reapplied after a
+base rebuild or resize and restored on expiry; damage repair never restarts
+the deadline.
+Command results establish a first-result baseline, and subsequent changed
+results are mapped through templates to slots and gated by semantic cell
+changes. Step boundaries and expiry participate in the proxy poll timeout and
+use the existing safe paint scheduler. Within-row selective writes are not
 implemented yet.
 
 ### Unicode and styles

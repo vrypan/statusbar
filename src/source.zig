@@ -25,6 +25,9 @@ pub const Source = struct {
     commands: []status.Command,
     outputs: [config.max_commands][max_output_line]u8 = undefined,
     output_lens: [config.max_commands]usize = @splat(0),
+    output_seen: [config.max_commands]bool = @splat(false),
+    /// Tracked command results changed during the most recent update only.
+    tracked_changes: u16 = 0,
     /// Null in `--exec` mode.
     cfg: ?*const config.Config,
     /// Desired bar lines.
@@ -134,6 +137,7 @@ pub const Source = struct {
     /// Reads ready command output, runs due commands, and rebuilds the
     /// content. Returns whether the bar's text changed.
     pub fn update(self: *Source, fds: []const posix.pollfd, now_ms: i64) bool {
+        self.tracked_changes = 0;
         var changed = false;
         for (self.commands, fds, 0..) |*command, fd, n| {
             if (fd.fd < 0 or fd.revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR) == 0) continue;
@@ -171,8 +175,28 @@ pub const Source = struct {
         const end = std.mem.indexOfScalar(u8, text, '\n') orelse text.len;
         const line = std.mem.trimEnd(u8, text[0..end], "\r");
         const kept = line[0..@min(line.len, max_output_line)];
-        copyOnOneLine(self.outputs[n][0..kept.len], kept);
+        var normalized: [max_output_line]u8 = undefined;
+        copyOnOneLine(normalized[0..kept.len], kept);
+        if (self.cfg) |cfg| {
+            if (cfg.commands[n].track and self.output_seen[n] and !std.mem.eql(u8, self.outputs[n][0..self.output_lens[n]], normalized[0..kept.len])) {
+                self.tracked_changes |= @as(u16, 1) << @intCast(n);
+            }
+        }
+        @memcpy(self.outputs[n][0..kept.len], normalized[0..kept.len]);
         self.output_lens[n] = kept.len;
+        self.output_seen[n] = true;
+    }
+
+    pub fn slotTrackedChange(self: *const Source, slot: usize) bool {
+        const cfg = self.cfg orelse return false;
+        if (self.override_lens[slot] != null) return false;
+        const line = &cfg.line[slot / 2];
+        const template = if (slot % 2 == 0) &line.left else &line.right;
+        for (template.items()) |part| switch (part) {
+            .command => |n| if (self.tracked_changes & (@as(u16, 1) << @intCast(n)) != 0) return true,
+            .text => {},
+        };
+        return false;
     }
 
     fn rebuild(self: *Source) bool {
@@ -314,4 +338,40 @@ test "values stay on one line in their slot" {
     source.setOverride(0, " \t ");
     _ = source.rebuild();
     try std.testing.expectEqualStrings("   \tright", source.content.line(0));
+}
+
+test "tracked results establish a baseline and map changes to unoverridden slots" {
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(std.testing.allocator, "[line.1]\nleft = #(tracked) #(plain)\nright = #(tracked)\n" ++
+        "[line.2]\nleft = #(plain)\n" ++
+        "[command.tracked]\nrun = echo x\ntrack = true\n" ++
+        "[command.plain]\nrun = echo y\n", &diag);
+    defer cfg.deinit();
+    var content = try bar.Content.init(std.testing.allocator, 2);
+    defer content.deinit();
+    var overrides: [4][output.max_value]u8 = undefined;
+    var override_lens: [4]?usize = @splat(null);
+    var source: Source = .{ .gpa = std.testing.allocator, .io = undefined, .commands = &.{}, .cfg = &cfg, .lines = 2, .content = content, .exec_output = &.{}, .overrides = &overrides, .override_lens = &override_lens };
+    source.keepFirstLine(0, "");
+    try std.testing.expectEqual(@as(u16, 0), source.tracked_changes);
+    source.keepFirstLine(0, "hello\tworld\r\nignored");
+    try std.testing.expect(source.slotTrackedChange(0));
+    try std.testing.expect(source.slotTrackedChange(1));
+    try std.testing.expect(!source.slotTrackedChange(2));
+    source.setOverride(1, "manual");
+    try std.testing.expect(!source.slotTrackedChange(1));
+    source.tracked_changes = 0;
+    source.keepFirstLine(0, "hello world\nother ignored output");
+    source.keepFirstLine(1, "first");
+    source.keepFirstLine(1, "second");
+    try std.testing.expectEqual(@as(u16, 0), source.tracked_changes);
+    const long = "a" ** (max_output_line + 1);
+    source.keepFirstLine(0, long);
+    source.tracked_changes = 0;
+    source.keepFirstLine(0, long[0..max_output_line] ++ "b");
+    try std.testing.expectEqual(@as(u16, 0), source.tracked_changes);
+    source.keepFirstLine(0, "");
+    try std.testing.expect(source.slotTrackedChange(0));
+    _ = source.update(&.{}, 0);
+    try std.testing.expectEqual(@as(u16, 0), source.tracked_changes);
 }

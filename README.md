@@ -9,6 +9,7 @@ working.
 
 - Configure the bar with templates: text, colors, strftime clocks and shell
   commands, each on its own refresh interval.
+- Opt into a brief color pulse when a command's displayed value changes.
 - Update it from your scripts with `statusbar set`.
 - Optionally move Starship's prompt details into it while keeping the prompt
   character in the terminal.

@@ -12,8 +12,9 @@ When neither default location has a file, statusbar uses its built-in config:
 `--config` or `$STATUSBAR_CONFIG` is an error. So is a malformed config:
 statusbar reports the file, line, and problem before it touches the terminal.
 
-The built-in config is commented and uses the terminal's own palette, so it
-follows your theme. Start from it:
+The built-in config is commented. Its regular bar colors use the terminal's
+palette, while its optional change highlight uses a fixed warm RGB pulse.
+Start from it:
 
 ```sh
 mkdir -p ~/.config/statusbar
@@ -85,6 +86,7 @@ narrow, the right slot is clipped first; the left slot is kept longest.
 |------------|-------------------------------------------------------------|
 | `run`      | shell command, run with `/bin/sh -c`                        |
 | `interval` | seconds between runs (default: the top-level `interval`)    |
+| `track`    | briefly highlight changed output (`true` or `false`, default `false`) |
 
 For a readable multi-line value, write `= |` followed by indented lines. The
 block ends at the next unindented key or section. Commands keep line breaks
@@ -102,6 +104,77 @@ interval = 60
 Only the first line of a command's latest output is displayed. Each command
 runs on its own schedule, so a slow one never holds up the clock or other
 commands. One that runs past its interval (at least five seconds) is killed.
+
+### Highlight changes
+
+Enable tracking on a named command to notice updates without watching it:
+
+```ini
+[command.weather]
+run = curl -fsS 'https://wttr.in/?format=%c%t'
+interval = 300
+track = true
+```
+
+When its displayed result changes, the entire left/right slot containing
+`#(weather)` plays the shared `[highlight]` effect, then returns to its normal
+styling. This includes neighboring text and other commands in that slot, but
+not the rule or the opposite slot.
+
+The first result establishes a baseline without highlighting. Identical
+results, changes outside the displayed first line, and invisible/clipped
+slot changes do not trigger an effect. Another change restarts the timer.
+Clock updates and `statusbar set` do not trigger it; a manual slot override
+suppresses tracking there. Hidden rows do not highlight. Resize and screen
+repair do not restart the timer; still-visible slots retain active highlights.
+Repaints wait for safe terminal-output boundaries, so a busy application may
+delay the effect or prevent a short highlight from appearing.
+
+Tracking is available for named commands, not inline shell expressions or
+`--exec`.
+
+### `[highlight]`: color sequences
+
+The built-in config contains this shared warm pulse. A copied or custom config
+uses it only if the section is present. It applies to every command with
+`track = true`, but does nothing until a command opts in:
+
+```ini
+[highlight]
+backgrounds = #2c271a, #3d331b, #50411c, #6a551d, #84681f, #9e7b20, #8f701f, #765e1e, #5d4a1d, #44371b, #332c1a, #242019
+foregrounds = #fce8c3, #fdebc4, #feefc8, #fff2ca, #fff4cc, #fff7d1, #fff5ce, #fff2ca, #feefc8, #fdebc4, #fce9c3, #fce8c3
+step = 0.10
+```
+
+The colors ease from the normal dark background toward warm yellow and back
+over 1.2 seconds. The foreground brightens with it. After the last step,
+statusbar restores each cell's exact original foreground, background, bold,
+italic and other attributes. Only affected rows repaint; commands are not
+rerun for animation steps. The sequence does not loop, and another result
+change restarts it at its first step.
+
+| Key | Meaning |
+|-----|---------|
+| `backgrounds` | One to 16 comma-separated `#RRGGBB` colors, in playback order |
+| `foreground` | Optional temporary `#RRGGBB` text color, used for every step |
+| `foregrounds` | Optional one-to-16 `#RRGGBB` colors; with backgrounds, counts must match |
+| `step` | Seconds per step, from 0.05 to 5; defaults to 0.15 for color effects |
+
+Use either singular `foreground` or plural `foregrounds`, not both. When both
+plural sequences are present, their counts must match so every background has
+one corresponding foreground. A `foregrounds`-only sequence is valid. Use one
+background for a single flash, or just `foreground` for a text-color flash.
+An omitted color channel retains each cell's original value.
+
+Highlight colors must be exact `#RRGGBB` values; color names and `[colors]`
+aliases are not accepted. Steps are discrete rather than interpolated. More
+closely spaced shades and a shorter `step` produce a smoother effect, at the
+cost of more row redraws.
+
+If `[highlight]` is omitted, the fallback effect is bold for 0.5 seconds;
+setting only `step` changes that duration. Resize and screen repair preserve
+an active sequence's position and deadline. If safe repainting is temporarily
+blocked by child output, obsolete steps are skipped rather than replayed.
 
 Commands run in the directory where statusbar started, not your shell's,
 with stdin and stderr on `/dev/null`. `STATUSBAR_COLUMNS` is the current

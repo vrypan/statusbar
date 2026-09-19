@@ -85,6 +85,9 @@ pub const State = struct {
     selected: bool = false,
     pending: bool = true,
     output_bound: usize = 0,
+    slot_changed: [2]bool = .{ false, false },
+    highlight_until: [2]?i64 = .{ null, null },
+    highlight_step: [2]?u8 = .{ null, null },
     fn deinit(self: *State, gpa: std.mem.Allocator) void {
         self.base.deinit(gpa);
         self.desired.deinit(gpa);
@@ -104,6 +107,7 @@ pub const Renderer = struct {
     writer: std.Io.Writer.Allocating,
     parsed_rows: usize = 0,
     emitted_rows: usize = 0,
+    highlight: @import("config.zig").Highlight = .{},
 
     pub fn init(parent: std.mem.Allocator) !Renderer {
         const budget = try parent.create(cells.Budget);
@@ -136,6 +140,7 @@ pub const Renderer = struct {
         if (minimum > self.budget.limit) return error.RendererMemoryLimit;
         const rows = try gpa.alloc(State, count);
         @memset(rows, .{});
+        for (rows[0..@min(rows.len, self.rows.len)], self.rows[0..@min(rows.len, self.rows.len)]) |*row, old| row.highlight_until = old.highlight_until;
         for (self.rows) |*row| row.deinit(gpa);
         gpa.free(self.rows);
         self.rows = rows;
@@ -148,6 +153,7 @@ pub const Renderer = struct {
         self.parsed_rows = 0;
         for (self.rows, 0..) |*row, n| {
             row.summary = .{};
+            row.slot_changed = .{ false, false };
             @memset(row.changes.items, .{});
             const raw = content.line(n);
             if (!invalidate and row.raw_len != null and std.mem.eql(u8, raw, row.raw[0..row.raw_len.?])) continue;
@@ -157,6 +163,14 @@ pub const Renderer = struct {
             for (row.changes.items, 0..) |*change, col| {
                 change.* = if (invalidate or row.raw_len == null) .{} else self.staging.difference(row.base, col);
                 row.summary.merge(change.*);
+                if (change.visual()) {
+                    const owners = .{ self.staging.cells.items[col].owner, row.base.cells.items[col].owner };
+                    inline for (owners) |owner| switch (owner) {
+                        .left => row.slot_changed[0] = true,
+                        .right => row.slot_changed[1] = true,
+                        .fill => {},
+                    };
+                }
             }
             const replace = invalidate or row.raw_len == null or row.summary.any();
             if (replace) {
@@ -164,6 +178,7 @@ pub const Renderer = struct {
                 try row.painted.reserveCopy(gpa, self.staging);
                 std.mem.swap(cells.Row, &row.base, &self.staging);
                 row.desired.copyReserved(row.base);
+                row.highlight_step = .{ null, null };
                 row.pending = true;
                 // Bound every possible StylePatch; links/text cannot be changed
                 // by a patch. Reserve outside diff/serialization.
@@ -219,6 +234,55 @@ pub const Renderer = struct {
     pub fn restore(self: *Renderer, row: usize, target: cells.Target) void {
         cells.restore(&self.rows[row].desired, self.rows[row].base, target);
         self.rows[row].pending = true;
+    }
+
+    /// Call only after preparation for a tracked command result, never damage.
+    pub fn highlightChange(self: *Renderer, row: usize, side: usize, now_ms: i64) void {
+        if (!self.rows[row].slot_changed[side]) return;
+        self.rows[row].highlight_until[side] = now_ms + self.highlight.duration();
+    }
+
+    pub fn cancelHighlight(self: *Renderer, row: usize, side: usize) void {
+        if (self.rows[row].highlight_until[side] != null) self.rows[row].highlight_until[side] = 0;
+    }
+
+    pub fn highlightTimeout(self: *const Renderer, now_ms: i64) i64 {
+        var result: i64 = -1;
+        for (self.rows) |row| for (row.highlight_until, 0..) |deadline, side| {
+            if (deadline) |end| {
+                const next = if (row.highlight_step[side]) |step| @min(end, end - self.highlight.duration() + (@as(i64, step) + 1) * self.highlight.step_ms) else now_ms;
+                const remaining = @max(next - now_ms, 0);
+                result = if (result < 0) remaining else @min(result, remaining);
+            }
+        };
+        return result;
+    }
+
+    /// Apply/expire appearance independently of source polling and repair.
+    pub fn advanceHighlights(self: *Renderer, now_ms: i64) bool {
+        var changed = false;
+        for (self.rows, 0..) |*row, n| for (0..2) |side| {
+            const deadline = row.highlight_until[side] orelse continue;
+            const target: cells.Target = .{ .slot = if (side == 0) .left else .right };
+            if (now_ms >= deadline) {
+                if (row.highlight_step[side] != null) {
+                    self.restore(n, target);
+                    changed = true;
+                }
+                row.highlight_until[side] = null;
+                row.highlight_step[side] = null;
+            } else {
+                const elapsed = self.highlight.duration() - (deadline - now_ms);
+                const step: u8 = @intCast(@divFloor(@max(elapsed, 0), self.highlight.step_ms));
+                if (row.highlight_step[side] == null or row.highlight_step[side].? != step) {
+                    self.restore(n, target);
+                    self.patch(n, target, self.highlight.patch(step));
+                    row.highlight_step[side] = step;
+                    changed = true;
+                }
+            }
+        };
+        return changed;
     }
     /// Construct a complete batch using storage reserved during preparation.
     /// Nothing in painted is changed here, even if construction fails.
@@ -582,4 +646,133 @@ test "nonadjacent selection uses one complete envelope and no-op commits settle"
     try std.testing.expectEqualStrings("", try r.build(22, "", true, false));
     r.commit();
     try std.testing.expect(!r.rows[0].pending);
+}
+
+test "slot highlights expire restart and preserve base styling across repair and resize" {
+    var content = try Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{"·"};
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try r.resize(1, 20);
+    _ = content.set("old\tright");
+    try r.prepare(&content, &look, true);
+    r.highlightChange(0, 0, 0); // Startup is never a content event.
+    try std.testing.expectEqual(@as(i64, -1), r.highlightTimeout(0));
+    _ = content.set("new\tright");
+    try r.prepare(&content, &look, false);
+    r.highlightChange(0, 0, 100);
+    try std.testing.expect(r.advanceHighlights(100));
+    try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
+    try std.testing.expect(!r.rows[0].desired.cells.items[19].style.bold);
+    try std.testing.expect(!r.rows[0].desired.cells.items[5].style.bold);
+    try std.testing.expectEqual(@as(i64, 500), r.highlightTimeout(100));
+    _ = try r.build(24, "", true, true);
+    r.commit();
+    try std.testing.expect(!r.advanceHighlights(200));
+    _ = content.set("new\tchanged"); // Another slot does not end or restart it.
+    try r.prepare(&content, &look, false);
+    _ = r.advanceHighlights(250);
+    try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
+    try std.testing.expectEqual(@as(i64, 350), r.highlightTimeout(250));
+    _ = content.set("#[bold]B#[default]x\tchanged");
+    try r.prepare(&content, &look, false);
+    r.highlightChange(0, 0, 300);
+    _ = r.advanceHighlights(300);
+    try r.resize(1, 24);
+    try r.prepare(&content, &look, true);
+    _ = r.advanceHighlights(400);
+    try std.testing.expectEqual(@as(i64, 400), r.highlightTimeout(400));
+    try std.testing.expect(r.rows[0].desired.cells.items[1].style.bold);
+    try std.testing.expect(r.advanceHighlights(800));
+    try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
+    try std.testing.expect(!r.rows[0].desired.cells.items[1].style.bold);
+    try std.testing.expectEqual(@as(i64, -1), r.highlightTimeout(800));
+    try std.testing.expect(!r.advanceHighlights(801));
+}
+
+test "invisible changes do not highlight and cancellation restores the slot" {
+    var content = try Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{null};
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try r.resize(1, 3);
+    _ = content.set("abcdef");
+    try r.prepare(&content, &look, true);
+    _ = content.set("abcXYZ");
+    try r.prepare(&content, &look, false);
+    r.highlightChange(0, 0, 0);
+    try std.testing.expect(!r.advanceHighlights(0));
+    _ = content.set("\x1b[0mabcXYZ");
+    try r.prepare(&content, &look, false);
+    r.highlightChange(0, 0, 0);
+    try std.testing.expect(!r.advanceHighlights(0));
+    _ = content.set("xyz");
+    try r.prepare(&content, &look, false);
+    r.highlightChange(0, 0, 10);
+    _ = r.advanceHighlights(10);
+    r.cancelHighlight(0, 0);
+    try std.testing.expect(r.advanceHighlights(20));
+    try std.testing.expect(!r.rows[0].desired.cells.items[0].style.bold);
+    try std.testing.expectEqual(@as(i64, -1), r.highlightTimeout(20));
+}
+
+test "color sequence advances skips overdue steps restarts and restores original cells" {
+    var content = try Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{"·"};
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    r.highlight.backgrounds[0] = .{ .rgb = .{ 158, 123, 32 } };
+    r.highlight.backgrounds[1] = .{ .rgb = .{ 112, 89, 29 } };
+    r.highlight.backgrounds[2] = .{ .rgb = .{ 68, 57, 28 } };
+    r.highlight.backgrounds_len = 3;
+    r.highlight.foregrounds[0] = .{ .rgb = .{ 255, 244, 204 } };
+    r.highlight.foregrounds[1] = .{ .rgb = .{ 238, 218, 174 } };
+    r.highlight.foregrounds[2] = .{ .rgb = .{ 220, 194, 144 } };
+    r.highlight.foregrounds_len = 3;
+    r.highlight.step_ms = 150;
+    try r.resize(1, 20);
+    _ = content.set("old\tright");
+    try r.prepare(&content, &look, true);
+    _ = content.set("#[bold,fg=blue,bg=red]界#[default]x\tright");
+    try r.prepare(&content, &look, false);
+    r.highlightChange(0, 0, 1000);
+    _ = r.advanceHighlights(1000);
+    try std.testing.expectEqualDeep(r.highlight.backgrounds[0], r.rows[0].desired.cells.items[0].style.bg);
+    try std.testing.expectEqualDeep(r.rows[0].desired.cells.items[0].style, r.rows[0].desired.cells.items[1].style);
+    try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
+    try std.testing.expectEqualDeep(r.highlight.foregrounds[0], r.rows[0].desired.cells.items[2].style.fg);
+    try std.testing.expect(!r.rows[0].desired.cells.items[2].style.bold);
+    try std.testing.expectEqualDeep(styled.Color.default, r.rows[0].desired.cells.items[19].style.bg);
+    try std.testing.expectEqual(@as(i64, 150), r.highlightTimeout(1000));
+    try std.testing.expect(!r.advanceHighlights(1149));
+    try std.testing.expect(r.advanceHighlights(1150));
+    try std.testing.expectEqualDeep(r.highlight.backgrounds[1], r.rows[0].desired.cells.items[0].style.bg);
+    try std.testing.expectEqualDeep(r.highlight.foregrounds[1], r.rows[0].desired.cells.items[0].style.fg);
+    _ = try r.build(24, "", true, true); // Repair doesn't restart animation.
+    r.commit();
+    try r.resize(1, 22);
+    try r.prepare(&content, &look, true);
+    _ = r.advanceHighlights(1310);
+    try std.testing.expectEqualDeep(r.highlight.backgrounds[2], r.rows[0].desired.cells.items[0].style.bg);
+    try std.testing.expectEqual(@as(i64, 140), r.highlightTimeout(1310));
+    _ = content.set("#[bold,fg=blue,bg=red]界#[default]y\tright");
+    try r.prepare(&content, &look, false);
+    r.highlightChange(0, 0, 1320);
+    _ = r.advanceHighlights(1320);
+    try std.testing.expectEqualDeep(r.highlight.backgrounds[0], r.rows[0].desired.cells.items[0].style.bg);
+    _ = r.advanceHighlights(1630); // Skip intermediate step after a delay.
+    try std.testing.expectEqualDeep(r.highlight.backgrounds[2], r.rows[0].desired.cells.items[0].style.bg);
+    try std.testing.expect(r.advanceHighlights(1770));
+    try std.testing.expect(r.rows[0].desired.visuallyEqual(r.rows[0].base));
+    try std.testing.expectEqual(@as(i64, -1), r.highlightTimeout(1770));
+    try std.testing.expect(!r.advanceHighlights(1771));
 }

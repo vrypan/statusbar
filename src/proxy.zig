@@ -152,6 +152,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
 
     var renderer = try bar.Renderer.init(gpa);
     defer renderer.deinit();
+    if (opts.cfg) |cfg| renderer.highlight = cfg.highlight;
     try renderer.resize(layout.bar, layout.cols);
     try renderer.prepare(&source.content, &look, true);
     var proxy: Proxy = .{
@@ -455,9 +456,11 @@ const Proxy = struct {
 
             var now_ms = self.now();
             var timeout = minTimeout(self.paintTimeout(now_ms), self.source.timeout(now_ms));
+            timeout = minTimeout(timeout, self.renderer.highlightTimeout(now_ms));
             if (self.input.holding()) timeout = minTimeout(timeout, @max(self.last_input_ms + input_hold_ms - now_ms, 0));
             _ = posix.poll(fds[0 .. 3 + command_fds.len], @intCast(@min(timeout, std.math.maxInt(c_int)))) catch return;
             now_ms = self.now();
+            if (self.renderer.advanceHighlights(now_ms)) self.requestPaint(now_ms);
 
             if (sig.revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
                 try self.drainSignals(sig_r, pid, now_ms);
@@ -502,8 +505,16 @@ const Proxy = struct {
 
             if (self.source.update(command_fds, now_ms)) {
                 try self.renderer.prepare(&self.source.content, self.look, false);
+                for (0..self.renderer.rows.len) |row| for (0..2) |side| {
+                    const slot = row * 2 + side;
+                    if (self.source.slotTrackedChange(slot)) self.renderer.highlightChange(row, side, now_ms);
+                };
                 self.requestPaint(now_ms);
             }
+            for (0..self.renderer.rows.len) |row| for (0..2) |side| {
+                if (self.source.override_lens[row * 2 + side] != null) self.renderer.cancelHighlight(row, side);
+            };
+            if (self.renderer.advanceHighlights(now_ms)) self.requestPaint(now_ms);
 
             try self.paintIfDue(now_ms);
             self.terminal.flush();
@@ -551,6 +562,7 @@ const Proxy = struct {
         self.source.refreshNow(now_ms);
         try self.renderer.resize(self.layout.bar, self.layout.cols);
         try self.renderer.prepare(&self.source.content, self.look, true);
+        _ = self.renderer.advanceHighlights(now_ms);
         // Terminals drop the margins on resize; put them back before the
         // child redraws, if the stream allows it right now.
         self.requestPaint(now_ms);

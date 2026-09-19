@@ -221,6 +221,60 @@ def stop(pid, fd):
     os.close(fd)
 
 
+def check_tracking(binary, colors=False):
+    with tempfile.TemporaryDirectory(prefix="statusbar-tracking-") as folder:
+        value_path = os.path.join(folder, "value")
+        config_path = os.path.join(folder, "config")
+        with open(value_path, "w") as value:
+            value.write("one\n")
+        with open(config_path, "w") as cfg:
+            cfg.write(f"""[line.1]
+left = PREFIX #(value)
+right = RIGHT
+rule = .
+[command.value]
+run = cat {shlex.quote(value_path)}
+interval = 0.1
+track = true
+""")
+            if colors:
+                cfg.write("[highlight]\nbackgrounds = #9e7b20, #70591d, #44391c\nforegrounds = #fff4cc, #eedaae, #dcc290\nstep = 0.15\n")
+        pid, master = spawn([binary, "-c", config_path, "--", "/bin/sh", "-c", "sleep 10"])
+        try:
+            suffix = b"\x1b[0m\x1b8\x1b[?7h"
+            initial = read_until(master, b"", b"PREFIX one")
+            start = initial.index(b"PREFIX one")
+            initial = initial[:start] + read_until(master, initial[start:], suffix)
+            assert b"\x1b[0;1m" not in initial and b"48;2;" not in initial, initial
+            # Atomic replacement avoids an intermediate empty command result.
+            next_path = os.path.join(folder, "next")
+            with open(next_path, "w") as value:
+                value.write("two\n")
+            os.replace(next_path, value_path)
+            steps = ([b"\x1b[0;38;2;255;244;204;48;2;158;123;32m",
+                      b"\x1b[0;38;2;238;218;174;48;2;112;89;29m",
+                      b"\x1b[0;38;2;220;194;144;48;2;68;57;28m"]
+                     if colors else [b"\x1b[0;1m"])
+            highlighted = read_until(master, b"", steps[0] + b"PREFIX two")
+            highlighted = read_until(master, highlighted, suffix)
+            assert b"\x1b[0m." in highlighted, highlighted
+            assert b"RIGHT" in highlighted, highlighted
+            for step in steps[1:]:
+                frame = read_until(master, b"", step + b"PREFIX two")
+                frame = read_until(master, frame, suffix)
+                assert b"\x1b[0m." in frame, frame
+            restored = read_until(master, b"", b"PREFIX two")
+            restored = read_until(master, restored, suffix)
+            assert b"\x1b[0;1m" not in restored and b"48;2;" not in restored, restored
+            # Repeated identical command results should not restart the timer
+            # or cause another repaint after the restore.
+            ready, _, _ = select.select([master], [], [], 0.4)
+            assert not ready, "identical tracked results repainted the bar"
+        finally:
+            stop(pid, master)
+    print("tracked command color sequence passed" if colors else "tracked command highlight passed")
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: multirow_pty.py STATUSBAR")
@@ -243,6 +297,8 @@ def main():
 
     check_zsh(binary)
     check_fish(binary)
+    check_tracking(binary)
+    check_tracking(binary, colors=True)
     config = """\
 [line.1]
 left = one
