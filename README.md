@@ -5,21 +5,13 @@ and keeps configured rows at the bottom of the window. The bar yields rows
 when the terminal is too short. Full-screen programs and scrollback keep
 working.
 
-```
-❯ make test
-…
-❯
-──────────────────────────────────────────────────────────────────────
- vrypan@vrypan-mbp · load 3.13                   Thu 17 Sep  18:24:31
-```
+![screenshot](demo/screenshot.png)
 
 - Configure the bar with templates: text, colors, strftime clocks and shell
   commands, each on its own refresh interval.
 - Update it from your scripts with `statusbar set`.
 - Optionally move Starship's prompt details into it while keeping the prompt
   character in the terminal.
-
-![screenshot](screenshot-1.png)
 
 ## Build
 
