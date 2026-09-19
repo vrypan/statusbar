@@ -24,7 +24,8 @@ shell
   the same write, so the terminal never shows a frame without the bar.
 - Cursor position reports pass through unchanged, since the child's rows are
   numbered the same on both sides. The text-area size report (XTWINOPS 18)
-  leaves out the bar's rows, and mouse clicks on the bar are dropped.
+  leaves out the bar's rows, and mouse reports aimed at the bar are not sent
+  to the child. Terminal UI actions such as opening an OSC 8 link still work.
 - The bar is painted with autowrap off, so text that the terminal draws wider
   than statusbar measured is clipped at the right edge rather than wrapping.
 - Numbered `StatusBarSlotN` user variables are taken out of the

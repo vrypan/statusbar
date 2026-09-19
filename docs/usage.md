@@ -41,8 +41,9 @@ session. See [set.md](set.md).
 ## `init`
 
 `statusbar init zsh` or `statusbar init fish` prints integration that moves
-Starship's prompt into slot 3. `--starship-slot N` selects another slot. See
-[starship.md](starship.md).
+Starship's prompt into slot 3. `--starship-slot N` selects another slot. Zsh
+uses `eval "$(statusbar init zsh)"`; Fish uses `statusbar init fish | source`
+after Starship's own initialization. See [starship.md](starship.md).
 
 ## `config`
 
@@ -71,14 +72,24 @@ reads it, so plain `statusbar config` would find an empty config.
 `statusbar completion bash|zsh|fish` prints a completion script for the
 commands, options and values:
 
-```sh
-# zsh: into a directory on $fpath
+```zsh
+# Zsh: put this in ~/.zshrc before calling compinit.
+mkdir -p ~/.zsh/completions
 statusbar completion zsh > ~/.zsh/completions/_statusbar
+fpath=(~/.zsh/completions $fpath)
+autoload -Uz compinit
+compinit
+```
 
-# bash
+```sh
+# Bash
+mkdir -p ~/.local/share/bash-completion/completions
 statusbar completion bash > ~/.local/share/bash-completion/completions/statusbar
+```
 
-# fish
+```sh
+# Fish
+mkdir -p ~/.config/fish/completions
 statusbar completion fish > ~/.config/fish/completions/statusbar.fish
 ```
 

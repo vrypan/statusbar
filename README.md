@@ -16,7 +16,8 @@ working.
 - Configure the bar with templates: text, colors, strftime clocks and shell
   commands, each on its own refresh interval.
 - Update it from your scripts with `statusbar set`.
-- Move your starship prompt into it with one line in `~/.zshrc`.
+- Optionally move Starship's prompt details into it while keeping the prompt
+  character in the terminal.
 
 ![screenshot](screenshot-1.png)
 
@@ -50,10 +51,10 @@ statusbar
 statusbar -e 'date "+%H:%M"'
 ```
 
-Run `statusbar --help` for the commands, and `statusbar completion zsh` (or
-`bash`, `fish`) for shell completions.
+Run `statusbar --help` for the commands. The [user guide](docs/README.md)
+has setup instructions for shell completions.
 
-To put starship's prompt in the bar, add this to `~/.zshrc`:
+To put Starship's prompt in the bar, add this to `~/.zshrc`:
 
 ```zsh
 eval "$(statusbar init zsh)"
@@ -67,9 +68,9 @@ starship init fish | source
 statusbar init fish | source
 ```
 
-## Documentation
+## Learn more
 
-Start with the [user guide](docs/README.md): single-command bars, configured
-layouts, live slots, Starship, and themes. Detailed references are available
-for [configuration](docs/config.md), [runtime slot updates](docs/set.md),
+Start with the [user guide](docs/README.md) for a practical setup: one-command
+bars, personal layouts, live slots, Starship, and themes. Reference guides
+cover [configuration](docs/config.md), [runtime slot updates](docs/set.md),
 [Starship](docs/starship.md), and [internals and limitations](docs/internals.md).

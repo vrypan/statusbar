@@ -1,4 +1,4 @@
-# Using statusbar with starship
+# Use statusbar with Starship
 
 [Starship](https://starship.rs) can move its prompt details into the bar.
 The terminal keeps only the prompt character:
@@ -10,7 +10,7 @@ The terminal keeps only the prompt character:
 statusbar on main [!⇡] via v0.16.0                             18:34
 ```
 
-## Setup
+## Zsh
 
 Add one line to `~/.zshrc`:
 
@@ -25,18 +25,18 @@ another existing slot, including a right-side slot, with:
 eval "$(statusbar init zsh --starship-slot 5)"
 ```
 
-There is nothing to change in `starship.toml`. Inside a statusbar
-session, each prompt runs starship as usual and splits the result: every
-line but the last goes to the bar's left slot, and the last line (with
-starship's default layout, the prompt character) stays in the terminal. The
-character still turns red after a failed command and follows vi keymaps.
+There is nothing to change in `starship.toml`. Inside a statusbar session,
+each prompt runs Starship as usual and splits the result: every line but the
+last goes to the bar's left slot, and the last line (with Starship's default
+layout, the prompt character) stays in the terminal. The character still
+turns red after a failed command and follows vi keymaps.
 
 - The line can go before or after `eval "$(starship init zsh)"`; the
   integration takes over the prompt at the first prompt, after `.zshrc` has
   run.
 - Outside statusbar, `statusbar init zsh` prints nothing, so the same
   `.zshrc` works in every terminal.
-- A one-line starship prompt is left whole in the terminal, and the bar keeps
+- A one-line Starship prompt is left whole in the terminal, and the bar keeps
   its configured content.
 - Starship's `add_newline` blank line stays in the terminal, above the
   prompt, as it would without statusbar.
@@ -47,8 +47,8 @@ Run `statusbar init zsh` inside a session to read the code it installs.
 ## Fish
 
 Fish has a native prompt function, so it does not need Bash-style command
-traps. Initialize Starship first, then replace its left prompt with statusbar's
-splitter in `~/.config/fish/config.fish`:
+traps. In `~/.config/fish/config.fish`, initialize Starship first, then let
+statusbar replace its left prompt with a splitter:
 
 ```fish
 starship init fish | source
@@ -62,7 +62,9 @@ statusbar init fish --starship-slot 5 | source
 ```
 
 The integration keeps Starship's final prompt line and moves preceding lines
-to the bar. Starship's right prompt remains untouched.
+to the bar. Starship's right prompt remains untouched. Bash is not supported
+for prompt relocation; see the [user guide](README.md#put-live-context-in-a-slot)
+for a simple Bash slot hook instead.
 
 ## Doing it by hand
 
@@ -72,7 +74,7 @@ profile. Use them instead of `statusbar init zsh`, not together with it. Both
 pieces go in `~/.zshrc` after `eval "$(starship init zsh)"`, and both check
 `$STATUSBAR_LINES`, so the same `.zshrc` works inside and outside statusbar.
 
-1. A hook that sends starship's output to the bar before each prompt.
+1. A hook that sends Starship's output to the bar before each prompt.
 2. A shorter `PROMPT` while inside statusbar, so the same details don't
    show twice.
 
@@ -98,7 +100,7 @@ precmd_functions+=(statusbar_precmd)
   `cmd_duration` modules still work.
 - `${out%$'\n'*}` removes the last line of the prompt. With starship's
   default layout, `$all` ends in `$line_break$character`, so that line is the
-  prompt character. The newline starship adds before the prompt
+  prompt character. The newline Starship adds before the prompt
   (`add_newline`) is trimmed by statusbar.
 - `statusbar set` does nothing outside a statusbar session, so the hook needs
   no check of its own.

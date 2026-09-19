@@ -9,6 +9,9 @@ It runs your shell in a slightly smaller pseudo-terminal and paints the bar in
 the rows below it. Your shell, full-screen programs, and scrollback continue
 to work normally.
 
+This guide calls the visible parts of the bar *rows*. In a config file, each
+`[line.N]` section defines one row.
+
 ## Choose a starting point
 
 | Goal | Start here |
@@ -85,19 +88,40 @@ commands, markup, colors, rules, and all layout details.
 ## Put live context in a slot
 
 Config commands are ideal for machine-wide information such as load, battery,
-or time. They run in statusbar's working directory, so they cannot follow
-your shell's `cd`. For directory-specific information, update a numbered slot
-from the shell instead.
+or time. They run from the directory where statusbar started, so they cannot
+follow your shell's `cd`. For directory-specific information, update a
+numbered slot from the shell instead.
 
 Slots are numbered left-to-right, top-to-bottom: line 1 uses slots 1 and 2,
 line 2 uses 3 and 4, and so on.
 
 ```zsh
-# Put the current Git branch in the left side of line 3 before each prompt.
-statusbar_precmd() {
-  statusbar set 5 "$(git branch --show-current 2>/dev/null)"
+# Put the current directory in the left side of line 3 before each prompt.
+__statusbar_cwd() {
+  statusbar set 5 -- "$PWD"
 }
-precmd_functions+=(statusbar_precmd)
+precmd_functions+=(__statusbar_cwd)
+```
+
+The same idea works in Bash and Fish. If another prompt framework manages
+these hooks, add the update through that framework instead of replacing its
+hook outright.
+
+```bash
+# ~/.bashrc
+__statusbar_cwd() {
+  local previous_status=$?
+  statusbar set 5 -- "$PWD"
+  return "$previous_status"
+}
+PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND}; }__statusbar_cwd"
+```
+
+```fish
+# ~/.config/fish/config.fish
+function __statusbar_cwd --on-event fish_prompt
+  statusbar set 5 -- "$PWD"
+end
 ```
 
 Calling `statusbar set 5` with no text restores the value from the config.
@@ -129,8 +153,9 @@ when designing a larger layout:
 eval "$(statusbar init zsh --starship-slot 5)"
 ```
 
-[The Starship guide](starship.md) explains the automatic integration and how
-to select modules or use a dedicated Starship profile for the bar.
+[The Starship guide](starship.md) explains the automatic integration, shell
+ordering, and how to select modules or use a dedicated Starship profile for
+the bar.
 
 ## Try a theme
 

@@ -1,8 +1,8 @@
-# Personal theme alternatives
+# Theme alternatives
 
-Based on the user's current ~/.config/statusbar/config: user, host, load,
-weather, date, and a clock with seconds. Commands and refresh intervals are
-preserved; the duplicate load reading on the right is removed.
+These themes offer different looks for the same useful baseline: user, host,
+load, weather, date, and a clock with seconds. They keep the original command
+refresh intervals and remove the duplicate load reading on the right.
 
 | Config | Appearance |
 | --- | --- |
@@ -27,19 +27,18 @@ statusbar session:
 Replace the filename to compare alternatives. Exit the child shell to return.
 No active config has been replaced.
 
-If your shell runs `eval "$(statusbar init zsh)"`, Starship may replace the
-left slot with its own content and colors. For an isolated preview using zsh
+If your shell enables statusbar's Starship integration, Starship may replace a
+left slot with its own content and colors. For an isolated preview using Zsh
 without startup files:
 
 ```sh
 ./zig-out/bin/statusbar --config "$PWD/samples/themes/tokyo-night.config" -- /bin/zsh -f
 ```
 
-All variants define two rows. Their rules fill unused space and can frame
-left and right labels on the same row.
-On narrow terminals the right side clips first, as in the existing design.
-Weather uses the original wttr.in command and may remain empty until it
-responds. These alternatives don't change its network behavior.
+All variants define two rows. Their rules fill unused space and can frame left
+and right labels on the same row. On narrow terminals the right side clips
+first. Weather uses the original wttr.in command and may remain empty until
+it responds; these themes do not change that network behavior.
 
 Inspiration:
 - https://starship.rs/presets/pure-preset
