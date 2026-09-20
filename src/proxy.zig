@@ -19,6 +19,7 @@ const posix = std.posix;
 const c = std.c;
 const sys = @import("sys.zig");
 const tty = @import("tty.zig");
+const osc7 = @import("osc7.zig");
 const Output = @import("output.zig").Output;
 const Input = @import("input.zig").Input;
 const bar = @import("bar.zig");
@@ -169,6 +170,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     };
     defer proxy.releaseRows();
     try proxy.reserveRows(outer_ws.row);
+    proxy.output.osc7_handler = .{ .context = &proxy.terminal, .callback = receiveOsc7 };
 
     const pid = c.fork();
     if (pid < 0) return error.ForkFailed;
@@ -264,6 +266,14 @@ const TerminalSink = struct {
     buf: [io_buf_size]u8 = undefined,
     len: usize = 0,
     broken: bool = false,
+    hostname: [256]u8 = undefined,
+    hostname_len: usize = 0,
+
+    fn init(io: std.Io) TerminalSink {
+        var self: TerminalSink = .{ .io = io };
+        if (sys.hostName(&self.hostname)) |name| self.hostname_len = name.len;
+        return self;
+    }
 
     /// Runs this large are most of a read of ordinary output: writing them
     /// straight through saves copying them first.
@@ -278,6 +288,14 @@ const TerminalSink = struct {
         self.len += bytes.len;
     }
 
+    fn setDirectoryTitle(self: *TerminalSink, uri: []const u8) void {
+        var title_buf: [4096]u8 = undefined;
+        const title = osc7.title(uri, self.hostname[0..self.hostname_len], &title_buf) orelse return;
+        self.write("\x1b]2;");
+        self.write(title);
+        self.write("\x1b\\");
+    }
+
     fn flush(self: *TerminalSink) void {
         self.writeOut(self.buf[0..self.len]);
         self.len = 0;
@@ -290,6 +308,11 @@ const TerminalSink = struct {
         };
     }
 };
+
+fn receiveOsc7(context: *anyopaque, uri: []const u8) void {
+    const terminal: *TerminalSink = @ptrCast(@alignCast(context));
+    terminal.setDirectoryTitle(uri);
+}
 
 /// Keystrokes waiting for the child. The pump stops reading the terminal while
 /// this is nearly full, and never blocks on the master to drain it.
@@ -352,7 +375,7 @@ const Proxy = struct {
     /// bar takes blank rows below the cursor; only when there are too few of
     /// those does the top of the screen scroll into scrollback.
     fn reserveRows(self: *Proxy, outer_rows: u16) !void {
-        self.terminal = .{ .io = self.io };
+        self.terminal = .init(self.io);
         self.output.damaged = true;
         const bar_rows = self.layout.bar;
         const cursor = self.queryCursorRow();
@@ -744,6 +767,39 @@ test "large paints retain their complete terminal restoration" {
     try std.testing.expect(writer.writer.buffered().len > 16 * 1024);
     try std.testing.expect(std.mem.endsWith(u8, writer.writer.buffered(), "\x1b[0m\x1b8\x1b[?7h"));
     try std.testing.expect(std.mem.indexOf(u8, writer.writer.buffered(), "\x1b[100;1H") != null);
+}
+
+test "OSC 7 directory titles preserve child output order" {
+    var terminal: TerminalSink = .{ .io = undefined };
+    @memcpy(terminal.hostname[0..4], "host");
+    terminal.hostname_len = 4;
+    var output: Output = .{
+        .bar = 0,
+        .rows = 24,
+        .osc7_handler = .{ .context = &terminal, .callback = receiveOsc7 },
+    };
+
+    output.feed("\x1b]7;file://host/a%20b\x07\x1b]2;child\x07", &terminal);
+    try std.testing.expectEqualStrings(
+        "\x1b]7;file://host/a%20b\x07\x1b]2;/a b\x1b\\\x1b]2;child\x07",
+        terminal.buf[0..terminal.len],
+    );
+
+    terminal.len = 0;
+    output.feed("\x1b]2;child\x1b\\\x1b]7;file://remote/srv/a\x1b\\", &terminal);
+    try std.testing.expectEqualStrings(
+        "\x1b]2;child\x1b\\\x1b]7;file://remote/srv/a\x1b\\\x1b]2;remote:/srv/a\x1b\\",
+        terminal.buf[0..terminal.len],
+    );
+
+    terminal.len = 0;
+    output.feed("\x1b]7;file:///bad%1btitle\x07\x1b]7;file:///same\x07\x1b]7;file:///same\x07", &terminal);
+    try std.testing.expectEqualStrings(
+        "\x1b]7;file:///bad%1btitle\x07" ++
+            "\x1b]7;file:///same\x07\x1b]2;/same\x1b\\" ++
+            "\x1b]7;file:///same\x07\x1b]2;/same\x1b\\",
+        terminal.buf[0..terminal.len],
+    );
 }
 
 fn schedulerProxy() Proxy {

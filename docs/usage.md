@@ -113,6 +113,19 @@ style. The config's colors and other options still apply, and without a
 config file that is the built-in one. A config file with no `[line.N]`
 sections shows `date` the same way.
 
+## Terminal title
+
+When the child shell reports its working directory with OSC 7, statusbar
+forwards that report and sets the terminal title from it. Local directories
+appear as their decoded absolute path, such as `/Users/alice/project`. Remote
+reports include the host, such as `server.example:/srv/project`.
+
+This needs shell or terminal integration that emits OSC 7. Malformed,
+unsupported and oversized reports are still forwarded but do not change the
+derived title. A later title set by the child remains authoritative in normal
+output order. OSC 7 currently affects only the title; it does not change the
+working directory or environment of statusbar commands.
+
 ## Environment
 
 | Variable            | Set for                   | Meaning                                  |

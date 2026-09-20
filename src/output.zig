@@ -13,8 +13,9 @@
 //!
 //! Everything except CSI parameters is forwarded as it arrives. A CSI is
 //! buffered from its first parameter byte to its final byte, so a sequence
-//! split across reads is still rewritten as a whole. An OSC is held only as
-//! long as it could still be one of the proxy's own user variables.
+//! split across reads is still rewritten as a whole. OSC 7 working-directory
+//! reports are observed and forwarded; other OSCs are held only as long as
+//! they could still be one of the proxy's own user variables.
 
 const std = @import("std");
 
@@ -35,6 +36,11 @@ pub const UpdateHandler = struct {
     callback: *const fn (*anyopaque, usize, []const u8) void,
 };
 
+pub const Osc7Handler = struct {
+    context: *anyopaque,
+    callback: *const fn (*anyopaque, []const u8) void,
+};
+
 pub const Output = struct {
     /// Bar rows below the child. With none, nothing is rewritten.
     bar: u16,
@@ -42,6 +48,7 @@ pub const Output = struct {
     rows: u16,
     max_slot: usize = 2,
     update_handler: ?UpdateHandler = null,
+    osc7_handler: ?Osc7Handler = null,
 
     /// DECOM: while set, the child addresses rows relative to its own margins,
     /// which already exclude the bar.
@@ -67,6 +74,9 @@ pub const Output = struct {
     payload: [2 * max_value]u8 = undefined,
     payload_len: usize = 0,
     payload_overflow: bool = false,
+    osc7_payload: [4096]u8 = undefined,
+    osc7_len: usize = 0,
+    osc7_overflow: bool = false,
 
     state: State = .ground,
     string_is_osc: bool = false,
@@ -75,7 +85,21 @@ pub const Output = struct {
     seq_len: usize = 0,
     utf8_pending: u3 = 0,
 
-    const State = enum { ground, esc, esc_intermediate, csi, csi_ignore, string, string_esc, osc_prefix, user_var, user_var_esc };
+    const State = enum {
+        ground,
+        esc,
+        esc_intermediate,
+        csi,
+        csi_ignore,
+        string,
+        string_esc,
+        osc_prefix,
+        osc7_prefix,
+        osc7,
+        osc7_esc,
+        user_var,
+        user_var_esc,
+    };
 
     fn active(self: *const Output) bool {
         return self.bar > 0;
@@ -243,7 +267,11 @@ pub const Output = struct {
                     }
                 },
                 .osc_prefix => {
-                    if (self.osc_len < user_var_prefix.len and b == user_var_prefix[self.osc_len]) {
+                    if (self.osc_len == 0 and b == '7') {
+                        i += 1;
+                        run = i;
+                        self.state = .osc7_prefix;
+                    } else if (self.osc_len < user_var_prefix.len and b == user_var_prefix[self.osc_len]) {
                         i += 1;
                         run = i;
                         self.osc_len += 1;
@@ -260,6 +288,61 @@ pub const Output = struct {
                         run = i;
                         self.state = .string;
                         self.string_is_osc = true;
+                    }
+                },
+                .osc7_prefix => {
+                    if (b == ';') {
+                        i += 1;
+                        run = i;
+                        sink.write("\x1b]7;");
+                        self.osc7_len = 0;
+                        self.osc7_overflow = false;
+                        self.state = .osc7;
+                    } else {
+                        sink.write("\x1b]7");
+                        run = i;
+                        self.state = .string;
+                        self.string_is_osc = true;
+                    }
+                },
+                .osc7 => switch (b) {
+                    0x07 => {
+                        i += 1;
+                        sink.write(bytes[run..i]);
+                        run = i;
+                        self.finishOsc7();
+                        self.state = .ground;
+                    },
+                    esc => {
+                        sink.write(bytes[run..i]);
+                        i += 1;
+                        run = i;
+                        self.state = .osc7_esc;
+                    },
+                    0x18, 0x1a => {
+                        i += 1;
+                        self.state = .ground;
+                    },
+                    else => {
+                        if (self.osc7_len < self.osc7_payload.len) {
+                            self.osc7_payload[self.osc7_len] = b;
+                            self.osc7_len += 1;
+                        } else {
+                            self.osc7_overflow = true;
+                        }
+                        i += 1;
+                    },
+                },
+                .osc7_esc => {
+                    if (b == '\\') {
+                        i += 1;
+                        run = i;
+                        sink.write("\x1b\\");
+                        self.finishOsc7();
+                        self.state = .ground;
+                    } else {
+                        // Aborted; the held ESC starts whatever comes next.
+                        self.state = .esc;
                     }
                 },
                 .user_var => {
@@ -302,6 +385,11 @@ pub const Output = struct {
         if (slot >= self.values.len or !self.value_changed[slot]) return null;
         self.value_changed[slot] = false;
         return self.values[slot][0..self.value_lens[slot]];
+    }
+
+    fn finishOsc7(self: *Output) void {
+        if (self.osc7_overflow) return;
+        if (self.osc7_handler) |handler| handler.callback(handler.context, self.osc7_payload[0..self.osc7_len]);
     }
 
     /// `StatusBarSlotN=<base64>`. Anything else under the prefix, or a value
@@ -525,6 +613,31 @@ const Collector = struct {
     }
 };
 
+const Osc7Collector = struct {
+    bytes: std.ArrayList(u8) = .empty,
+    uris: std.ArrayList(u8) = .empty,
+    reports: usize = 0,
+
+    fn deinit(self: *Osc7Collector) void {
+        self.bytes.deinit(std.testing.allocator);
+        self.uris.deinit(std.testing.allocator);
+    }
+
+    fn write(self: *Osc7Collector, data: []const u8) void {
+        self.bytes.appendSlice(std.testing.allocator, data) catch unreachable;
+    }
+
+    fn receive(context: *anyopaque, uri: []const u8) void {
+        const self: *Osc7Collector = @ptrCast(@alignCast(context));
+        self.uris.appendSlice(std.testing.allocator, uri) catch unreachable;
+        self.uris.append(std.testing.allocator, '\n') catch unreachable;
+        self.reports += 1;
+        self.write("<title:");
+        self.write(uri);
+        self.write(">");
+    }
+};
+
 fn translate(out: *Output, input: []const u8, chunk: usize) ![]u8 {
     var collector: Collector = .{};
     var i: usize = 0;
@@ -723,6 +836,82 @@ test "other OSCs and user variables pass through" {
             defer std.testing.allocator.free(got);
             try std.testing.expectEqualStrings(input, got);
         }
+    }
+}
+
+test "OSC 7 is forwarded and reported in stream order across read partitions" {
+    const cases = [_]struct { input: []const u8, expected: []const u8, uris: []const u8, reports: usize }{
+        .{
+            .input = "a\x1b]7;file:///tmp/one\x07b",
+            .expected = "a\x1b]7;file:///tmp/one\x07<title:file:///tmp/one>b",
+            .uris = "file:///tmp/one\n",
+            .reports = 1,
+        },
+        .{
+            .input = "\x1b]7;kitty-shell-cwd://host/a\x1b\\",
+            .expected = "\x1b]7;kitty-shell-cwd://host/a\x1b\\<title:kitty-shell-cwd://host/a>",
+            .uris = "kitty-shell-cwd://host/a\n",
+            .reports = 1,
+        },
+        .{
+            .input = "\x1b]7;file:///one\x07\x1b]2;child\x07\x1b]7;file:///two\x1b\\",
+            .expected = "\x1b]7;file:///one\x07<title:file:///one>\x1b]2;child\x07\x1b]7;file:///two\x1b\\<title:file:///two>",
+            .uris = "file:///one\nfile:///two\n",
+            .reports = 2,
+        },
+        .{
+            .input = "\x1b]1337;SetUserVar=StatusBarSlot1=b25l\x07\x1b]7;file:///one\x07",
+            .expected = "\x1b]7;file:///one\x07<title:file:///one>",
+            .uris = "file:///one\n",
+            .reports = 1,
+        },
+    };
+
+    for (cases) |case| {
+        var chunk: usize = 1;
+        while (chunk <= case.input.len) : (chunk += 1) {
+            var collector: Osc7Collector = .{};
+            defer collector.deinit();
+            var out: Output = .{
+                .bar = 1,
+                .rows = 10,
+                .osc7_handler = .{ .context = &collector, .callback = Osc7Collector.receive },
+            };
+            var i: usize = 0;
+            while (i < case.input.len) {
+                const end = @min(i + chunk, case.input.len);
+                out.feed(case.input[i..end], &collector);
+                i = end;
+            }
+            try std.testing.expectEqualStrings(case.expected, collector.bytes.items);
+            try std.testing.expectEqualStrings(case.uris, collector.uris.items);
+            try std.testing.expectEqual(case.reports, collector.reports);
+        }
+    }
+}
+
+test "invalid incomplete and oversized OSC 7 reports do not notify" {
+    const inputs = [_][]const u8{
+        "\x1b]70;file:///lookalike\x07",
+        "\x1b]7xfile:///lookalike\x07",
+        "\x1b]7;file:///cancel\x18",
+        "\x1b]7;file:///cancel\x1a",
+        "\x1b]7;file:///interrupted\x1b[99H",
+        "\x1b]7;file:///incomplete",
+        "\x1b]7;" ++ ("x" ** 4097) ++ "\x07",
+    };
+    for (inputs) |input| {
+        var collector: Osc7Collector = .{};
+        defer collector.deinit();
+        var out: Output = .{
+            .bar = 0,
+            .rows = 10,
+            .osc7_handler = .{ .context = &collector, .callback = Osc7Collector.receive },
+        };
+        out.feed(input, &collector);
+        try std.testing.expectEqual(@as(usize, 0), collector.reports);
+        try std.testing.expectEqualStrings(input, collector.bytes.items);
+        try std.testing.expect(out.atBoundary() == !std.mem.endsWith(u8, input, "incomplete"));
     }
 }
 

@@ -26,6 +26,14 @@ shell
   numbered the same on both sides. The text-area size report (XTWINOPS 18)
   leaves out the bar's rows, and mouse reports aimed at the bar are not sent
   to the child. Terminal UI actions such as opening an OSC 8 link still work.
+- Bounded OSC 7 working-directory reports are observed while remaining
+  byte-for-byte visible to the terminal. A valid `file://` or
+  `kitty-shell-cwd://` URI is decoded into a safe OSC 2 terminal title and
+  inserted immediately after the report, preserving its order with later
+  child-provided titles. Local titles are absolute paths; remote titles use
+  `host:path`. Invalid reports cannot inject controls and produce no title.
+  This display feature does not alter status-command environments or working
+  directories.
 - The bar is painted with autowrap off, so text that the terminal draws wider
   than statusbar measured is clipped at the right edge rather than wrapping.
 - Numbered `StatusBarSlotN` user variables are taken out of the

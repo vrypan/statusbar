@@ -122,6 +122,29 @@ def check_init_invocation(binary):
     print("shell init preserves upgrade-safe invocation paths")
 
 
+def check_osc7_titles(binary):
+    local = b"\x1b]7;file:///tmp/a%20project\x07"
+    local_title = b"\x1b]2;/tmp/a project\x1b\\"
+    child_title = b"\x1b]2;child-title\x1b\\"
+    remote = b"\x1b]7;kitty-shell-cwd://server.example/srv/project\x1b\\"
+    remote_title = b"\x1b]2;server.example:/srv/project\x1b\\"
+    malformed = b"\x1b]7;file:///bad%zz\x07"
+    oversized = b"\x1b]7;file:///" + (b"x" * 4097) + b"\x07"
+    payload = local + child_title + remote + malformed + oversized
+    expected = local + local_title + child_title + remote + remote_title + malformed + oversized
+
+    argv = [
+        binary,
+        "--config", "/dev/null",
+        "--exec", "printf bar",
+        "--", "/bin/sh", "-c", 'printf %s "$1"', "sh", payload.decode("ascii"),
+    ]
+    code, data = capture_pty(argv)
+    assert code == 0, data
+    assert expected in data, data[-6000:]
+    print("OSC 7 forwarding and ordered terminal titles passed")
+
+
 def check_zsh(binary):
     zsh = shutil.which("zsh")
     if zsh is None:
@@ -491,6 +514,7 @@ def main():
     assert b"STATUSBAR_LINES is malformed" in invalid.stderr
 
     check_init_invocation(binary)
+    check_osc7_titles(binary)
     check_zsh(binary)
     check_fish(binary)
     check_tracking(binary)

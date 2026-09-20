@@ -5,6 +5,7 @@ since the latest version tag. Entries preserve commit subjects verbatim.
 
 ## v0.2.2
 
+- Set terminal titles from OSC 7 directories
 - Bump v0.2.2
 - Keep shell integrations valid across upgrades
 

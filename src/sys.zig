@@ -30,6 +30,7 @@ extern "c" fn posix_openpt(oflag: c_int) c_int;
 extern "c" fn grantpt(fd: c_int) c_int;
 extern "c" fn unlockpt(fd: c_int) c_int;
 extern "c" fn ptsname(fd: c_int) ?[*:0]const u8;
+extern "c" fn gethostname(name: [*]u8, len: usize) c_int;
 
 /// std.posix.T only carries the terminal ioctl numbers on some targets, so the
 /// ones statusbar needs are spelled out here.
@@ -101,6 +102,14 @@ pub fn setControllingTty(fd: Fd) Error!void {
 /// an unexpected error and dumps a stack trace for it in debug builds.
 pub fn isTty(io: std.Io, fd: Fd) bool {
     return (std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } }).isTty(io) catch false;
+}
+
+/// Returns the local hostname in caller-owned storage. Failure is harmless for
+/// display-only callers, which can conservatively treat named hosts as remote.
+pub fn hostName(buf: []u8) ?[]const u8 {
+    if (buf.len == 0 or gethostname(buf.ptr, buf.len) != 0) return null;
+    const end = std.mem.indexOfScalar(u8, buf, 0) orelse return null;
+    return buf[0..end];
 }
 
 // --- descriptors -----------------------------------------------------------
