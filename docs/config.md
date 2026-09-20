@@ -86,7 +86,6 @@ narrow, the right slot is clipped first; the left slot is kept longest.
 |------------|-------------------------------------------------------------|
 | `run`      | shell command, run with `/bin/sh -c`                        |
 | `interval` | seconds between runs (default: the top-level `interval`)    |
-| `track`    | briefly highlight changed output (`true` or `false`, default `false`) |
 
 For a readable multi-line value, write `= |` followed by indented lines. The
 block ends at the next unindented key or section. Commands keep line breaks
@@ -107,37 +106,56 @@ commands. One that runs past its interval (at least five seconds) is killed.
 
 ### Highlight changes
 
-Enable tracking on a named command to notice updates without watching it:
+Mark the part of a left/right template you want to watch:
 
 ```ini
+[line.1]
+left = "Weather #[track]#(weather)#[notrack]  Time #[track]%H:%M#[notrack]"
+
 [command.weather]
 run = curl -fsS 'https://wttr.in/?format=%c%t'
 interval = 300
-track = true
 ```
 
-When its displayed result changes, the entire left/right slot containing
-`#(weather)` plays the shared `[highlight]` effect, then returns to its normal
-styling. This includes neighboring text and other commands in that slot, but
-not the rule or the opposite slot.
+Each marked region plays the shared `[highlight]` effect when its visible
+content changes, then returns to its normal styling. Labels outside the markers,
+rules, and other regions keep their own appearance. Regions can grow, shrink,
+and move; each change restarts only that region's timer.
 
-The first result establishes a baseline without highlighting. Identical
-results, changes outside the displayed first line, and invisible/clipped
-slot changes do not trigger an effect. Another change restarts the timer.
-Clock updates and `statusbar set` do not trigger it; a manual slot override
-suppresses tracking there. Hidden rows do not highlight. Resize and screen
-repair do not restart the timer; still-visible slots retain active highlights.
+Use exactly `#[track]` and `#[notrack]`, with up to 16 pairs per slot. Empty
+pairs are valid. Regions cannot nest, and markers cannot be combined with style
+attributes or given names. `#[default]` resets styling without ending tracking;
+write `##[track]` to display the opening marker literally.
+
+Markers are compiled only from static left/right templates. Regions may include
+text, clocks, named commands, and inline shell commands. Command output, rules,
+`statusbar set` values, and `--exec` output cannot define regions. A whole
+grapheme belongs to the region containing its first code point, even if a marker
+falls inside a combining sequence.
+
+All commands used by a slot must produce a first result before its regions can
+highlight. Partial results appear silently; an empty first result also counts.
+Later empty-to-nonempty changes can highlight. Identical content, equivalent
+style escapes, and changes confined to a clipped suffix do nothing. Changes in
+resolved colors, attributes, or hyperlinks count as content changes.
+
+A manual slot override cancels its effects. Clearing the override silently
+establishes new baselines, even when the text looks identical. Hidden or empty
+regions store no pending animation to play later. Resize, clipping caused by
+another value, and screen repair never start or restart effects. Still-visible
+active regions retain their deadlines. Command reruns requested by resize
+establish baselines silently; ordinary scheduled results remain eligible.
 Repaints wait for safe terminal-output boundaries, so a busy application may
 delay the effect or prevent a short highlight from appearing.
 
-Tracking is available for named commands, not inline shell expressions or
-`--exec`.
+To migrate an older config, remove `track = true` (or `track = false`) from
+`[command.NAME]` and wrap each desired use in `#[track]...#[notrack]`. The old
+command key is rejected with migration guidance.
 
 ### `[highlight]`: color sequences
 
 The built-in config contains this shared warm pulse. A copied or custom config
-uses it only if the section is present. It applies to every command with
-`track = true`, but does nothing until a command opts in:
+uses it only if the section is present. It applies to every marked region:
 
 ```ini
 [highlight]
@@ -191,6 +209,7 @@ Templates mix text, markup and command output:
 - `%H:%M`, `%a %d %b`: strftime(3) conversions, re-read every second;
   `%%` is a literal `%`
 - `#[...]`: [markup](#markup)
+- `#[track]...#[notrack]`: an independently [highlighted region](#highlight-changes)
 
 ## Syntax
 
@@ -208,7 +227,8 @@ Style text with tmux-like markup instead of escape codes:
 #[fg=accent,bold]host#[default] #[fg=brightblack]·#[default] 3.73
 ```
 
-Each `#[...]` holds attributes separated by commas or spaces:
+Style markup holds attributes separated by commas or spaces. The standalone
+tracking markers described above are template boundaries, not style attributes.
 
 - `fg=COLOR`, `bg=COLOR`, where COLOR is one of
   - `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`,

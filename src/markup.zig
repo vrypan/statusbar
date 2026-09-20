@@ -37,9 +37,20 @@ pub const Palette = struct {
 /// Expands markup into `out`, stopping early rather than failing when `out`
 /// fills up. Only whole sequences are ever written.
 pub fn expand(text: []const u8, out: []u8, palette: Palette) []const u8 {
+    return expandMapped(text, out, palette, &.{});
+}
+
+/// Each raw byte boundary maps to an output boundary. Boundaries inside a
+/// token map to its endpoint; truncated input maps to the retained endpoint.
+pub fn expandMapped(text: []const u8, out: []u8, palette: Palette, offsets: []usize) []const u8 {
+    std.debug.assert(offsets.len == 0 or offsets.len == text.len + 1);
     var w: std.Io.Writer = .fixed(out);
     var i: usize = 0;
+    var mapped: usize = 0;
     while (i < text.len) {
+        if (offsets.len > 0) {
+            while (mapped <= i) : (mapped += 1) offsets[mapped] = w.end;
+        }
         if (text[i] == '#' and i + 1 < text.len) {
             if (text[i + 1] == '#') {
                 w.writeByte('#') catch break;
@@ -61,7 +72,22 @@ pub fn expand(text: []const u8, out: []u8, palette: Palette) []const u8 {
         w.writeByte(text[i]) catch break;
         i += 1;
     }
+    if (offsets.len > 0) {
+        while (mapped < offsets.len) : (mapped += 1) offsets[mapped] = w.end;
+    }
     return w.buffered();
+}
+
+test "mapped expansion clamps boundaries inside tokens and truncated output" {
+    const input = "a#[bold]b##c";
+    var output: [64]u8 = undefined;
+    var offsets: [input.len + 1]usize = undefined;
+    try std.testing.expectEqualStrings("a\x1b[1mb#c", expandMapped(input, &output, .{}, &offsets));
+    try std.testing.expectEqual(@as(usize, 1), offsets[1]);
+    for (offsets[2..9]) |offset| try std.testing.expectEqual(@as(usize, 5), offset);
+    try std.testing.expectEqual(@as(usize, 7), offsets[10]);
+    try std.testing.expectEqualStrings("a", expandMapped(input, output[0..3], .{}, &offsets));
+    for (offsets[1..]) |offset| try std.testing.expectEqual(@as(usize, 1), offset);
 }
 
 fn writeStyle(w: *std.Io.Writer, spec: []const u8, palette: Palette) !void {

@@ -64,6 +64,69 @@ fn renderBench(io: std.Io, out: *std.Io.Writer) !void {
     }
 }
 
+fn regionContent(content: *bar.Content, long: bool) void {
+    const a: []const u8 = if (long) "long" else "x";
+    var buf: [64]u8 = undefined;
+    const raw = std.fmt.bufPrint(&buf, "CPU {s} MEM steady\tRIGHT", .{a}) catch unreachable;
+    var tracks: bar.Tracks = .{};
+    tracks.spans[0] = .{ .owner = .left, .id = 0, .start = 4, .end = @intCast(4 + a.len) };
+    tracks.spans[1] = .{ .owner = .left, .id = 1, .start = @intCast(9 + a.len), .end = @intCast(15 + a.len) };
+    tracks.len = 2;
+    _ = content.setTrackedLine(0, raw, tracks);
+}
+
+fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
+    var counted = std.testing.FailingAllocator.init(std.heap.smp_allocator, .{});
+    var content = try bar.Content.init(counted.allocator(), 1);
+    defer content.deinit();
+    var renderer = try bar.Renderer.init(counted.allocator());
+    defer renderer.deinit();
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{null};
+    const look: bar.Look = .{ .styles = &styles, .rules = &rules };
+    try renderer.resize(1, 80);
+    for (0..6) |n| {
+        regionContent(&content, n % 2 == 0);
+        try renderer.acceptContent(&content, &look);
+        renderer.highlightChange(0, 0, @intCast(n));
+        _ = renderer.compose(@intCast(n));
+        _ = try renderer.build(24, "", true, false);
+        renderer.commit();
+    }
+    const allocs = counted.allocations;
+    const allocated = counted.allocated_bytes;
+    const start = std.Io.Clock.now(.awake, io).toNanoseconds();
+    const repeats = 10000;
+    var bytes: usize = 0;
+    for (0..repeats) |n| {
+        regionContent(&content, n % 2 == 0);
+        try renderer.acceptContent(&content, &look);
+        if (!renderer.rows[0].region_changed[0][0] or renderer.rows[0].region_changed[0][1]) return error.RegionComparisonRegression;
+        renderer.highlightChange(0, 0, @intCast(n * 1000));
+        _ = renderer.compose(@intCast(n * 1000));
+        const batch = try renderer.build(24, "", true, false);
+        if (renderer.emitted_rows != 1 or std.mem.count(u8, batch, "\x1b7") != 1) return error.UnexpectedBatchCount;
+        bytes += batch.len;
+        renderer.commit();
+        const parsed = renderer.parsed_rows;
+        // Two simultaneous targets expire in one composition and one batch.
+        renderer.rows[0].highlight_until[0][1] = @intCast(n * 1000 + 500);
+        _ = renderer.compose(@intCast(n * 1000 + 10));
+        _ = try renderer.build(24, "", true, false);
+        renderer.commit();
+        _ = renderer.compose(@intCast(n * 1000 + 500));
+        const restored = try renderer.build(24, "", true, false);
+        if (renderer.emitted_rows != 1 or std.mem.count(u8, restored, "\x1b7") != 1) return error.UnexpectedBatchCount;
+        renderer.commit();
+        _ = try renderer.build(24, "", true, true);
+        renderer.commit();
+        if (renderer.parsed_rows != parsed) return error.UnexpectedParsing;
+    }
+    if (counted.allocations != allocs or counted.allocated_bytes != allocated) return error.RendererRegression;
+    const elapsed = std.Io.Clock.now(.awake, io).toNanoseconds() - start;
+    try out.print("render regions: {d} ns/change+shared-frames+repair, {d} change bytes, allocs=0 bytes=0 storage={d} peak={d}\n", .{ @divTrunc(elapsed, repeats), bytes / repeats, counted.allocated_bytes - counted.freed_bytes, renderer.budget.peak });
+}
+
 const Sink = struct {
     total: usize = 0,
 
@@ -117,6 +180,7 @@ pub fn main(init: std.process.Init) !u8 {
         try stdout.print("  {s:<7} {d:>8.0} MB/s  (sink {d})\n", .{ @tagName(kind), mb_per_s, sink.total });
     }
     try renderBench(init.io, stdout);
+    try regionBench(init.io, stdout);
     try stdout.flush();
     return 0;
 }

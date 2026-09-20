@@ -5,6 +5,7 @@ import base64
 import fcntl
 import os
 import pty
+import re
 import select
 import shlex
 import shutil
@@ -221,58 +222,100 @@ def stop(pid, fd):
     os.close(fd)
 
 
+def painted_styles(data):
+    """Read the last bar row's SGR state per character, independent of runs."""
+    row = data[data.rindex(b"\x1b[24;1H") + len(b"\x1b[24;1H"):]
+    row = row.split(b"\x1b8", 1)[0]
+    parts = re.split(rb"(\x1b\[[0-?]*[ -/]*[@-~])", row)
+    style = b"0"
+    result = []
+    for part in parts:
+        if part.startswith(b"\x1b["):
+            if part.endswith(b"m"):
+                style = part[2:-1]
+        elif not part.startswith(b"\x1b"):
+            result.extend((char, style) for char in part.decode("utf-8"))
+    return result
+
+
+def assert_region_style(data, value, expected):
+    cells = painted_styles(data)
+    text = "".join(char for char, _ in cells)
+    start = text.index(value)
+    assert all(style == expected for _, style in cells[start:start + len(value)]), (value, cells)
+
+
 def check_tracking(binary, colors=False):
     with tempfile.TemporaryDirectory(prefix="statusbar-tracking-") as folder:
         value_path = os.path.join(folder, "value")
+        second_path = os.path.join(folder, "second")
         config_path = os.path.join(folder, "config")
         with open(value_path, "w") as value:
             value.write("one\n")
+        with open(second_path, "w") as value:
+            value.write("other\n")
         with open(config_path, "w") as cfg:
             cfg.write(f"""[line.1]
-left = PREFIX #(value)
+left = PREFIX #[track]#(value)#[notrack] BETWEEN #[track]#(second)#[notrack] SUFFIX
 right = RIGHT
 rule = .
 [command.value]
 run = cat {shlex.quote(value_path)}
 interval = 0.1
-track = true
+[command.second]
+run = cat {shlex.quote(second_path)}
+interval = 0.1
 """)
             if colors:
                 cfg.write("[highlight]\nbackgrounds = #9e7b20, #70591d, #44391c\nforegrounds = #fff4cc, #eedaae, #dcc290\nstep = 0.15\n")
         pid, master = spawn([binary, "-c", config_path, "--", "/bin/sh", "-c", "sleep 10"])
         try:
             suffix = b"\x1b[0m\x1b8\x1b[?7h"
-            initial = read_until(master, b"", b"PREFIX one")
-            start = initial.index(b"PREFIX one")
+            initial = read_until(master, b"", b"PREFIX one BETWEEN other SUFFIX")
+            start = initial.index(b"PREFIX one BETWEEN other SUFFIX")
             initial = initial[:start] + read_until(master, initial[start:], suffix)
             assert b"\x1b[0;1m" not in initial and b"48;2;" not in initial, initial
             # Atomic replacement avoids an intermediate empty command result.
             next_path = os.path.join(folder, "next")
             with open(next_path, "w") as value:
-                value.write("two\n")
+                value.write("two-long\n")
             os.replace(next_path, value_path)
             steps = ([b"\x1b[0;38;2;255;244;204;48;2;158;123;32m",
                       b"\x1b[0;38;2;238;218;174;48;2;112;89;29m",
                       b"\x1b[0;38;2;220;194;144;48;2;68;57;28m"]
                      if colors else [b"\x1b[0;1m"])
-            highlighted = read_until(master, b"", steps[0] + b"PREFIX two")
+            highlighted = read_until(master, b"", steps[0] + b"two-long")
             highlighted = read_until(master, highlighted, suffix)
-            assert b"\x1b[0m." in highlighted, highlighted
-            assert b"RIGHT" in highlighted, highlighted
+            assert_region_style(highlighted, "two-long", steps[0][2:-1])
+            for label in ("PREFIX ", " BETWEEN ", "other", " SUFFIX", ".", "RIGHT"):
+                assert_region_style(highlighted, label, b"0")
+            resize(master, 24, 90)
             for step in steps[1:]:
-                frame = read_until(master, b"", step + b"PREFIX two")
+                frame = read_until(master, b"", step + b"two-long")
                 frame = read_until(master, frame, suffix)
-                assert b"\x1b[0m." in frame, frame
-            restored = read_until(master, b"", b"PREFIX two")
+                assert_region_style(frame, "two-long", step[2:-1])
+                assert_region_style(frame, "other", b"0")
+            restored = read_until(master, b"", b"PREFIX two-long BETWEEN other SUFFIX")
             restored = read_until(master, restored, suffix)
-            assert b"\x1b[0;1m" not in restored and b"48;2;" not in restored, restored
+            assert_region_style(restored, "two-long", b"0")
+            assert_region_style(restored, "other", b"0")
+            with open(next_path, "w") as value:
+                value.write("second-new\n")
+            os.replace(next_path, second_path)
+            second = read_until(master, b"", steps[0] + b"second-new")
+            second = read_until(master, second, suffix)
+            assert_region_style(second, "second-new", steps[0][2:-1])
+            for label in ("PREFIX ", "two-long", " BETWEEN ", " SUFFIX", ".", "RIGHT"):
+                assert_region_style(second, label, b"0")
+            restored = read_until(master, b"", b"PREFIX two-long BETWEEN second-new SUFFIX")
+            restored = read_until(master, restored, suffix)
             # Repeated identical command results should not restart the timer
             # or cause another repaint after the restore.
             ready, _, _ = select.select([master], [], [], 0.4)
             assert not ready, "identical tracked results repainted the bar"
         finally:
             stop(pid, master)
-    print("tracked command color sequence passed" if colors else "tracked command highlight passed")
+    print("independent region color sequence passed" if colors else "independent region highlight passed")
 
 
 def check_geometry_results_do_not_highlight(binary):
@@ -283,11 +326,10 @@ def check_geometry_results_do_not_highlight(binary):
             value.write("one\n")
         with open(config_path, "w") as cfg:
             cfg.write(f"""[line.1]
-left = VALUE #(value)
+left = VALUE #[track]#(value)#[notrack]
 [command.value]
 run = printf 'cols:%s:' \"$STATUSBAR_COLUMNS\"; cat {shlex.quote(value_path)}
 interval = 0.2
-track = true
 """)
         pid, master = spawn([binary, "-c", config_path, "--", "/bin/sh", "-c", "sleep 10"])
         try:
@@ -307,7 +349,7 @@ track = true
             with open(next_path, "w") as value:
                 value.write("two\n")
             os.replace(next_path, value_path)
-            highlighted = read_until(master, b"", b"\x1b[0;1mVALUE cols:60:two")
+            highlighted = read_until(master, b"", b"\x1b[0;1mcols:60:two")
             highlighted = read_until(master, highlighted, suffix)
             assert b"cols:60:two" in highlighted, highlighted
         finally:
@@ -431,6 +473,7 @@ done
 
     exec_argv = [
         binary,
+        "--config", "/dev/null",
         "--lines", "3",
         "--exec", "printf 'exec-one\\nexec-two\\nexec-three\\n'",
         "--", "/bin/sh", "-c", "sleep 0.4",

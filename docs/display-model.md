@@ -11,7 +11,9 @@ of the overloaded word *refresh*.
 **Content update** is accepted source data, such as command output, a clock
 change, or a numbered-slot update. A semantic change to that data changes the
 statusbar's base content. An effect may start only when that source is eligible
-to trigger one; currently, tracked command output is the eligible source.
+to trigger one. Currently, configured `#[track]...#[notrack]` regions can
+highlight changes from command output and template clocks. Manual slot values
+and `--exec` output cannot define tracking regions.
 
 **Animation tick** samples all active effects at one monotonic timestamp.
 Effects never paint independently.
@@ -72,6 +74,18 @@ effect.
 Effects are consequences of content transitions, not rendering differences.
 An effect may start only while processing an eligible content update and only
 when the tracked content changed semantically.
+
+A region has a stable identity within its configured row and left/right slot.
+Its width and position may change without changing that identity. Comparison
+uses its full styled grapheme content before clipping, plus a visible-content
+check with both versions projected into the same final available space.
+Changes confined to a hidden suffix do not flash an unchanged visible prefix.
+Each changed region restarts only its own effect.
+
+All commands in a slot must have accepted a first result before its regions
+can trigger effects. Empty results count. Overrides cancel that slot's effects;
+clearing an override establishes new baselines silently. Empty and wholly hidden
+regions carry no animation backlog, and newly revealed rows baseline silently.
 
 These events never create or restart an effect:
 

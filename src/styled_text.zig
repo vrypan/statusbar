@@ -222,7 +222,8 @@ fn control(cp: u21) bool {
 }
 
 pub const Link = struct { params: []const u8 = "", uri: []const u8 = "" };
-pub const Event = struct { offset: usize, style: Style, link: Link };
+pub const Boundary = struct { offset: usize, region: ?u4 };
+pub const Event = struct { offset: usize, style: Style, link: Link, region: ?u4 = null };
 pub const Scratch = struct {
     plain: [4096]u8 = undefined,
     len: usize = 0,
@@ -235,7 +236,7 @@ pub const Scratch = struct {
         if (size <= self.plain.len) return;
         if (self.extra_plain.len < size) self.extra_plain = try gpa.realloc(self.extra_plain, size);
         // An accepted escape occupies at least three input bytes.
-        const count = size / 3 + 1;
+        const count = try std.math.add(usize, size / 3, 33);
         if (self.extra_events.len < count) self.extra_events = try gpa.realloc(self.extra_events, count);
     }
     pub fn deinit(self: *Scratch, gpa: std.mem.Allocator) void {
@@ -250,16 +251,27 @@ pub const Scratch = struct {
     }
 
     pub fn parse(self: *Scratch, input: []const u8, base: Style) !void {
+        return self.parseTracked(input, base, &.{});
+    }
+    pub fn parseTracked(self: *Scratch, input: []const u8, base: Style, boundaries: []const Boundary) !void {
         const plain = self.plainBytes();
         const events = self.eventItems();
         if (input.len > plain.len) return error.TextTooLong;
+        if (boundaries.len > 32 or input.len / 3 + 1 + boundaries.len > events.len) return error.TextTooLong;
         self.len = 0;
         self.count = 1;
         var style = base;
         var link: Link = .{};
+        var region: ?u4 = null;
+        var boundary: usize = 0;
         events[0] = .{ .offset = 0, .style = style, .link = link };
         var i: usize = 0;
         while (i < input.len) {
+            while (boundary < boundaries.len and boundaries[boundary].offset <= i) : (boundary += 1) {
+                region = boundaries[boundary].region;
+                events[self.count] = .{ .offset = self.len, .style = style, .link = link, .region = region };
+                self.count += 1;
+            }
             if (input[i] == 0x1b) {
                 const seq = escape(input, i);
                 switch (seq.kind) {
@@ -273,7 +285,7 @@ pub const Scratch = struct {
                     .invalid => {},
                 }
                 if (seq.kind != .invalid) {
-                    events[self.count] = .{ .offset = self.len, .style = style, .link = link };
+                    events[self.count] = .{ .offset = self.len, .style = style, .link = link, .region = region };
                     self.count += 1;
                 }
                 i = seq.end;
@@ -306,7 +318,7 @@ pub const Scratch = struct {
     }
 };
 const Graphemes = @TypeOf(zunic.text("").graphemes().measured().iterator());
-pub const Glyph = struct { bytes: []const u8, columns: u2, style: Style, link: Link };
+pub const Glyph = struct { bytes: []const u8, columns: u2, style: Style, link: Link, region: ?u4 = null };
 pub const Iterator = struct {
     scratch: *const Scratch,
     graphemes: Graphemes,
@@ -321,11 +333,48 @@ pub const Iterator = struct {
                 .columns = span.columns,
                 .style = e.style,
                 .link = e.link,
+                .region = e.region,
             };
         }
         return null;
     }
 };
+
+test "tracking boundaries share grapheme ownership and preserve style and links" {
+    const gpa = std.testing.allocator;
+    const scratch = try gpa.create(Scratch);
+    scratch.* = .{};
+    defer {
+        scratch.deinit(gpa);
+        gpa.destroy(scratch);
+    }
+    const input = "e\u{301}x\x1b[31my";
+    try scratch.parseTracked(input, .{}, &.{
+        .{ .offset = 0, .region = 0 }, .{ .offset = 1, .region = null },
+        .{ .offset = 1, .region = 1 }, .{ .offset = 6, .region = null },
+    });
+    var it = scratch.iterator();
+    const first = it.next().?;
+    try std.testing.expectEqualStrings("e\u{301}", first.bytes);
+    try std.testing.expectEqual(@as(?u4, 0), first.region);
+    try std.testing.expectEqual(@as(?u4, 1), it.next().?.region);
+    const last = it.next().?;
+    try std.testing.expectEqual(@as(?u4, null), last.region);
+    try std.testing.expectEqual(Color{ .indexed = 1 }, last.style.fg);
+    // Event storage remains sufficient after a long-rule reservation.
+    try scratch.reserve(gpa, 5000);
+    var boundaries: [32]Boundary = undefined;
+    for (&boundaries, 0..) |*b, n| b.* = .{ .offset = n, .region = if (n % 2 == 0) @intCast(n / 2) else null };
+    try scratch.parseTracked("\x1b[m" ** 1365, .{}, &boundaries);
+    try std.testing.expectEqual(@as(usize, 1398), scratch.count);
+    try scratch.parseTracked("a\x1b]8;id=x;https://example.test\x07界", .{}, &.{.{ .offset = 5, .region = 2 }});
+    it = scratch.iterator();
+    _ = it.next();
+    const linked = it.next().?;
+    try std.testing.expectEqual(@as(?u4, 2), linked.region);
+    try std.testing.expectEqualStrings("id=x", linked.link.params);
+    try std.testing.expectEqualStrings("https://example.test", linked.link.uri);
+}
 
 test "remote zunic measured graphemes and deferred style and link events" {
     const scratch = try std.testing.allocator.create(Scratch);

@@ -41,6 +41,7 @@ pub const Source = struct {
     stale: bool = false,
     /// Slot values were activated or cleared since the last accepted update.
     override_events: u32 = 0,
+    metadata_stale: bool = false,
 
     pub const Update = struct {
         content_changed: bool = false,
@@ -130,7 +131,11 @@ pub const Source = struct {
             copyOnOneLine(self.overrides[n][0..trimmed.len], trimmed);
             self.override_lens[n] = trimmed.len;
         }
-        if (old != self.override_lens[n]) self.override_events |= @as(u32, 1) << @intCast(n);
+        if (old != self.override_lens[n]) {
+            if (n < 32) self.override_events |= @as(u32, 1) << @intCast(n);
+            self.content.tracks[n / 2].override_epoch[n % 2] +%= 1;
+            self.metadata_stale = true;
+        }
         self.stale = true;
     }
 
@@ -158,8 +163,9 @@ pub const Source = struct {
     /// Reads ready command output, runs due commands, and rebuilds the
     /// content. Metadata is delivered even when flattened row bytes match.
     pub fn update(self: *Source, fds: []const posix.pollfd, now_ms: i64) Update {
-        var result: Update = .{ .override_events = self.override_events };
+        var result: Update = .{ .override_events = self.override_events, .content_changed = self.metadata_stale };
         self.override_events = 0;
+        self.metadata_stale = false;
         for (self.commands, fds, 0..) |*command, fd, n| {
             if (fd.fd < 0 or fd.revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR) == 0) continue;
             const command_result = command.onReadable(self.io) orelse continue;
@@ -172,7 +178,7 @@ pub const Source = struct {
                 const change = self.keepFirstLine(n, command_result.bytes);
                 if (command_result.origin.baselineOnly() or !change.seen) {
                     result.baseline |= @as(u16, 1) << @intCast(n);
-                } else if (change.changed and self.cfg.?.commands[n].track) {
+                } else if (change.changed) {
                     result.eligible |= @as(u16, 1) << @intCast(n);
                 }
             }
@@ -214,23 +220,22 @@ pub const Source = struct {
         return .{ .seen = seen, .changed = changed };
     }
 
-    pub fn slotTrackedChange(self: *const Source, slot: usize, eligible: u16, baseline: u16, override_events: u32) bool {
+    pub fn slotContentEligible(self: *const Source, slot: usize, baseline: u16, override_events: u32) bool {
         const cfg = self.cfg orelse return false;
         if (self.override_lens[slot] != null) return false;
-        if (override_events & (@as(u32, 1) << @intCast(slot)) != 0) return false;
+        if (slot < 32 and override_events & (@as(u32, 1) << @intCast(slot)) != 0) return false;
         const line = &cfg.line[slot / 2];
         const template = if (slot % 2 == 0) &line.left else &line.right;
-        var has_eligible = false;
+        if (template.regions == 0) return false;
         for (template.items()) |part| switch (part) {
             .command => |n| {
                 const bit = @as(u16, 1) << @intCast(n);
                 if (!self.output_seen[n]) return false;
                 if (baseline & bit != 0) return false;
-                has_eligible = has_eligible or eligible & bit != 0;
             },
-            .text => {},
+            .text, .track_start, .track_end => {},
         };
-        return has_eligible;
+        return true;
     }
 
     fn rebuild(self: *Source) bool {
@@ -239,15 +244,16 @@ pub const Source = struct {
             var changed = false;
             for (cfg.line, 0..) |*line, n| {
                 var buf: [4096]u8 = undefined;
+                var tracks: bar.Tracks = .{ .override_epoch = self.content.tracks[n].override_epoch };
                 var w: std.Io.Writer = .fixed(&buf);
                 if (self.override(n * 2)) |value| {
                     w.writeAll(value) catch {};
-                } else self.writeTemplate(&w, &line.left, &now);
+                } else self.writeTemplate(&w, &line.left, &now, &tracks, .left);
                 w.writeByte('\t') catch {};
                 if (self.override(n * 2 + 1)) |value| {
                     w.writeAll(value) catch {};
-                } else self.writeTemplate(&w, &line.right, &now);
-                changed = self.content.setLine(n, w.buffered()) or changed;
+                } else self.writeTemplate(&w, &line.right, &now, &tracks, .right);
+                changed = self.content.setTrackedLine(n, w.buffered(), tracks) or changed;
             }
             return changed;
         } else {
@@ -271,10 +277,15 @@ pub const Source = struct {
         }
     }
 
-    fn writeTemplate(self: *const Source, w: *std.Io.Writer, template: *const config.Template, now: *const Tm) void {
+    fn writeTemplate(self: *const Source, w: *std.Io.Writer, template: *const config.Template, now: *const Tm, tracks: *bar.Tracks, owner: bar.cells.Owner) void {
         for (template.items()) |part| switch (part) {
             .text => |text| formatTime(w, text, now),
-            .command => |n| w.writeAll(self.outputs[n][0..self.output_lens[n]]) catch return,
+            .command => |n| writeOneLine(w, self.outputs[n][0..self.output_lens[n]]),
+            .track_start => |id| {
+                tracks.spans[tracks.len] = .{ .owner = owner, .id = id, .start = @intCast(w.end), .end = @intCast(w.end) };
+                tracks.len += 1;
+            },
+            .track_end => tracks.spans[tracks.len - 1].end = @intCast(w.end),
         };
     }
 };
@@ -398,9 +409,9 @@ test "override events are delivered once with their content update" {
 
 test "tracked slots need ready commands and suppress baseline-only results" {
     var diag: config.Diagnostic = .{};
-    var cfg = try config.parse(std.testing.allocator, "[line.1]\nleft = #(tracked) #(plain)\nright = #(tracked)\n" ++
+    var cfg = try config.parse(std.testing.allocator, "[line.1]\nleft = #[track]#(tracked)#[notrack] #(plain)\nright = #[track]#(tracked)#[notrack]\n" ++
         "[line.2]\nleft = #(plain)\n" ++
-        "[command.tracked]\nrun = echo x\ntrack = true\n" ++
+        "[command.tracked]\nrun = echo x\n" ++
         "[command.plain]\nrun = echo y\n", &diag);
     defer cfg.deinit();
     var content = try bar.Content.init(std.testing.allocator, 2);
@@ -409,19 +420,144 @@ test "tracked slots need ready commands and suppress baseline-only results" {
     var override_lens: [4]?usize = @splat(null);
     var source: Source = .{ .gpa = std.testing.allocator, .io = undefined, .commands = &.{}, .cfg = &cfg, .lines = 2, .content = content, .exec_output = &.{}, .overrides = &overrides, .override_lens = &override_lens };
     _ = source.keepFirstLine(0, "");
-    try std.testing.expect(!source.slotTrackedChange(0, 1, 0, 0));
+    try std.testing.expect(!source.slotContentEligible(0, 0, 0));
     _ = source.keepFirstLine(1, "first");
-    try std.testing.expect(source.slotTrackedChange(0, 1, 0, 0));
-    try std.testing.expect(source.slotTrackedChange(1, 1, 0, 0));
-    try std.testing.expect(!source.slotTrackedChange(2, 1, 0, 0));
+    try std.testing.expect(source.slotContentEligible(0, 0, 0));
+    try std.testing.expect(source.slotContentEligible(1, 0, 0));
+    try std.testing.expect(!source.slotContentEligible(2, 0, 0));
     source.setOverride(1, "manual");
-    try std.testing.expect(!source.slotTrackedChange(1, 1, 0, 0));
-    try std.testing.expect(!source.slotTrackedChange(0, 1, 1, 0));
-    try std.testing.expect(!source.slotTrackedChange(0, 1, 0, 1));
+    try std.testing.expect(!source.slotContentEligible(1, 0, 0));
+    try std.testing.expect(!source.slotContentEligible(0, 1, 0));
+    try std.testing.expect(!source.slotContentEligible(0, 0, 1));
     const long = "a" ** (max_output_line + 1);
     const first = source.keepFirstLine(0, long);
     try std.testing.expect(first.changed);
     const truncated = source.keepFirstLine(0, long[0..max_output_line] ++ "b");
     try std.testing.expect(!truncated.changed);
     _ = source.update(&.{}, 0);
+}
+
+test "source sidecars retain empty and truncated regions and exclude dynamic markers" {
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(std.testing.allocator, "[line.1]\nleft = P#[track]#(a)#[notrack] #[track]#(b)#[notrack]\nright = #[track]%M#[notrack]\n" ++
+        "[command.a]\nrun = a\n[command.b]\nrun = b\n", &diag);
+    defer cfg.deinit();
+    var content = try bar.Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    var overrides: [2][output.max_value]u8 = undefined;
+    var lens: [2]?usize = @splat(null);
+    var source: Source = .{ .gpa = std.testing.allocator, .io = undefined, .commands = &.{}, .cfg = &cfg, .lines = 1, .content = content, .exec_output = &.{}, .overrides = &overrides, .override_lens = &lens };
+    _ = source.rebuild();
+    try std.testing.expectEqual(@as(usize, 3), source.content.tracks[0].len);
+    try std.testing.expectEqual(@as(u16, 1), source.content.tracks[0].spans[0].start);
+    try std.testing.expectEqual(@as(u16, 1), source.content.tracks[0].spans[0].end);
+    try std.testing.expect(!source.slotContentEligible(0, 0, 0));
+    _ = source.keepFirstLine(0, "#[track]x#[notrack]");
+    _ = source.rebuild();
+    try std.testing.expectEqual(@as(usize, 3), source.content.tracks[0].len);
+    try std.testing.expect(!source.slotContentEligible(0, 0, 0));
+    _ = source.keepFirstLine(1, "");
+    try std.testing.expect(source.slotContentEligible(0, 0, 0));
+    try std.testing.expect(!source.slotContentEligible(0, 2, 0));
+    try std.testing.expect(source.slotContentEligible(1, 2, 0));
+    _ = source.keepFirstLine(0, "a" ** 512);
+    _ = source.keepFirstLine(1, "b" ** 512);
+    _ = source.rebuild();
+    try std.testing.expectEqual(@as(u16, 1024), source.content.tracks[0].spans[1].end);
+    try std.testing.expectEqual(@as(u16, 1024), source.content.tracks[0].spans[2].start);
+    try std.testing.expectEqual(@as(u16, 1024), source.content.tracks[0].spans[2].end);
+    source.setOverride(0, "#[track]manual#[notrack]");
+    _ = source.rebuild();
+    try std.testing.expectEqual(@as(usize, 1), source.content.tracks[0].len);
+    try std.testing.expectEqual(bar.cells.Owner.right, source.content.tracks[0].spans[0].owner);
+    source.setOverride(0, "");
+    const result = source.update(&.{}, 0);
+    try std.testing.expect(result.content_changed);
+    try std.testing.expectEqual(@as(u64, 2), source.content.tracks[0].override_epoch[0]);
+}
+
+test "partial startup geometry and same-text overrides establish silent region baselines" {
+    const gpa = std.testing.allocator;
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(gpa, "[line.1]\nleft = P #[track]#(a)#[notrack] #(b)\n" ++
+        "[command.a]\nrun = a\n[command.b]\nrun = b\n", &diag);
+    defer cfg.deinit();
+    var content = try bar.Content.init(gpa, 1);
+    defer content.deinit();
+    var overrides: [2][output.max_value]u8 = undefined;
+    var lens: [2]?usize = @splat(null);
+    var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = &cfg, .lines = 1, .content = content, .exec_output = &.{}, .overrides = &overrides, .override_lens = &lens };
+    var r = try bar.Renderer.init(gpa);
+    defer r.deinit();
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{null};
+    const look: bar.Look = .{ .styles = &styles, .rules = &rules };
+    try r.resize(1, 40);
+    _ = source.rebuild();
+    try r.relayout(&source.content, &look);
+    for ([_][]const u8{ "one", "two" }) |value| {
+        _ = source.keepFirstLine(0, value);
+        _ = source.rebuild();
+        try r.acceptContent(&source.content, &look);
+        if (source.slotContentEligible(0, 0, 0)) r.highlightChange(0, 0, 100);
+        try std.testing.expectEqual(@as(?i64, null), r.rows[0].highlight_until[0][0]);
+    }
+    _ = source.keepFirstLine(1, "");
+    try std.testing.expect(!source.rebuild()); // Readiness changed without bytes.
+    try std.testing.expect(!source.slotContentEligible(0, 2, 0));
+    _ = source.keepFirstLine(0, "");
+    _ = source.rebuild();
+    try r.acceptContent(&source.content, &look);
+    if (source.slotContentEligible(0, 0, 0)) r.highlightChange(0, 0, 100);
+    try std.testing.expectEqual(@as(?i64, null), r.rows[0].highlight_until[0][0]);
+    _ = source.keepFirstLine(0, "later");
+    _ = source.rebuild();
+    try r.acceptContent(&source.content, &look);
+    if (source.slotContentEligible(0, 0, 0)) r.highlightChange(0, 0, 100);
+    _ = r.compose(100);
+    try std.testing.expectEqual(@as(?i64, 600), r.rows[0].highlight_until[0][0]);
+    _ = source.keepFirstLine(0, "geometry");
+    _ = source.rebuild();
+    try r.acceptContent(&source.content, &look);
+    if (source.slotContentEligible(0, 1, 0)) r.highlightChange(0, 0, 200);
+    _ = r.compose(200);
+    try std.testing.expectEqual(@as(?i64, 600), r.rows[0].highlight_until[0][0]);
+    source.setOverride(0, "P geometry ");
+    _ = source.update(&.{}, 210);
+    try r.acceptContent(&source.content, &look);
+    try std.testing.expectEqual(@as(?i64, null), r.rows[0].highlight_until[0][0]);
+    source.setOverride(0, "");
+    const clear = source.update(&.{}, 220);
+    try r.acceptContent(&source.content, &look);
+    if (source.slotContentEligible(0, clear.baseline, clear.override_events)) r.highlightChange(0, 0, 220);
+    try std.testing.expectEqual(@as(?i64, null), r.rows[0].highlight_until[0][0]);
+    _ = source.keepFirstLine(0, "scheduled");
+    _ = source.rebuild();
+    try r.acceptContent(&source.content, &look);
+    if (source.slotContentEligible(0, 0, 0)) r.highlightChange(0, 0, 300);
+    try std.testing.expectEqual(@as(?i64, 800), r.rows[0].highlight_until[0][0]);
+}
+
+test "override epochs cover high-numbered slots and coalesced same-text transitions" {
+    const gpa = std.testing.allocator;
+    var text: std.Io.Writer.Allocating = .init(gpa);
+    defer text.deinit();
+    for (1..18) |n| try text.writer.print("[line.{d}]\nright = #[track]x#[notrack]\n", .{n});
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(gpa, text.written(), &diag);
+    defer cfg.deinit();
+    var content = try bar.Content.init(gpa, 17);
+    defer content.deinit();
+    var overrides: [34][output.max_value]u8 = undefined;
+    var lens: [34]?usize = @splat(null);
+    var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = &cfg, .lines = 17, .content = content, .exec_output = &.{}, .overrides = &overrides, .override_lens = &lens };
+    _ = source.rebuild();
+    source.setOverride(33, "x");
+    source.setOverride(33, "");
+    const event = source.update(&.{}, 0);
+    try std.testing.expect(event.any());
+    try std.testing.expectEqualStrings("\tx", source.content.line(16));
+    try std.testing.expectEqual(@as(u64, 2), source.content.tracks[16].override_epoch[1]);
+    try std.testing.expectEqual(@as(usize, 1), source.content.tracks[16].len);
+    try std.testing.expect(!source.update(&.{}, 1).any());
 }

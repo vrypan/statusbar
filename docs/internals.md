@@ -43,20 +43,21 @@ model](display-model.md).
 Only the statusbar has a cell grid; the child's output remains a proxied byte
 stream. Each visible row keeps three owned versions: base content, desired
 appearance, and the last queued paint. Cells record graphemes, terminal width,
-style, hyperlink and left/right/fill ownership. Wide graphemes also have a
-continuation cell, so clipping and appearance changes cannot split them.
+style, hyperlink, left/right/fill ownership, and optional tracking-region ID.
+Wide graphemes also have a continuation cell, so clipping and appearance changes
+cannot split them.
 
-Ordinary updates rebuild only source rows whose bytes changed, compare their
-cells, and repaint only rows whose appearance changed. Identical updates emit
+Ordinary updates rebuild only source rows whose bytes or region metadata
+changed, compare their cells, and repaint only rows whose appearance changed. Identical updates emit
 nothing. Startup, resize and screen damage repaint all visible rows. Damage
 repair uses existing cells without parsing content again. Paints still use the
 same safe output boundaries and cursor-save timing as before.
 
-Internal slot and column-range operations can patch and restore styles without
-changing content. Patches survive unrelated-row updates, equivalent content
+Internal slot, region, and column-range operations can patch and restore styles
+without changing content. Patches survive unrelated-row updates, equivalent content
 rebuilds, and damage repair. A semantic base change resets that row's patches;
-resize rebuilds the grid. Tracked commands use a separate monotonic deadline
-and applied-step index per visible slot. The default effect is bold for 500 ms;
+resize rebuilds the grid. Each tracked region has a monotonic deadline
+and applied-step index. The default effect is bold for 500 ms;
 `[highlight]` can instead specify up to 16 background colors and either a
 constant foreground or a matching foreground sequence. Each step is derived
 from elapsed time, so delayed steps are skipped. Patches are reapplied after a
@@ -64,17 +65,27 @@ base rebuild or resize and restored on expiry; damage repair never restarts
 the deadline.
 Command results retain why their process ran. First results and reruns requested
 by a terminal resize establish a new baseline silently; ordinary interval
-results may start the configured slot highlight after every command used in the
-slot has produced a first result. Step boundaries and expiry share one proxy
+results and clock changes may start a region highlight after every command used
+in the slot has produced a first result. Step boundaries and expiry share one proxy
 poll deadline and one composition pass. Within-row selective writes are not
 implemented yet.
+
+Static template markers compile to ordinal boundaries. Source rows own raw-byte
+spans; markup expansion and ANSI filtering map those boundaries into graphemes.
+Each visible row also retains full semantic slot snapshots before clipping.
+Regions compare glyph bytes, width, resolved style, and hyperlink values. Both
+versions are projected into the target's final available column budget to
+exclude changes in hidden suffixes and movement caused by neighboring values.
+Override transitions carry per-slot epochs so identical-text activation/clearing
+still cancels effects and establishes a silent baseline. Hidden rows discard
+their snapshots and baseline silently when revealed.
 
 ### Unicode and styles
 
 Grapheme segmentation and widths use the pinned remote zunic v0.5.0 dependency
 (Unicode 17). Combining sequences, flags and joined emoji are kept whole. A
-style or OSC 8 hyperlink change inside a grapheme takes effect at the next
-grapheme, never halfway through the current one. Standalone zero-width clusters
+style, tracking-region, or OSC 8 hyperlink change inside a grapheme takes effect
+at the next grapheme, never halfway through the current one. Standalone zero-width clusters
 are omitted; non-renderable clusters with a display width use a replacement
 character. Widths account for text/emoji presentation: bare `▪` uses one
 column, while `▪` followed by VS16 uses two. Supported variation bases followed
@@ -90,13 +101,14 @@ default colors remain defaults rather than being guessed as RGB values.
 ### Resource limits and measurement
 
 Renderer-owned heap allocations share a 64 MiB budget, including all three
-grids, parsing scratch, staging and queued paint storage. An allocation or
+grids, full semantic snapshots, parsing scratch, staging and queued paint storage. An allocation or
 budget failure ends the session through terminal cleanup rather than leaving
 a partial snapshot as the last painted state. Established-capacity updates
 reuse storage; preparation reserves space before emission and snapshot commit.
 
 `zig build bench -Doptimize=ReleaseFast` measures full paints, identical updates,
-single-row changes and style-only patches. It reports time, emitted bytes and
+single-row changes, style-only patches, and independent region updates with
+shared animation frames and damage repair. It reports time, emitted bytes and
 rows, parsed rows and allocations. The cell model reduces terminal output for
 small changes but costs memory and CPU compared with the old string renderer;
 byte savings alone are not a wall-clock speedup.

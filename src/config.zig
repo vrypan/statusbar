@@ -41,15 +41,20 @@ pub const max_lines = 65533;
 pub const max_commands = 16;
 pub const max_colors = 32;
 const max_parts = 32;
+pub const max_regions = 16;
 
 pub const Part = union(enum) {
     text: []const u8,
     command: u8,
+    track_start: u4,
+    track_end: u4,
 };
 
 pub const Template = struct {
-    parts: [max_parts]Part = undefined,
+    parts: [max_parts + 2 * max_regions]Part = undefined,
     len: usize = 0,
+    ordinary_parts: usize = 0,
+    regions: u5 = 0,
 
     pub fn items(self: *const Template) []const Part {
         return self.parts[0..self.len];
@@ -58,7 +63,7 @@ pub const Template = struct {
     pub fn usesClock(self: *const Template) bool {
         for (self.items()) |part| switch (part) {
             .text => |text| if (std.mem.indexOfScalar(u8, text, '%') != null) return true,
-            .command => {},
+            .command, .track_start, .track_end => {},
         };
         return false;
     }
@@ -78,7 +83,6 @@ pub const Command = struct {
     name: []const u8,
     run: []const u8,
     interval_ms: ?i64 = null,
-    track: bool = false,
 };
 
 pub const Highlight = struct {
@@ -315,8 +319,8 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
                 } else if (eql(key, "interval")) {
                     config.commands[n].interval_ms = try parseInterval(value, diag);
                 } else if (eql(key, "track")) {
-                    config.commands[n].track = if (eql(value, "true")) true else if (eql(value, "false")) false else return fail(diag, "track must be true or false");
-                } else return fail(diag, "unknown command key; expected run, interval or track");
+                    return fail(diag, "command track is no longer supported; use #[track]...#[notrack] in a left/right template");
+                } else return fail(diag, "unknown command key; expected run or interval");
             },
         }
     }
@@ -422,11 +426,40 @@ fn compile(config: *Config, text: []const u8, diag: *Diagnostic) Error!Template 
     var template: Template = .{};
     var start: usize = 0;
     var i: usize = 0;
+    var open: ?u4 = null;
     while (i + 1 < text.len) {
         if (text[i] == '#' and text[i + 1] == '#') {
             // An escaped hash never starts a command; markup handles it later.
             i += 2;
             continue;
+        }
+        if (text[i] == '#' and text[i + 1] == '[') {
+            if (std.mem.indexOfScalarPos(u8, text, i + 2, ']')) |close| {
+                const body = text[i + 2 .. close];
+                if (eql(body, "track") or eql(body, "notrack")) {
+                    if (i > start) try append(&template, .{ .text = text[start..i] }, diag);
+                    if (eql(body, "track")) {
+                        if (open != null) return fail(diag, "tracking regions cannot nest");
+                        if (template.regions == max_regions) return fail(diag, "a slot supports at most 16 tracking regions");
+                        open = @intCast(template.regions);
+                        template.regions += 1;
+                        try append(&template, .{ .track_start = open.? }, diag);
+                    } else {
+                        try append(&template, .{ .track_end = open orelse return fail(diag, "#[notrack] needs a matching #[track]") }, diag);
+                        open = null;
+                    }
+                    i = close + 1;
+                    start = i;
+                    continue;
+                }
+                var attrs = std.mem.tokenizeAny(u8, body, ", \t\r\n");
+                while (attrs.next()) |attr| {
+                    if (eql(attr, "track") or eql(attr, "notrack") or std.mem.startsWith(u8, attr, "track=") or std.mem.startsWith(u8, attr, "notrack="))
+                        return fail(diag, "use standalone #[track] and #[notrack] markers");
+                }
+                i = close + 1;
+                continue;
+            }
         }
         if (text[i] != '#' or text[i + 1] != '(') {
             i += 1;
@@ -443,12 +476,20 @@ fn compile(config: *Config, text: []const u8, diag: *Diagnostic) Error!Template 
         i = close + 1;
         start = i;
     }
+    if (open != null) return fail(diag, "#[track] needs a matching #[notrack]");
     if (start < text.len) try append(&template, .{ .text = text[start..] }, diag);
     return template;
 }
 
 fn append(template: *Template, part: Part, diag: *Diagnostic) Error!void {
-    if (template.len == max_parts) return fail(diag, "too many parts in one slot");
+    switch (part) {
+        .text, .command => {
+            if (template.ordinary_parts == max_parts) return fail(diag, "too many parts in one slot");
+            template.ordinary_parts += 1;
+        },
+        .track_start, .track_end => {},
+    }
+    if (template.len == template.parts.len) return fail(diag, "too many parts in one slot");
     template.parts[template.len] = part;
     template.len += 1;
 }
@@ -668,16 +709,33 @@ test "errors name the line" {
     }
 }
 
-test "command change tracking is opt-in and strictly boolean" {
+test "tracking markers validate static identities and independent limits" {
     var diag: Diagnostic = .{};
-    var cfg = try parse(std.testing.allocator, "[line.1]\nleft = #(on) #(off) #(default)\n" ++
-        "[command.on]\nrun = echo on\ntrack = true\n" ++
-        "[command.off]\nrun = echo off\ntrack = false\n" ++
-        "[command.default]\nrun = echo default\n", &diag);
+    var cfg = try parse(std.testing.allocator, "[line.1]\nleft = " ++ "#[track]x#[notrack]" ** 16 ++ "\nright = #[track]#[default]%M#[notrack] ##[track] #(echo '#[track]')", &diag);
     defer cfg.deinit();
-    try std.testing.expect(cfg.commands[0].track);
-    try std.testing.expect(!cfg.commands[1].track);
-    try std.testing.expect(!cfg.commands[2].track);
+    try std.testing.expectEqual(@as(u5, 16), cfg.line[0].left.regions);
+    try std.testing.expectEqual(@as(u5, 1), cfg.line[0].right.regions);
+    try std.testing.expectEqual(@as(u4, 0), cfg.line[0].right.items()[0].track_start);
+    const invalid = [_][]const u8{
+        "#[track]x",                "#[notrack]",     "#[track]#[track]x#[notrack]#[notrack]",
+        "#[bold,track]x",           "#[track=name]x", "#[ track ]x",
+        "#[track]#[notrack]" ** 17,
+    };
+    for (invalid) |value| {
+        const input = try std.fmt.allocPrint(std.testing.allocator, "[line.1]\nleft = {s}", .{value});
+        defer std.testing.allocator.free(input);
+        try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, input, &diag));
+        try std.testing.expectEqual(@as(usize, 2), diag.line);
+    }
+    var empty = try parse(std.testing.allocator, "[line.1]\nleft = #[track]#[notrack]", &diag);
+    defer empty.deinit();
+    try std.testing.expectEqual(@as(usize, 2), empty.line[0].left.len);
+}
+
+test "old command tracking reports migration guidance" {
+    var diag: Diagnostic = .{};
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[command.on]\nrun = echo on\ntrack = true\n", &diag));
+    try std.testing.expect(std.mem.indexOf(u8, diag.message, "#[track]...#[notrack]") != null);
 }
 
 test "highlight colors and durations are bounded and validated" {

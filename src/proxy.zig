@@ -511,13 +511,13 @@ const Proxy = struct {
                 try self.renderer.acceptContent(&self.source.content, self.look);
                 for (0..self.renderer.rows.len) |row| for (0..2) |side| {
                     const slot = row * 2 + side;
-                    if (self.source.slotTrackedChange(slot, source_update.eligible, source_update.baseline, source_update.override_events)) self.renderer.highlightChange(row, side, now_ms);
+                    if (self.source.slotContentEligible(slot, source_update.baseline, source_update.override_events)) self.renderer.highlightChange(row, side, now_ms);
                 };
                 self.requestPaint(now_ms);
             }
             for (0..self.renderer.rows.len) |row| for (0..2) |side| {
                 const slot = row * 2 + side;
-                if (self.source.override_lens[slot] != null or source_update.override_events & (@as(u32, 1) << @intCast(slot)) != 0) self.renderer.cancelHighlight(row, side);
+                if (self.source.override_lens[slot] != null or (slot < 32 and source_update.override_events & (@as(u32, 1) << @intCast(slot)) != 0)) self.renderer.cancelHighlight(row, side);
             };
             if (self.renderer.compose(now_ms)) self.requestPaint(now_ms);
 

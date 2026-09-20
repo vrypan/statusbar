@@ -88,25 +88,28 @@ commands, markup, colors, rules, and all layout details.
 
 ## Highlight changed values
 
-A named command can briefly highlight its slot whenever its displayed result
-changes. This is useful for weather, unread notifications, resource metrics,
-build state, or anything else that updates in the background:
+Wrap a value in `#[track]...#[notrack]` to briefly highlight it when its displayed
+content changes. This works for commands and template clocks, and is useful for
+weather, unread notifications, resource metrics, or build state:
 
 ```ini
 [line.1]
-left = " Clock #(clock) "
+left = " Clock #[track]#(clock)#[notrack] "
 
 [command.clock]
 run = date '+%H:%M:%S'
 interval = 1
-track = true
 ```
 
 The first result establishes a baseline; identical later results do nothing.
 With the `[highlight]` section from the built-in config, changes play a warm
 color pulse. Without that section, the fallback is a 500 ms bold flash. The
-whole slot is highlighted, including its label, while the rule and opposite
-slot retain their normal appearance.
+marked region is highlighted; its label and other content keep their normal
+appearance. Several regions in one slot can change width and pulse independently:
+
+```ini
+left = "CPU #[track]#(cpu)#[notrack]  MEM #[track]#(mem)#[notrack]"
+```
 
 The built-in effect warms the foreground and background through twelve steps,
 then restores every cell's exact original style. Copy the default config to

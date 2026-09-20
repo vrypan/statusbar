@@ -64,23 +64,26 @@ pub const Cell = struct {
     uri: Span = .{},
     style: Style = .{},
     owner: Owner = .fill,
+    region: ?u4 = null,
 };
 pub const Changes = packed struct {
     glyph: bool = false,
     style: bool = false,
     link: bool = false,
     owner: bool = false,
+    region: bool = false,
     pub fn visual(self: Changes) bool {
         return self.glyph or self.style or self.link;
     }
     pub fn any(self: Changes) bool {
-        return self.visual() or self.owner;
+        return self.visual() or self.owner or self.region;
     }
     pub fn merge(self: *Changes, other: Changes) void {
         self.glyph = self.glyph or other.glyph;
         self.style = self.style or other.style;
         self.link = self.link or other.link;
         self.owner = self.owner or other.owner;
+        self.region = self.region or other.region;
     }
 };
 
@@ -107,7 +110,7 @@ pub const Row = struct {
     }
     pub fn put(self: *Row, col: usize, glyph: text.Glyph, owner: Owner) void {
         const previous: ?Cell = if (col > 0) self.cells.items[col - 1] else null;
-        var cell: Cell = .{ .kind = .lead, .width = glyph.columns, .style = glyph.style, .owner = owner };
+        var cell: Cell = .{ .kind = .lead, .width = glyph.columns, .style = glyph.style, .owner = owner, .region = glyph.region };
         cell.glyph = self.keep(glyph.bytes);
         if (glyph.link.uri.len > 0) {
             if (previous != null and std.mem.eql(u8, previous.?.uri.get(self.data.items), glyph.link.uri) and std.mem.eql(u8, previous.?.params.get(self.data.items), glyph.link.params)) {
@@ -145,6 +148,7 @@ pub const Row = struct {
             .style = !Style.eql(a.style, b.style),
             .link = !std.mem.eql(u8, a.uri.get(self.data.items), b.uri.get(other.data.items)) or !std.mem.eql(u8, a.params.get(self.data.items), b.params.get(other.data.items)),
             .owner = a.owner != b.owner,
+            .region = a.region != b.region,
         };
     }
     pub fn changes(self: Row, other: Row) Changes {
@@ -162,6 +166,7 @@ pub const Row = struct {
 };
 pub const Target = union(enum) {
     slot: Owner,
+    region: struct { owner: Owner, id: u4 },
     /// Half-open column range; touching a continuation includes its lead.
     range: struct { start: usize, end: usize },
 };
@@ -170,6 +175,7 @@ fn selected(row: Row, col: usize, target: Target) bool {
     if (cell.kind == .continuation) return false;
     return switch (target) {
         .slot => |owner| owner != .fill and cell.owner == owner,
+        .region => |r| cell.owner == r.owner and cell.region == r.id,
         .range => |r| r.start < r.end and col < r.end and col + cell.width > r.start,
     };
 }
@@ -187,6 +193,28 @@ pub fn restore(row: *Row, base: Row, target: Target) void {
         cell.style = base.cells.items[i].style;
         if (cell.width == 2) row.cells.items[i + 1].style = cell.style;
     }
+}
+
+test "region metadata targets whole wide glyphs without visual differences" {
+    const gpa = std.testing.allocator;
+    var a: Row = .{};
+    defer a.deinit(gpa);
+    var b: Row = .{};
+    defer b.deinit(gpa);
+    try a.reset(gpa, 3, .{});
+    a.put(0, .{ .bytes = "界", .columns = 2, .style = .{}, .link = .{}, .region = 3 }, .left);
+    a.put(2, .{ .bytes = "x", .columns = 1, .style = .{}, .link = .{} }, .left);
+    try b.reserveCopy(gpa, a);
+    b.copyReserved(a);
+    b.cells.items[0].region = 4;
+    try std.testing.expect(a.changes(b).any());
+    try std.testing.expect(!a.changes(b).visual());
+    b.copyReserved(a);
+    patch(&b, .{ .region = .{ .owner = .left, .id = 3 } }, .{ .bold = true });
+    try std.testing.expect(b.cells.items[0].style.bold and b.cells.items[1].style.bold);
+    try std.testing.expect(!b.cells.items[2].style.bold);
+    restore(&b, a, .{ .region = .{ .owner = .left, .id = 3 } });
+    try std.testing.expect(b.visuallyEqual(a));
 }
 
 test "budget enforces live allocation and growth including overlap" {

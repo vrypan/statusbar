@@ -13,23 +13,42 @@ test {
 }
 
 pub const max_line_bytes = 1024;
+pub const TrackSpan = struct { owner: cells.Owner, id: u4, start: u16, end: u16 };
+pub const Tracks = struct {
+    spans: [32]TrackSpan = undefined,
+    len: usize = 0,
+    override_epoch: [2]u64 = .{ 0, 0 },
+    pub fn items(self: *const Tracks) []const TrackSpan {
+        return self.spans[0..self.len];
+    }
+    pub fn eql(a: Tracks, b: Tracks) bool {
+        if (a.len != b.len or !std.meta.eql(a.override_epoch, b.override_epoch)) return false;
+        for (a.items(), b.items()) |x, y| if (!std.meta.eql(x, y)) return false;
+        return true;
+    }
+};
 
 pub const Content = struct {
     allocator: std.mem.Allocator,
     lines: [][max_line_bytes]u8,
     lens: []usize,
+    tracks: []Tracks,
 
     pub fn init(allocator: std.mem.Allocator, count: usize) !Content {
         const lines = try allocator.alloc([max_line_bytes]u8, count);
         errdefer allocator.free(lines);
         const lens = try allocator.alloc(usize, count);
+        errdefer allocator.free(lens);
         @memset(lens, 0);
-        return .{ .allocator = allocator, .lines = lines, .lens = lens };
+        const tracks = try allocator.alloc(Tracks, count);
+        @memset(tracks, .{});
+        return .{ .allocator = allocator, .lines = lines, .lens = lens, .tracks = tracks };
     }
 
     pub fn deinit(self: *Content) void {
         self.allocator.free(self.lines);
         self.allocator.free(self.lens);
+        self.allocator.free(self.tracks);
         self.* = undefined;
     }
 
@@ -42,9 +61,7 @@ pub const Content = struct {
             const raw = it.next() orelse "";
             const trimmed = std.mem.trimEnd(u8, raw, "\r");
             const kept = trimmed[0..@min(trimmed.len, max_line_bytes)];
-            if (!std.mem.eql(u8, kept, self.line(n))) changed = true;
-            @memcpy(self.lines[n][0..kept.len], kept);
-            self.lens[n] = kept.len;
+            changed = self.setLine(n, kept) or changed;
         }
         return changed;
     }
@@ -54,10 +71,19 @@ pub const Content = struct {
     }
 
     pub fn setLine(self: *Content, n: usize, text: []const u8) bool {
+        return self.setTrackedLine(n, text, .{});
+    }
+    pub fn setTrackedLine(self: *Content, n: usize, text: []const u8, tracks: Tracks) bool {
         const kept = text[0..@min(text.len, max_line_bytes)];
-        const changed = !std.mem.eql(u8, kept, self.line(n));
+        var retained = tracks;
+        for (retained.spans[0..retained.len]) |*span| {
+            span.start = @intCast(@min(span.start, kept.len));
+            span.end = @intCast(@min(span.end, kept.len));
+        }
+        const changed = !std.mem.eql(u8, kept, self.line(n)) or !Tracks.eql(self.tracks[n], retained);
         @memcpy(self.lines[n][0..kept.len], kept);
         self.lens[n] = kept.len;
+        self.tracks[n] = retained;
         return changed;
     }
 };
@@ -81,18 +107,22 @@ pub const State = struct {
     summary: cells.Changes = .{},
     raw: [max_line_bytes]u8 = undefined,
     raw_len: ?usize = null,
+    tracks: Tracks = .{},
+    semantic: [2]cells.Row = .{ .{}, .{} },
     painted_valid: bool = false,
+    layout_invalid: bool = true,
     selected: bool = false,
     pending: bool = true,
     output_bound: usize = 0,
-    slot_changed: [2]bool = .{ false, false },
-    highlight_until: [2]?i64 = .{ null, null },
-    highlight_step: [2]?u8 = .{ null, null },
+    region_changed: [2][16]bool = @splat(@splat(false)),
+    highlight_until: [2][16]?i64 = @splat(@splat(null)),
+    highlight_step: [2][16]?u8 = @splat(@splat(null)),
     fn deinit(self: *State, gpa: std.mem.Allocator) void {
         self.base.deinit(gpa);
         self.desired.deinit(gpa);
         self.painted.deinit(gpa);
         self.changes.deinit(gpa);
+        for (&self.semantic) |*snapshot| snapshot.deinit(gpa);
     }
 };
 
@@ -101,10 +131,10 @@ pub const Renderer = struct {
     parent: std.mem.Allocator,
     budget: *cells.Budget,
     scratch: *styled.Scratch,
-    semantic_scratch: *styled.Scratch,
     rows: []State = &.{},
     cols: u16 = 0,
     staging: cells.Row = .{},
+    semantic_staging: [2]cells.Row = .{ .{}, .{} },
     writer: std.Io.Writer.Allocating,
     parsed_rows: usize = 0,
     emitted_rows: usize = 0,
@@ -117,24 +147,20 @@ pub const Renderer = struct {
         const scratch = try budget.allocator().create(styled.Scratch);
         scratch.* = .{};
         errdefer budget.allocator().destroy(scratch);
-        const semantic_scratch = try budget.allocator().create(styled.Scratch);
-        semantic_scratch.* = .{};
-        errdefer budget.allocator().destroy(semantic_scratch);
         var writer: std.Io.Writer.Allocating = .init(budget.allocator());
         errdefer writer.deinit();
         try writer.ensureTotalCapacity(128);
-        return .{ .parent = parent, .budget = budget, .scratch = scratch, .semantic_scratch = semantic_scratch, .writer = writer };
+        return .{ .parent = parent, .budget = budget, .scratch = scratch, .writer = writer };
     }
     pub fn deinit(self: *Renderer) void {
         const gpa = self.budget.allocator();
         for (self.rows) |*row| row.deinit(gpa);
         gpa.free(self.rows);
         self.staging.deinit(gpa);
+        for (&self.semantic_staging) |*snapshot| snapshot.deinit(gpa);
         self.writer.deinit();
         self.scratch.deinit(gpa);
         gpa.destroy(self.scratch);
-        self.semantic_scratch.deinit(gpa);
-        gpa.destroy(self.semantic_scratch);
         std.debug.assert(self.budget.live == 0);
         self.parent.destroy(self.budget);
     }
@@ -146,7 +172,13 @@ pub const Renderer = struct {
         if (minimum > self.budget.limit) return error.RendererMemoryLimit;
         const rows = try gpa.alloc(State, count);
         @memset(rows, .{});
-        for (rows[0..@min(rows.len, self.rows.len)], self.rows[0..@min(rows.len, self.rows.len)]) |*row, old| row.highlight_until = old.highlight_until;
+        // Retain pre-layout content when geometry changes in the same batch as
+        // a content update. Newly revealed rows still start without a baseline.
+        for (rows[0..@min(rows.len, self.rows.len)], self.rows[0..@min(rows.len, self.rows.len)]) |*row, *old| {
+            std.mem.swap(State, row, old);
+            row.painted_valid = false;
+            row.layout_invalid = true;
+        }
         for (self.rows) |*row| row.deinit(gpa);
         gpa.free(self.rows);
         self.rows = rows;
@@ -159,36 +191,41 @@ pub const Renderer = struct {
         self.parsed_rows = 0;
         for (self.rows, 0..) |*row, n| {
             row.summary = .{};
-            row.slot_changed = .{ false, false };
+            row.region_changed = @splat(@splat(false));
             @memset(row.changes.items, .{});
             const raw = content.line(n);
-            if (!invalidate and row.raw_len != null and std.mem.eql(u8, raw, row.raw[0..row.raw_len.?])) continue;
-            const semantic_changed = if (!invalidate and row.raw_len != null)
-                try self.semanticSlotsChanged(row.raw[0..row.raw_len.?], raw, look.styles[n], look.palette)
-            else
-                [2]bool{ false, false };
+            const tracks = content.tracks[n];
+            if (!invalidate and !row.layout_invalid and row.raw_len != null and std.mem.eql(u8, raw, row.raw[0..row.raw_len.?]) and Tracks.eql(tracks, row.tracks)) continue;
             self.parsed_rows += 1;
-            try self.layout(&self.staging, raw, look.styles[n], look.rules[n], look.palette);
+            try self.layout(&self.staging, raw, tracks, look.styles[n], look.rules[n], look.palette);
+            if (!invalidate and row.raw_len != null) {
+                const left_width = rowFitting(self.semantic_staging[0], self.cols);
+                const capacities = [2]usize{ self.cols, self.cols -| (left_width + @as(usize, if (left_width > 0) 1 else 0)) };
+                for (0..2) |side| for (0..16) |id| {
+                    if (tracks.override_epoch[side] != row.tracks.override_epoch[side]) continue;
+                    const ordinal: u4 = @intCast(id);
+                    const owner: cells.Owner = if (side == 0) .left else .right;
+                    if (!hasTrack(row.tracks, owner, ordinal) or !hasTrack(tracks, owner, ordinal)) continue;
+                    const old = row.semantic[side];
+                    const new = self.semantic_staging[side];
+                    const capacity = regionCapacity(new, ordinal, capacities[side]);
+                    row.region_changed[side][id] = regionVisible(new, ordinal, capacity) and
+                        !regionEqual(old, new, ordinal, std.math.maxInt(usize)) and
+                        !regionEqual(old, new, ordinal, capacity);
+                };
+            }
             try row.changes.resize(gpa, self.cols);
             for (row.changes.items, 0..) |*change, col| {
                 change.* = if (invalidate or row.raw_len == null) .{} else self.staging.difference(row.base, col);
                 row.summary.merge(change.*);
-                if (change.visual()) {
-                    const owners = .{ self.staging.cells.items[col].owner, row.base.cells.items[col].owner };
-                    inline for (owners) |owner| switch (owner) {
-                        .left => row.slot_changed[0] = row.slot_changed[0] or semantic_changed[0],
-                        .right => row.slot_changed[1] = row.slot_changed[1] or semantic_changed[1],
-                        .fill => {},
-                    };
-                }
             }
-            const replace = invalidate or row.raw_len == null or row.summary.any();
+            const replace = invalidate or row.layout_invalid or row.raw_len == null or row.summary.any();
             if (replace) {
                 try row.desired.reserveCopy(gpa, self.staging);
                 try row.painted.reserveCopy(gpa, self.staging);
                 std.mem.swap(cells.Row, &row.base, &self.staging);
                 row.desired.copyReserved(row.base);
-                row.highlight_step = .{ null, null };
+                row.highlight_step = @splat(@splat(null));
                 row.pending = true;
                 // Bound every possible StylePatch; links/text cannot be changed
                 // by a patch. Reserve outside diff/serialization.
@@ -200,40 +237,33 @@ pub const Renderer = struct {
             }
             @memcpy(row.raw[0..raw.len], raw);
             row.raw_len = raw.len;
+            var visible_regions: [2]u16 = .{ 0, 0 };
+            for (row.base.cells.items) |cell| {
+                if (cell.region) |id| {
+                    if (cell.owner == .left) visible_regions[0] |= @as(u16, 1) << id;
+                    if (cell.owner == .right) visible_regions[1] |= @as(u16, 1) << id;
+                }
+            }
+            for (0..2) |side| {
+                std.mem.swap(cells.Row, &row.semantic[side], &self.semantic_staging[side]);
+                for (0..16) |id| {
+                    if (row.highlight_until[side][id] != null and (visible_regions[side] & (@as(u16, 1) << @intCast(id)) == 0 or tracks.override_epoch[side] != row.tracks.override_epoch[side])) {
+                        // A metadata-only override transition can leave the
+                        // same base cells in place: restore any old patch.
+                        cells.restore(&row.desired, row.base, .{ .region = .{ .owner = if (side == 0) .left else .right, .id = @intCast(id) } });
+                        row.pending = true;
+                        row.highlight_until[side][id] = null;
+                        row.highlight_step[side][id] = null;
+                    }
+                }
+            }
+            row.tracks = tracks;
+            row.layout_invalid = false;
             if (invalidate) row.painted_valid = false;
         }
         var capacity: usize = 128;
         for (self.rows) |row| capacity = try std.math.add(usize, capacity, row.output_bound);
         try self.writer.ensureTotalCapacity(capacity);
-    }
-
-    fn semanticSlotsChanged(self: *Renderer, old_raw: []const u8, new_raw: []const u8, style: []const u8, palette: markup.Palette) ![2]bool {
-        var base: cells.Style = .{};
-        styled.sgr(&base, .{}, style);
-        var old_buf: [4096]u8 = undefined;
-        var new_buf: [4096]u8 = undefined;
-        const old_slots = splitSlots(markup.expand(old_raw, &old_buf, palette));
-        const new_slots = splitSlots(markup.expand(new_raw, &new_buf, palette));
-        var changed: [2]bool = undefined;
-        for (0..2) |side| {
-            try self.scratch.parse(old_slots[side], base);
-            try self.semantic_scratch.parse(new_slots[side], base);
-            changed[side] = !semanticEqual(self.scratch, self.semantic_scratch);
-        }
-        return changed;
-    }
-
-    fn semanticEqual(a: *const styled.Scratch, b: *const styled.Scratch) bool {
-        var left = a.iterator();
-        var right = b.iterator();
-        while (true) {
-            const x = left.next();
-            const y = right.next();
-            if (x == null or y == null) return x == null and y == null;
-            const xg = x.?;
-            const yg = y.?;
-            if (xg.columns != yg.columns or !styled.Style.eql(xg.style, yg.style) or !std.mem.eql(u8, xg.bytes, yg.bytes) or !std.mem.eql(u8, xg.link.params, yg.link.params) or !std.mem.eql(u8, xg.link.uri, yg.link.uri)) return false;
-        }
     }
 
     /// Incorporates accepted source content. Effect activation remains an
@@ -247,7 +277,7 @@ pub const Renderer = struct {
     pub fn relayout(self: *Renderer, content: *const Content, look: *const Look) !void {
         try self.prepare(content, look, true);
     }
-    fn layout(self: *Renderer, row: *cells.Row, raw: []const u8, style: []const u8, rule: ?[]const u8, palette: markup.Palette) !void {
+    fn layout(self: *Renderer, row: *cells.Row, raw: []const u8, tracks: Tracks, style: []const u8, rule: ?[]const u8, palette: markup.Palette) !void {
         var base: cells.Style = .{};
         styled.sgr(&base, .{}, style);
         try row.reset(self.budget.allocator(), self.cols, base);
@@ -257,15 +287,31 @@ pub const Renderer = struct {
             try row.data.ensureTotalCapacity(self.budget.allocator(), bound);
         }
         var expanded_buf: [4096]u8 = undefined;
-        const slots = splitSlots(markup.expand(raw, &expanded_buf, palette));
-        try self.scratch.parse(slots[0], base);
-        const left_width = fitting(self.scratch, self.cols);
-        _ = place(row, self.scratch, 0, left_width, .left);
+        var offsets: [max_line_bytes + 1]usize = undefined;
+        const expanded = markup.expandMapped(raw, &expanded_buf, palette, offsets[0 .. raw.len + 1]);
+        const slots = splitSlots(expanded);
+        for (0..2) |side| {
+            const owner: cells.Owner = if (side == 0) .left else .right;
+            const start = if (side == 0) 0 else @min(slots[0].len + 1, expanded.len);
+            var boundaries: [32]styled.Boundary = undefined;
+            var count: usize = 0;
+            for (tracks.items()) |span| {
+                if (span.owner != owner) continue;
+                boundaries[count] = .{ .offset = @min(offsets[span.start] -| start, slots[side].len), .region = span.id };
+                boundaries[count + 1] = .{ .offset = @min(offsets[span.end] -| start, slots[side].len), .region = null };
+                count += 2;
+            }
+            try self.scratch.parseTracked(slots[side], base, boundaries[0..count]);
+            const width = fitting(self.scratch, std.math.maxInt(usize));
+            try self.semantic_staging[side].reset(self.budget.allocator(), width, base);
+            _ = place(&self.semantic_staging[side], self.scratch, 0, width, owner);
+        }
+        const left_width = rowFitting(self.semantic_staging[0], self.cols);
+        placeSnapshot(row, self.semantic_staging[0], 0, left_width);
         const gap: usize = if (left_width > 0) 1 else 0;
-        try self.scratch.parse(slots[1], base);
-        const right_width = fitting(self.scratch, self.cols -| (left_width + gap));
+        const right_width = rowFitting(self.semantic_staging[1], self.cols -| (left_width + gap));
         const right_start = self.cols - right_width;
-        _ = place(row, self.scratch, right_start, right_width, .right);
+        placeSnapshot(row, self.semantic_staging[1], right_start, right_width);
         if (rule) |pattern| {
             try self.scratch.parse(pattern, base);
             const width = fitting(self.scratch, std.math.maxInt(u16));
@@ -287,21 +333,24 @@ pub const Renderer = struct {
         self.rows[row].pending = true;
     }
 
-    /// Call only after preparation for a tracked command result, never damage.
+    /// Activate changed regions only after an eligible content update.
     pub fn highlightChange(self: *Renderer, row: usize, side: usize, now_ms: i64) void {
-        if (!self.rows[row].slot_changed[side]) return;
-        self.rows[row].highlight_until[side] = now_ms + self.highlight.duration();
+        for (self.rows[row].region_changed[side], 0..) |changed, id| {
+            if (changed) self.rows[row].highlight_until[side][id] = now_ms + self.highlight.duration();
+        }
     }
 
     pub fn cancelHighlight(self: *Renderer, row: usize, side: usize) void {
-        if (self.rows[row].highlight_until[side] != null) self.rows[row].highlight_until[side] = 0;
+        for (&self.rows[row].highlight_until[side]) |*deadline| {
+            if (deadline.* != null) deadline.* = 0;
+        }
     }
 
     pub fn highlightTimeout(self: *const Renderer, now_ms: i64) i64 {
         var result: i64 = -1;
-        for (self.rows) |row| for (row.highlight_until, 0..) |deadline, side| {
+        for (self.rows) |row| for (0..2) |side| for (row.highlight_until[side], 0..) |deadline, id| {
             if (deadline) |end| {
-                const next = if (row.highlight_step[side]) |step| @min(end, end - self.highlight.duration() + (@as(i64, step) + 1) * self.highlight.step_ms) else now_ms;
+                const next = if (row.highlight_step[side][id]) |step| @min(end, end - self.highlight.duration() + (@as(i64, step) + 1) * self.highlight.step_ms) else now_ms;
                 const remaining = @max(next - now_ms, 0);
                 result = if (result < 0) remaining else @min(result, remaining);
             }
@@ -317,23 +366,23 @@ pub const Renderer = struct {
     /// Apply/expire appearance independently of source polling and repair.
     pub fn advanceHighlights(self: *Renderer, now_ms: i64) bool {
         var changed = false;
-        for (self.rows, 0..) |*row, n| for (0..2) |side| {
-            const deadline = row.highlight_until[side] orelse continue;
-            const target: cells.Target = .{ .slot = if (side == 0) .left else .right };
+        for (self.rows, 0..) |*row, n| for (0..2) |side| for (0..16) |id| {
+            const deadline = row.highlight_until[side][id] orelse continue;
+            const target: cells.Target = .{ .region = .{ .owner = if (side == 0) .left else .right, .id = @intCast(id) } };
             if (now_ms >= deadline) {
-                if (row.highlight_step[side] != null) {
+                if (row.highlight_step[side][id] != null) {
                     self.restore(n, target);
                     changed = true;
                 }
-                row.highlight_until[side] = null;
-                row.highlight_step[side] = null;
+                row.highlight_until[side][id] = null;
+                row.highlight_step[side][id] = null;
             } else {
                 const elapsed = self.highlight.duration() - (deadline - now_ms);
                 const step: u8 = @intCast(@divFloor(@max(elapsed, 0), self.highlight.step_ms));
-                if (row.highlight_step[side] == null or row.highlight_step[side].? != step) {
+                if (row.highlight_step[side][id] == null or row.highlight_step[side][id].? != step) {
                     self.restore(n, target);
                     self.patch(n, target, self.highlight.patch(step));
-                    row.highlight_step[side] = step;
+                    row.highlight_step[side][id] = step;
                     changed = true;
                 }
             }
@@ -388,6 +437,71 @@ pub const Renderer = struct {
 pub fn splitSlots(value: []const u8) [2][]const u8 {
     const tab = std.mem.indexOfScalar(u8, value, '\t') orelse return .{ value, "" };
     return .{ value[0..tab], value[tab + 1 ..] };
+}
+fn hasTrack(tracks: Tracks, owner: cells.Owner, id: u4) bool {
+    for (tracks.items()) |span| if (span.owner == owner and span.id == id) return true;
+    return false;
+}
+fn rowFitting(row: cells.Row, capacity: usize) usize {
+    var width: usize = 0;
+    for (row.cells.items) |cell| {
+        if (cell.kind != .lead) continue;
+        if (width + cell.width > capacity) break;
+        width += cell.width;
+    }
+    return width;
+}
+fn placeSnapshot(row: *cells.Row, snapshot: cells.Row, start: usize, width: usize) void {
+    for (snapshot.cells.items[0..width], 0..) |cell, col| {
+        if (cell.kind != .lead) continue;
+        row.put(start + col, .{ .bytes = cell.glyph.get(snapshot.data.items), .columns = cell.width, .style = cell.style, .link = .{ .params = cell.params.get(snapshot.data.items), .uri = cell.uri.get(snapshot.data.items) }, .region = cell.region }, cell.owner);
+    }
+}
+// The target gets the final layout's available capacity, including unused
+// columns after a short value. Both versions are projected into this budget.
+fn regionCapacity(row: cells.Row, id: u4, capacity: usize) usize {
+    var prefix: usize = 0;
+    for (row.cells.items) |cell| {
+        if (cell.kind != .lead) continue;
+        if (cell.region == id) return capacity -| prefix;
+        prefix += cell.width;
+        if (prefix > capacity) return 0;
+    }
+    return 0;
+}
+fn nextRegion(row: cells.Row, id: u4, index: *usize, remaining: *usize) ?cells.Cell {
+    while (index.* < row.cells.items.len) {
+        const cell = row.cells.items[index.*];
+        index.* += 1;
+        if (cell.kind != .lead or cell.region != id) continue;
+        if (cell.width > remaining.*) {
+            index.* = row.cells.items.len;
+            return null;
+        }
+        remaining.* -= cell.width;
+        return cell;
+    }
+    return null;
+}
+fn regionVisible(row: cells.Row, id: u4, capacity: usize) bool {
+    var index: usize = 0;
+    var remaining = capacity;
+    return nextRegion(row, id, &index, &remaining) != null;
+}
+fn regionEqual(a: cells.Row, b: cells.Row, id: u4, capacity: usize) bool {
+    var ai: usize = 0;
+    var bi: usize = 0;
+    var ar = capacity;
+    var br = capacity;
+    while (true) {
+        const x = nextRegion(a, id, &ai, &ar);
+        const y = nextRegion(b, id, &bi, &br);
+        if (x == null or y == null) return x == null and y == null;
+        if (x.?.width != y.?.width or !cells.Style.eql(x.?.style, y.?.style) or
+            !std.mem.eql(u8, x.?.glyph.get(a.data.items), y.?.glyph.get(b.data.items)) or
+            !std.mem.eql(u8, x.?.params.get(a.data.items), y.?.params.get(b.data.items)) or
+            !std.mem.eql(u8, x.?.uri.get(a.data.items), y.?.uri.get(b.data.items))) return false;
+    }
 }
 fn fitting(scratch: *styled.Scratch, max: usize) usize {
     var it = scratch.iterator();
@@ -629,14 +743,6 @@ test "layout compatibility for slots rules whitespace and clipping" {
     }
 }
 
-test "slot semantics compare styled graphemes before placement" {
-    var r = try Renderer.init(std.testing.allocator);
-    defer r.deinit();
-    const equivalent = try r.semanticSlotsChanged("#[bold]e\u{301}\tplain", "\x1b[1me\u{301}\tplain", "", .{});
-    try std.testing.expect(!equivalent[0] and !equivalent[1]);
-    const changed = try r.semanticSlotsChanged("left\tright", "left\t#[fg=red]right", "", .{});
-    try std.testing.expect(!changed[0] and changed[1]);
-}
 test "change kinds distinguish hyperlink appearance and ownership" {
     var content = try Content.init(std.testing.allocator, 1);
     defer content.deinit();
@@ -675,6 +781,7 @@ fn allocationScenario(gpa: std.mem.Allocator) !void {
     var content = try Content.init(gpa, 2);
     defer content.deinit();
     _ = content.set("one\ntwo");
+    try setTestPair(&content, "a", "b", "right");
     var styles = [_][]const u8{ "", "" };
     var rules = [_]?[]const u8{ "\x1b[0m" ** 1100 ++ "─", null };
     const look: Look = .{ .styles = &styles, .rules = &rules };
@@ -683,6 +790,7 @@ fn allocationScenario(gpa: std.mem.Allocator) !void {
     _ = try r.build(23, "", true, true);
     r.commit();
     try r.resize(2, 20);
+    try setTestPair(&content, "界" ** 40, "e\u{301}" ** 20, "right");
     try r.prepare(&content, &look, true);
     _ = try r.build(23, "", true, true);
     r.commit();
@@ -718,7 +826,162 @@ test "nonadjacent selection uses one complete envelope and no-op commits settle"
     try std.testing.expect(!r.rows[0].pending);
 }
 
-test "slot highlights expire restart and preserve base styling across repair and resize" {
+fn setTestTracked(content: *Content, text: []const u8) bool {
+    var tracks: Tracks = .{};
+    tracks.spans[0] = .{ .owner = .left, .id = 0, .start = 0, .end = @intCast(splitSlots(text)[0].len) };
+    tracks.len = 1;
+    return content.setTrackedLine(0, text, tracks);
+}
+
+fn setTestPair(content: *Content, a: []const u8, b: []const u8, right: []const u8) !void {
+    var buf: [1024]u8 = undefined;
+    const raw = try std.fmt.bufPrint(&buf, "P{s}/{s}S\t{s}", .{ a, b, right });
+    var tracks: Tracks = .{};
+    tracks.spans[0] = .{ .owner = .left, .id = 0, .start = 1, .end = @intCast(1 + a.len) };
+    tracks.spans[1] = .{ .owner = .left, .id = 1, .start = @intCast(2 + a.len), .end = @intCast(2 + a.len + b.len) };
+    tracks.spans[2] = .{ .owner = .right, .id = 0, .start = @intCast(raw.len - right.len), .end = @intCast(raw.len) };
+    tracks.len = 3;
+    _ = content.setTrackedLine(0, raw, tracks);
+}
+
+test "regions move independently and compare both projections in final capacity" {
+    var content = try Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{null};
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try r.resize(1, 6);
+    try setTestPair(&content, "a", "abcX", "right");
+    try r.relayout(&content, &look);
+    try setTestPair(&content, "aa", "abcY", "right");
+    try r.acceptContent(&content, &look);
+    try std.testing.expect(r.rows[0].region_changed[0][0]);
+    try std.testing.expect(!r.rows[0].region_changed[0][1]);
+    try std.testing.expect(!r.rows[0].region_changed[1][0]);
+    r.highlightChange(0, 0, 10);
+    _ = r.compose(10);
+    try std.testing.expect(!r.rows[0].desired.cells.items[0].style.bold);
+    try std.testing.expect(r.rows[0].desired.cells.items[1].style.bold);
+    try std.testing.expect(!r.rows[0].desired.cells.items[4].style.bold);
+    // Expanding while accepting another hidden-suffix change uses the final
+    // geometry for both versions, even though the old grid was narrower.
+    try r.resize(1, 7);
+    try r.relayout(&content, &look);
+    try setTestPair(&content, "aa", "abcZ", "right");
+    try r.acceptContent(&content, &look);
+    try std.testing.expect(!r.rows[0].region_changed[0][1]);
+    try r.resize(1, 30);
+    try r.relayout(&content, &look);
+    r.highlightChange(0, 0, 20);
+    try std.testing.expectEqual(@as(?i64, null), r.rows[0].highlight_until[0][1]);
+    try setTestPair(&content, "a", "abcZ", "right");
+    try r.acceptContent(&content, &look);
+    try std.testing.expect(!r.rows[0].region_changed[0][1]);
+    try std.testing.expect(!r.rows[0].region_changed[1][0]);
+}
+
+test "right-region projection uses final left capacity and hidden rows baseline on reveal" {
+    var content = try Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{null};
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try r.resize(1, 10);
+    try setTestPair(&content, "a", "b", "abcX"); // Left is 5 columns; right gets 4.
+    try r.relayout(&content, &look);
+    try setTestPair(&content, "aaa", "b", "abcY"); // Right now gets 2.
+    try r.acceptContent(&content, &look);
+    try std.testing.expect(!r.rows[0].region_changed[1][0]);
+    try setTestPair(&content, "aaa", "b", "xy");
+    try r.acceptContent(&content, &look);
+    r.highlightChange(0, 1, 100);
+    _ = r.compose(100);
+    try std.testing.expectEqual(@as(?i64, 600), r.rows[0].highlight_until[1][0]);
+    try r.resize(0, 10);
+    try setTestPair(&content, "aaa", "b", "zz");
+    try r.resize(1, 20);
+    try r.relayout(&content, &look);
+    r.highlightChange(0, 1, 200);
+    try std.testing.expectEqual(@as(?i64, null), r.rows[0].highlight_until[1][0]);
+}
+
+test "region timers restart independently and empty values advance baselines" {
+    var content = try Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{"."};
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try r.resize(1, 40);
+    try setTestPair(&content, "", "", "right");
+    try r.relayout(&content, &look);
+    try setTestPair(&content, "界", "b", "right");
+    try r.acceptContent(&content, &look);
+    r.highlightChange(0, 0, 100);
+    _ = r.compose(100);
+    try std.testing.expectEqual(@as(?i64, 600), r.rows[0].highlight_until[0][0]);
+    try std.testing.expectEqual(@as(?i64, 600), r.rows[0].highlight_until[0][1]);
+    try std.testing.expect(r.rows[0].desired.cells.items[1].style.bold and r.rows[0].desired.cells.items[2].style.bold);
+    try setTestPair(&content, "long", "b", "right");
+    try r.acceptContent(&content, &look);
+    r.highlightChange(0, 0, 200);
+    _ = r.compose(200);
+    try std.testing.expectEqual(@as(?i64, 700), r.rows[0].highlight_until[0][0]);
+    try std.testing.expectEqual(@as(?i64, 600), r.rows[0].highlight_until[0][1]);
+    try std.testing.expect(r.rows[0].desired.cells.items[6].style.bold);
+    _ = r.compose(600);
+    try std.testing.expect(r.rows[0].desired.cells.items[1].style.bold);
+    try std.testing.expect(!r.rows[0].desired.cells.items[6].style.bold);
+    try setTestPair(&content, "", "b", "right");
+    try r.acceptContent(&content, &look);
+    r.highlightChange(0, 0, 650);
+    try std.testing.expectEqual(@as(?i64, null), r.rows[0].highlight_until[0][0]);
+    try setTestPair(&content, "x", "b", "right");
+    try r.acceptContent(&content, &look);
+    r.highlightChange(0, 0, 800);
+    try std.testing.expectEqual(@as(?i64, 1300), r.rows[0].highlight_until[0][0]);
+    _ = r.compose(800);
+    // An override activated and cleared before the next frame may leave
+    // identical bytes and descriptors. Its epoch still cancels the effect.
+    content.tracks[0].override_epoch[0] += 2;
+    try r.acceptContent(&content, &look);
+    r.highlightChange(0, 0, 900);
+    _ = r.compose(900);
+    try std.testing.expectEqual(@as(?i64, null), r.rows[0].highlight_until[0][0]);
+    try std.testing.expect(!r.rows[0].desired.cells.items[1].style.bold);
+}
+
+test "region semantics include resolved style and hyperlinks but not escape spelling" {
+    var content = try Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{null};
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try r.resize(1, 20);
+    _ = setTestTracked(&content, "#[bold]x");
+    try r.relayout(&content, &look);
+    _ = setTestTracked(&content, "\x1b[1mx");
+    try r.acceptContent(&content, &look);
+    try std.testing.expect(!r.rows[0].region_changed[0][0]);
+    _ = setTestTracked(&content, "\x1b[31mx");
+    try r.acceptContent(&content, &look);
+    try std.testing.expect(r.rows[0].region_changed[0][0]);
+    _ = setTestTracked(&content, "\x1b[31m\x1b]8;id=a;https://example.test\x07x");
+    try r.acceptContent(&content, &look);
+    try std.testing.expect(r.rows[0].region_changed[0][0]);
+    _ = setTestTracked(&content, "\x1b[31m\x1b]8;id=b;https://example.test\x07x");
+    try r.acceptContent(&content, &look);
+    try std.testing.expect(r.rows[0].region_changed[0][0]);
+}
+
+test "region highlights expire restart and preserve base styling across repair and resize" {
     var content = try Content.init(std.testing.allocator, 1);
     defer content.deinit();
     var styles = [_][]const u8{""};
@@ -727,11 +990,11 @@ test "slot highlights expire restart and preserve base styling across repair and
     var r = try Renderer.init(std.testing.allocator);
     defer r.deinit();
     try r.resize(1, 20);
-    _ = content.set("old\tright");
+    _ = setTestTracked(&content, "old\tright");
     try r.prepare(&content, &look, true);
     r.highlightChange(0, 0, 0); // Startup is never a content event.
     try std.testing.expectEqual(@as(i64, -1), r.highlightTimeout(0));
-    _ = content.set("new\tright");
+    _ = setTestTracked(&content, "new\tright");
     try r.prepare(&content, &look, false);
     r.highlightChange(0, 0, 100);
     try std.testing.expect(r.advanceHighlights(100));
@@ -742,12 +1005,12 @@ test "slot highlights expire restart and preserve base styling across repair and
     _ = try r.build(24, "", true, true);
     r.commit();
     try std.testing.expect(!r.advanceHighlights(200));
-    _ = content.set("new\tchanged"); // Another slot does not end or restart it.
+    _ = setTestTracked(&content, "new\tchanged"); // Another slot does not end or restart it.
     try r.prepare(&content, &look, false);
     _ = r.advanceHighlights(250);
     try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
     try std.testing.expectEqual(@as(i64, 350), r.highlightTimeout(250));
-    _ = content.set("#[bold]B#[default]x\tchanged");
+    _ = setTestTracked(&content, "#[bold]B#[default]x\tchanged");
     try r.prepare(&content, &look, false);
     r.highlightChange(0, 0, 300);
     _ = r.advanceHighlights(300);
@@ -772,17 +1035,17 @@ test "invisible changes do not highlight and cancellation restores the slot" {
     var r = try Renderer.init(std.testing.allocator);
     defer r.deinit();
     try r.resize(1, 3);
-    _ = content.set("abcdef");
+    _ = setTestTracked(&content, "abcdef");
     try r.prepare(&content, &look, true);
-    _ = content.set("abcXYZ");
+    _ = setTestTracked(&content, "abcXYZ");
     try r.prepare(&content, &look, false);
     r.highlightChange(0, 0, 0);
     try std.testing.expect(!r.advanceHighlights(0));
-    _ = content.set("\x1b[0mabcXYZ");
+    _ = setTestTracked(&content, "\x1b[0mabcXYZ");
     try r.prepare(&content, &look, false);
     r.highlightChange(0, 0, 0);
     try std.testing.expect(!r.advanceHighlights(0));
-    _ = content.set("xyz");
+    _ = setTestTracked(&content, "xyz");
     try r.prepare(&content, &look, false);
     r.highlightChange(0, 0, 10);
     _ = r.advanceHighlights(10);
@@ -810,9 +1073,9 @@ test "color sequence advances skips overdue steps restarts and restores original
     r.highlight.foregrounds_len = 3;
     r.highlight.step_ms = 150;
     try r.resize(1, 20);
-    _ = content.set("old\tright");
+    _ = setTestTracked(&content, "old\tright");
     try r.prepare(&content, &look, true);
-    _ = content.set("#[bold,fg=blue,bg=red]界#[default]x\tright");
+    _ = setTestTracked(&content, "#[bold,fg=blue,bg=red]界#[default]x\tright");
     try r.prepare(&content, &look, false);
     r.highlightChange(0, 0, 1000);
     _ = r.advanceHighlights(1000);
@@ -834,7 +1097,7 @@ test "color sequence advances skips overdue steps restarts and restores original
     _ = r.advanceHighlights(1310);
     try std.testing.expectEqualDeep(r.highlight.backgrounds[2], r.rows[0].desired.cells.items[0].style.bg);
     try std.testing.expectEqual(@as(i64, 140), r.highlightTimeout(1310));
-    _ = content.set("#[bold,fg=blue,bg=red]界#[default]y\tright");
+    _ = setTestTracked(&content, "#[bold,fg=blue,bg=red]界#[default]y\tright");
     try r.prepare(&content, &look, false);
     r.highlightChange(0, 0, 1320);
     _ = r.advanceHighlights(1320);
