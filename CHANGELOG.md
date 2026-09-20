@@ -3,8 +3,9 @@
 Changes are grouped by version tag, newest first. `dev` contains commits
 since the latest version tag. Entries preserve commit subjects verbatim.
 
-## dev
+## v0.2.1
 
+- Document tracked theme regions and bump v0.2.1
 - Prepare highlights and streamline statusbar updates
 - Simplify adaptive highlighting and remove stale render state
 - Gate releases on PTY tests and benchmark highlight scaling
