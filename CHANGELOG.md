@@ -3,8 +3,9 @@
 Changes are grouped by version tag, newest first. `dev` contains commits
 since the latest version tag. Entries preserve commit subjects verbatim.
 
-## dev
+## v0.2.3
 
+- Bump v0.2.3
 - Add configurable shell hooks and shorten directory titles
 - Set terminal titles from OSC 7 directories
 
