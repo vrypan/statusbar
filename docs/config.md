@@ -176,14 +176,11 @@ terminal defaults and palette indices.
 
 ```ini
 [highlight]
-effect = relative
 pulses = 2
 ```
 
-Use this explicit setting to try the adaptive effect while keeping existing
-color-sequence entries. Those colors and `step` are ignored in relative mode.
-The built-in config selects this effect; omitting `[highlight]` also selects
-it unless custom colors are configured.
+`pulses` is the only highlight setting. It accepts 1, 2, or 3 and defaults to
+2 when `[highlight]` is omitted.
 
 At startup, statusbar queries the terminal's default foreground/background and
 256 indexed colors with OSC 10, 11, and 4. It caches the replies; explicit RGB
@@ -193,51 +190,16 @@ for the full effect duration instead of guessing the theme's colors.
 Terminals or multiplexers that block these queries therefore still work.
 Restart statusbar after changing the terminal theme to refresh the cache.
 
-### Custom color sequences
-
-Existing color sequences still work. Without an explicit `effect`, specifying
-colors selects sequence playback automatically. For example, the earlier warm
-pulse remains available:
-
-```ini
-[highlight]
-effect = sequence
-backgrounds = #2c271a, #3d331b, #50411c, #6a551d, #84681f, #9e7b20, #8f701f, #765e1e, #5d4a1d, #44371b, #332c1a, #242019
-foregrounds = #fce8c3, #fdebc4, #feefc8, #fff2ca, #fff4cc, #fff7d1, #fff5ce, #fff2ca, #feefc8, #fdebc4, #fce9c3, #fce8c3
-step = 0.10
-```
-
-The colors ease from the normal dark background toward warm yellow and back
-over 1.2 seconds. The foreground brightens with it. After the last step,
-statusbar restores each cell's exact original foreground, background, bold,
-italic and other attributes. Only affected rows repaint; commands are not
-rerun for animation steps. The sequence does not loop, and another result
-change restarts it at its first step.
-
 | Key | Meaning |
 |-----|---------|
-| `effect` | `relative`, `sequence`, `bold`, or `auto` (default: custom colors select a sequence, otherwise relative) |
-| `pulses` | Relative effect only: 1–3 pulses, default 2; each lasts 1.2 seconds. Ignored by sequence and bold effects. |
-| `backgrounds` | One to 16 comma-separated `#RRGGBB` colors, in playback order |
-| `foreground` | Optional temporary `#RRGGBB` text color, used for every step |
-| `foregrounds` | Optional one-to-16 `#RRGGBB` colors; with backgrounds, counts must match |
-| `step` | Seconds per step, from 0.05 to 5; defaults to 0.15 for color effects |
+| `pulses` | 1–3 adaptive pulses, default 2; each lasts 1.2 seconds |
 
-Use either singular `foreground` or plural `foregrounds`, not both. When both
-plural sequences are present, their counts must match so every background has
-one corresponding foreground. A `foregrounds`-only sequence is valid. Use one
-background for a single flash, or just `foreground` for a text-color flash.
-An omitted color channel retains each cell's original value.
-
-Highlight colors must be exact `#RRGGBB` values; color names and `[colors]`
-aliases are not accepted. Steps are discrete rather than interpolated. More
-closely spaced shades and a shorter `step` produce a smoother effect, at the
-cost of more row redraws.
-
-For the old bold-only effect, set `effect = bold`; it lasts 0.5 seconds by
-default, with `step` setting its duration. Resize and screen repair preserve
-an active sequence's position and deadline. If safe repainting is temporarily
-blocked by child output, obsolete steps are skipped rather than replayed.
+Older configurations must remove `effect`, `backgrounds`, `foreground`,
+`foregrounds`, and `step`. These keys are rejected rather than ignored or
+migrated. Ordinary markup colors and the `[colors]` palette are unchanged.
+Resize and screen repair preserve an active pulse's position and deadline. If
+safe repainting is temporarily blocked by child output, obsolete frames are
+skipped rather than replayed.
 
 Commands run in the directory where statusbar started, not your shell's,
 with stdin and stderr on `/dev/null`. `STATUSBAR_COLUMNS` is the current

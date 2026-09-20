@@ -74,7 +74,6 @@ fn adaptiveBench(io: std.Io, out: *std.Io.Writer, colors: usize, regions: usize)
     try measuredContent(&content, colors, regions);
     var renderer = try bar.Renderer.init(counted.allocator());
     defer renderer.deinit();
-    renderer.highlight.effect = .relative;
     renderer.palette.foreground = .{ 190, 180, 210 };
     renderer.palette.background = .{ 10, 10, 10 };
     var styles: [4][]const u8 = @splat("");
@@ -236,7 +235,6 @@ fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
     var content = try bar.Content.init(counted.allocator(), 1);
     defer content.deinit();
     var renderer = try bar.Renderer.init(counted.allocator());
-    renderer.highlight.effect = .bold;
     defer renderer.deinit();
     var styles = [_][]const u8{""};
     var rules = [_]?[]const u8{null};
@@ -256,22 +254,23 @@ fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
     const repeats = 10000;
     var bytes: usize = 0;
     for (0..repeats) |n| {
+        const now: i64 = @as(i64, @intCast(n)) * (renderer.highlight.duration() + 300);
         regionContent(&content, n % 2 == 0);
         try renderer.acceptContent(&content, &look);
         if (!renderer.rows[0].region_changed[0][0] or renderer.rows[0].region_changed[0][1]) return error.RegionComparisonRegression;
-        renderer.highlightChange(0, 0, @intCast(n * 1000));
-        _ = renderer.compose(@intCast(n * 1000));
+        renderer.highlightChange(0, 0, now);
+        _ = renderer.compose(now + renderer.highlight.frameMs());
         const batch = try renderer.build(24, "", true, false);
         if (renderer.emitted_rows != 1 or std.mem.count(u8, batch, "\x1b7") != 1) return error.UnexpectedBatchCount;
         bytes += batch.len;
         renderer.commit();
         const parsed = renderer.parsed_rows;
         // Two simultaneous targets expire in one composition and one batch.
-        renderer.rows[0].highlight_until[0][1] = @intCast(n * 1000 + 500);
-        _ = renderer.compose(@intCast(n * 1000 + 10));
+        renderer.rows[0].highlight_until[0][1] = now + renderer.highlight.duration();
+        _ = renderer.compose(now + 2 * renderer.highlight.frameMs());
         _ = try renderer.build(24, "", true, false);
         renderer.commit();
-        _ = renderer.compose(@intCast(n * 1000 + 500));
+        _ = renderer.compose(now + renderer.highlight.duration());
         const restored = try renderer.build(24, "", true, false);
         if (renderer.emitted_rows != 1 or std.mem.count(u8, restored, "\x1b7") != 1) return error.UnexpectedBatchCount;
         renderer.commit();
@@ -283,7 +282,6 @@ fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
     const elapsed = std.Io.Clock.now(.awake, io).toNanoseconds() - start;
     try out.print("render regions: {d} ns/change+shared-frames+repair, {d} change bytes, allocs=0 bytes=0 storage={d} peak={d}\n", .{ @divTrunc(elapsed, repeats), bytes / repeats, counted.allocated_bytes - counted.freed_bytes, renderer.budget.peak });
 
-    renderer.highlight.effect = .relative;
     renderer.palette.foreground = .{ 230, 210, 175 };
     renderer.palette.background = .{ 30, 25, 20 };
     const adaptive_start = std.Io.Clock.now(.awake, io).toNanoseconds();

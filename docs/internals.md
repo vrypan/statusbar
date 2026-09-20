@@ -57,10 +57,9 @@ Internal slot, region, and column-range operations can patch and restore styles
 without changing content. Patches survive unrelated-row updates, equivalent content
 rebuilds, and damage repair. A semantic base change resets that row's patches;
 resize rebuilds the grid. Each tracked region has a monotonic deadline
-and applied-step index. The default effect is two adaptive color pulses over 2.4 seconds;
-`[highlight]` can instead specify up to 16 background colors and either a
-constant foreground or a matching foreground sequence. Each step is derived
-from elapsed time, so delayed steps are skipped. Patches are reapplied after a
+and applied-step index. The effect is two adaptive color pulses over 2.4 seconds
+by default, with one to three pulses configurable. Each frame is derived from
+elapsed time, so delayed frames are skipped. Patches are reapplied after a
 base rebuild or resize and restored on expiry; damage repair never restarts
 the deadline.
 Command results retain why their process ran. First results and reruns requested
@@ -73,8 +72,8 @@ implemented yet.
 The adaptive effect samples OKLab lightness at 30 ms intervals. It derives
 each pulse's phase from the absolute step modulo 40, without restarting the
 effect deadline. Interior valleys stay at 45% of peak intensity, with smooth
-joins; only the first rise and final fall reach the base. The relative-only
-`pulses` setting accepts 1–3 repetitions. It derives foreground and background
+joins; only the first rise and final fall reach the base. The `pulses` setting
+accepts 1–3 repetitions. It derives foreground and background
 from each base style, accounts for reverse video,
 reduces chroma to remain in the sRGB gamut, and checks contrast after conversion.
 The background moves toward the original foreground lightness (at most halfway),

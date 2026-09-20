@@ -45,14 +45,8 @@ pub const Source = struct {
 
     pub const Update = struct {
         content_changed: bool = false,
-        accepted: u16 = 0,
         baseline: u16 = 0,
-        eligible: u16 = 0,
         override_events: u32 = 0,
-
-        pub fn any(self: Update) bool {
-            return self.content_changed or self.accepted != 0 or self.override_events != 0;
-        }
     };
 
     pub fn initExec(gpa: std.mem.Allocator, io: std.Io, command: []const u8, interval_ms: i64, lines: u16, cols: u16) !Source {
@@ -169,17 +163,14 @@ pub const Source = struct {
         for (self.commands, fds, 0..) |*command, fd, n| {
             if (fd.fd < 0 or fd.revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR) == 0) continue;
             const command_result = command.onReadable(self.io) orelse continue;
-            result.accepted |= @as(u16, 1) << @intCast(n);
             if (self.cfg == null) {
                 const kept = command_result.bytes[0..@min(command_result.bytes.len, self.exec_output.len)];
                 @memcpy(self.exec_output[0..kept.len], kept);
                 self.exec_output_len = kept.len;
             } else {
-                const change = self.keepFirstLine(n, command_result.bytes);
-                if (command_result.origin.baselineOnly() or !change.seen) {
+                const seen = self.keepFirstLine(n, command_result.bytes);
+                if (command_result.origin.baselineOnly() or !seen) {
                     result.baseline |= @as(u16, 1) << @intCast(n);
-                } else if (change.changed) {
-                    result.eligible |= @as(u16, 1) << @intCast(n);
                 }
             }
             self.stale = true;
@@ -204,20 +195,19 @@ pub const Source = struct {
         return std.Io.Clock.now(.real, self.io).toMilliseconds();
     }
 
-    const OutputChange = struct { seen: bool, changed: bool };
-
-    fn keepFirstLine(self: *Source, n: usize, text: []const u8) OutputChange {
+    /// Stores a normalized first line and reports whether this command had
+    /// previously produced output, which distinguishes its initial baseline.
+    fn keepFirstLine(self: *Source, n: usize, text: []const u8) bool {
         const end = std.mem.indexOfScalar(u8, text, '\n') orelse text.len;
         const line = std.mem.trimEnd(u8, text[0..end], "\r");
         const kept = line[0..@min(line.len, max_output_line)];
         var normalized: [max_output_line]u8 = undefined;
         copyOnOneLine(normalized[0..kept.len], kept);
         const seen = self.output_seen[n];
-        const changed = seen and !std.mem.eql(u8, self.outputs[n][0..self.output_lens[n]], normalized[0..kept.len]);
         @memcpy(self.outputs[n][0..kept.len], normalized[0..kept.len]);
         self.output_lens[n] = kept.len;
         self.output_seen[n] = true;
-        return .{ .seen = seen, .changed = changed };
+        return seen;
     }
 
     pub fn slotContentEligible(self: *const Source, slot: usize, baseline: u16, override_events: u32) bool {
@@ -399,7 +389,7 @@ test "override events are delivered once with their content update" {
     source.setOverride(0, "left");
     const first = source.update(&.{}, 0);
     try std.testing.expect(first.override_events & 1 != 0);
-    try std.testing.expect(first.any());
+    try std.testing.expect(first.content_changed or first.override_events != 0);
     try std.testing.expectEqual(@as(u32, 0), source.update(&.{}, 0).override_events);
 
     source.setOverride(0, "");
@@ -430,10 +420,9 @@ test "tracked slots need ready commands and suppress baseline-only results" {
     try std.testing.expect(!source.slotContentEligible(0, 1, 0));
     try std.testing.expect(!source.slotContentEligible(0, 0, 1));
     const long = "a" ** (max_output_line + 1);
-    const first = source.keepFirstLine(0, long);
-    try std.testing.expect(first.changed);
-    const truncated = source.keepFirstLine(0, long[0..max_output_line] ++ "b");
-    try std.testing.expect(!truncated.changed);
+    try std.testing.expect(source.keepFirstLine(0, long));
+    try std.testing.expect(source.keepFirstLine(0, long[0..max_output_line] ++ "b"));
+    try std.testing.expectEqualStrings(long[0..max_output_line], source.outputs[0][0..source.output_lens[0]]);
     _ = source.update(&.{}, 0);
 }
 
@@ -488,7 +477,6 @@ test "partial startup geometry and same-text overrides establish silent region b
     var lens: [2]?usize = @splat(null);
     var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = &cfg, .lines = 1, .content = content, .exec_output = &.{}, .overrides = &overrides, .override_lens = &lens };
     var r = try bar.Renderer.init(gpa);
-    r.highlight.effect = .bold;
     defer r.deinit();
     var styles = [_][]const u8{""};
     var rules = [_]?[]const u8{null};
@@ -516,13 +504,13 @@ test "partial startup geometry and same-text overrides establish silent region b
     try r.acceptContent(&source.content, &look);
     if (source.slotContentEligible(0, 0, 0)) r.highlightChange(0, 0, 100);
     _ = r.compose(100);
-    try std.testing.expectEqual(@as(?i64, 600), r.rows[0].highlight_until[0][0]);
+    try std.testing.expectEqual(@as(?i64, 100 + r.highlight.duration()), r.rows[0].highlight_until[0][0]);
     _ = source.keepFirstLine(0, "geometry");
     _ = source.rebuild();
     try r.acceptContent(&source.content, &look);
     if (source.slotContentEligible(0, 1, 0)) r.highlightChange(0, 0, 200);
     _ = r.compose(200);
-    try std.testing.expectEqual(@as(?i64, 600), r.rows[0].highlight_until[0][0]);
+    try std.testing.expectEqual(@as(?i64, 100 + r.highlight.duration()), r.rows[0].highlight_until[0][0]);
     source.setOverride(0, "P geometry ");
     _ = source.update(&.{}, 210);
     try r.acceptContent(&source.content, &look);
@@ -536,7 +524,7 @@ test "partial startup geometry and same-text overrides establish silent region b
     _ = source.rebuild();
     try r.acceptContent(&source.content, &look);
     if (source.slotContentEligible(0, 0, 0)) r.highlightChange(0, 0, 300);
-    try std.testing.expectEqual(@as(?i64, 800), r.rows[0].highlight_until[0][0]);
+    try std.testing.expectEqual(@as(?i64, 300 + r.highlight.duration()), r.rows[0].highlight_until[0][0]);
 }
 
 test "override epochs cover high-numbered slots and coalesced same-text transitions" {
@@ -556,9 +544,10 @@ test "override epochs cover high-numbered slots and coalesced same-text transiti
     source.setOverride(33, "x");
     source.setOverride(33, "");
     const event = source.update(&.{}, 0);
-    try std.testing.expect(event.any());
+    try std.testing.expect(event.content_changed or event.override_events != 0);
     try std.testing.expectEqualStrings("\tx", source.content.line(16));
     try std.testing.expectEqual(@as(u64, 2), source.content.tracks[16].override_epoch[1]);
     try std.testing.expectEqual(@as(usize, 1), source.content.tracks[16].len);
-    try std.testing.expect(!source.update(&.{}, 1).any());
+    const idle = source.update(&.{}, 1);
+    try std.testing.expect(!idle.content_changed and idle.override_events == 0 and idle.baseline == 0);
 }

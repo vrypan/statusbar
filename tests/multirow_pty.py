@@ -266,14 +266,18 @@ interval = 0.1
 run = cat {shlex.quote(second_path)}
 interval = 0.1
 """)
-            if colors:
-                cfg.write("[highlight]\nbackgrounds = #9e7b20, #70591d, #44391c\nforegrounds = #fff4cc, #eedaae, #dcc290\nstep = 0.15\n")
-            else:
-                cfg.write("[highlight]\neffect = bold\n")
+            cfg.write("[highlight]\npulses = 1\n")
         pid, master = spawn([binary, "-c", config_path, "--", "/bin/sh", "-c", "sleep 10"])
         try:
             suffix = b"\x1b[0m\x1b8\x1b[?7h"
-            initial = read_until(master, b"", b"PREFIX one BETWEEN other SUFFIX")
+            initial = b""
+            if colors:
+                initial = read_until(master, initial, b"\x1b[6n")
+                assert b"\x1b]10;?\x1b\\" in initial and b"\x1b]11;?\x1b\\" in initial
+                os.write(master, b"\x1b]10;rgb:e6/d2/aa\x1b\\"
+                                 b"\x1b]11;rgb:16/14/12\x1b\\"
+                                 b"\x1b[1;1R")
+            initial = read_until(master, initial, b"PREFIX one BETWEEN other SUFFIX")
             start = initial.index(b"PREFIX one BETWEEN other SUFFIX")
             initial = initial[:start] + read_until(master, initial[start:], suffix)
             assert b"\x1b[0;1m" not in initial and b"48;2;" not in initial, initial
@@ -282,21 +286,18 @@ interval = 0.1
             with open(next_path, "w") as value:
                 value.write("two-long\n")
             os.replace(next_path, value_path)
-            steps = ([b"\x1b[0;38;2;255;244;204;48;2;158;123;32m",
-                      b"\x1b[0;38;2;238;218;174;48;2;112;89;29m",
-                      b"\x1b[0;38;2;220;194;144;48;2;68;57;28m"]
-                     if colors else [b"\x1b[0;1m"])
-            highlighted = read_until(master, b"", steps[0] + b"two-long")
+            marker = b"\x1b[0;38;2;" if colors else b"\x1b[0;1m"
+            highlighted = read_until(master, b"", marker)
+            highlighted = read_until(master, highlighted, b"two-long")
             highlighted = read_until(master, highlighted, suffix)
-            assert_region_style(highlighted, "two-long", steps[0][2:-1])
+            highlighted_style = painted_styles(highlighted)[len("PREFIX ")][1]
+            if colors:
+                assert b"38;2;" in highlighted_style and b"48;2;" in highlighted_style
+            else:
+                assert highlighted_style == b"0;1"
             for label in ("PREFIX ", " BETWEEN ", "other", " SUFFIX", ".", "RIGHT"):
                 assert_region_style(highlighted, label, b"0")
             resize(master, 24, 90)
-            for step in steps[1:]:
-                frame = read_until(master, b"", step + b"two-long")
-                frame = read_until(master, frame, suffix)
-                assert_region_style(frame, "two-long", step[2:-1])
-                assert_region_style(frame, "other", b"0")
             restored = read_until(master, b"", b"PREFIX two-long BETWEEN other SUFFIX")
             restored = read_until(master, restored, suffix)
             assert_region_style(restored, "two-long", b"0")
@@ -304,9 +305,14 @@ interval = 0.1
             with open(next_path, "w") as value:
                 value.write("second-new\n")
             os.replace(next_path, second_path)
-            second = read_until(master, b"", steps[0] + b"second-new")
+            second = read_until(master, b"", marker)
+            second = read_until(master, second, b"second-new")
             second = read_until(master, second, suffix)
-            assert_region_style(second, "second-new", steps[0][2:-1])
+            second_style = painted_styles(second)[len("PREFIX two-long BETWEEN ")][1]
+            if colors:
+                assert b"38;2;" in second_style and b"48;2;" in second_style
+            else:
+                assert second_style == b"0;1"
             for label in ("PREFIX ", "two-long", " BETWEEN ", " SUFFIX", ".", "RIGHT"):
                 assert_region_style(second, label, b"0")
             restored = read_until(master, b"", b"PREFIX two-long BETWEEN second-new SUFFIX")
@@ -317,7 +323,7 @@ interval = 0.1
             assert not ready, "identical tracked results repainted the bar"
         finally:
             stop(pid, master)
-    print("independent region color sequence passed" if colors else "independent region highlight passed")
+    print("independent adaptive RGB regions passed" if colors else "independent fallback regions passed")
 
 
 def check_geometry_results_do_not_highlight(binary):
@@ -367,9 +373,7 @@ def check_adaptive_palette(binary):
         with open(value_path, "w") as value:
             value.write("one\n")
         with open(config_path, "w") as cfg:
-            cfg.write(f"""[highlight]
-effect = relative
-[line.1]
+            cfg.write(f"""[line.1]
 left = LABEL #[track]#[fg=red,bg=blue]#(value) #[default]D#[notrack] END
 [command.value]
 run = cat {shlex.quote(value_path)}

@@ -105,7 +105,6 @@ pub const State = struct {
     base: cells.Row = .{},
     desired: cells.Row = .{},
     painted: cells.Row = .{},
-    changes: std.ArrayList(cells.Changes) = .empty,
     summary: cells.Changes = .{},
     raw: [max_line_bytes]u8 = undefined,
     raw_len: ?usize = null,
@@ -123,7 +122,6 @@ pub const State = struct {
         self.base.deinit(gpa);
         self.desired.deinit(gpa);
         self.painted.deinit(gpa);
-        self.changes.deinit(gpa);
         for (&self.semantic) |*snapshot| snapshot.deinit(gpa);
     }
 };
@@ -200,7 +198,6 @@ pub const Renderer = struct {
         for (self.rows, 0..) |*row, n| {
             row.summary = .{};
             row.region_changed = @splat(@splat(false));
-            @memset(row.changes.items, .{});
             const raw = content.line(n);
             const tracks = content.tracks[n];
             if (!invalidate and !row.layout_invalid and row.raw_len != null and std.mem.eql(u8, raw, row.raw[0..row.raw_len.?]) and Tracks.eql(tracks, row.tracks)) continue;
@@ -222,10 +219,9 @@ pub const Renderer = struct {
                         !regionEqual(old, new, ordinal, capacity);
                 };
             }
-            try row.changes.resize(gpa, self.cols);
-            for (row.changes.items, 0..) |*change, col| {
-                change.* = if (invalidate or row.raw_len == null) .{} else self.staging.difference(row.base, col);
-                row.summary.merge(change.*);
+            for (0..self.cols) |col| {
+                const change = if (invalidate or row.raw_len == null) cells.Changes{} else self.staging.difference(row.base, col);
+                row.summary.merge(change);
             }
             const replace = invalidate or row.layout_invalid or row.raw_len == null or row.summary.any();
             if (replace) {
@@ -376,13 +372,13 @@ pub const Renderer = struct {
         var changed = false;
         if (self.palette_revision != self.palette.revision) {
             self.palette_revision = self.palette.revision;
-            if (self.highlight.relative()) for (self.rows) |*row| {
+            for (self.rows) |*row| {
                 for (0..2) |side| for (0..16) |id| {
                     if (row.highlight_until[side][id]) |deadline| {
                         if (now_ms < deadline) row.highlight_step[side][id] = null;
                     }
                 };
-            };
+            }
         }
         for (self.rows, 0..) |*row, n| for (0..2) |side| for (0..16) |id| {
             const deadline = row.highlight_until[side][id] orelse continue;
@@ -399,10 +395,7 @@ pub const Renderer = struct {
                 const elapsed = self.highlight.duration() - (deadline - now_ms);
                 const step: u8 = @intCast(@divFloor(@max(elapsed, 0), self.highlight.frameMs()));
                 if (row.highlight_step[side][id] == null or row.highlight_step[side][id].? != step) {
-                    if (relative_highlight.measuring) self.effect_cells_visited += row.base.cells.items.len;
-                    self.restore(n, target);
-                    if (relative_highlight.measuring and !self.highlight.relative()) self.effect_cells_visited += row.base.cells.items.len;
-                    if (self.highlight.relative()) self.relativePatch(n, side, @intCast(id), step) else self.patch(n, target, self.highlight.patch(step));
+                    self.adaptivePatch(n, side, @intCast(id), step);
                     row.highlight_step[side][id] = step;
                     changed = true;
                 }
@@ -411,7 +404,7 @@ pub const Renderer = struct {
         return changed;
     }
 
-    fn relativePatch(self: *Renderer, n: usize, side: usize, id: u4, step: u8) void {
+    fn adaptivePatch(self: *Renderer, n: usize, side: usize, id: u4, step: u8) void {
         const row = &self.rows[n];
         if (relative_highlight.measuring) self.effect_cells_visited += row.base.cells.items.len;
         const owner: cells.Owner = if (side == 0) .left else .right;
@@ -928,7 +921,6 @@ test "right-region projection uses final left capacity and hidden rows baseline 
     var rules = [_]?[]const u8{null};
     const look: Look = .{ .styles = &styles, .rules = &rules };
     var r = try Renderer.init(std.testing.allocator);
-    r.highlight.effect = .bold;
     defer r.deinit();
     try r.resize(1, 10);
     try setTestPair(&content, "a", "b", "abcX"); // Left is 5 columns; right gets 4.
@@ -939,8 +931,8 @@ test "right-region projection uses final left capacity and hidden rows baseline 
     try setTestPair(&content, "aaa", "b", "xy");
     try r.acceptContent(&content, &look);
     r.highlightChange(0, 1, 100);
-    _ = r.compose(100);
-    try std.testing.expectEqual(@as(?i64, 600), r.rows[0].highlight_until[1][0]);
+    _ = r.compose(100 + r.highlight.frameMs());
+    try std.testing.expectEqual(@as(?i64, 100 + r.highlight.duration()), r.rows[0].highlight_until[1][0]);
     try r.resize(0, 10);
     try setTestPair(&content, "aaa", "b", "zz");
     try r.resize(1, 20);
@@ -956,7 +948,6 @@ test "region timers restart independently and empty values advance baselines" {
     var rules = [_]?[]const u8{"."};
     const look: Look = .{ .styles = &styles, .rules = &rules };
     var r = try Renderer.init(std.testing.allocator);
-    r.highlight.effect = .bold;
     defer r.deinit();
     try r.resize(1, 40);
     try setTestPair(&content, "", "", "right");
@@ -964,18 +955,18 @@ test "region timers restart independently and empty values advance baselines" {
     try setTestPair(&content, "界", "b", "right");
     try r.acceptContent(&content, &look);
     r.highlightChange(0, 0, 100);
-    _ = r.compose(100);
-    try std.testing.expectEqual(@as(?i64, 600), r.rows[0].highlight_until[0][0]);
-    try std.testing.expectEqual(@as(?i64, 600), r.rows[0].highlight_until[0][1]);
+    _ = r.compose(100 + r.highlight.frameMs());
+    try std.testing.expectEqual(@as(?i64, 100 + r.highlight.duration()), r.rows[0].highlight_until[0][0]);
+    try std.testing.expectEqual(@as(?i64, 100 + r.highlight.duration()), r.rows[0].highlight_until[0][1]);
     try std.testing.expect(r.rows[0].desired.cells.items[1].style.bold and r.rows[0].desired.cells.items[2].style.bold);
     try setTestPair(&content, "long", "b", "right");
     try r.acceptContent(&content, &look);
     r.highlightChange(0, 0, 200);
-    _ = r.compose(200);
-    try std.testing.expectEqual(@as(?i64, 700), r.rows[0].highlight_until[0][0]);
-    try std.testing.expectEqual(@as(?i64, 600), r.rows[0].highlight_until[0][1]);
+    _ = r.compose(200 + r.highlight.frameMs());
+    try std.testing.expectEqual(@as(?i64, 200 + r.highlight.duration()), r.rows[0].highlight_until[0][0]);
+    try std.testing.expectEqual(@as(?i64, 100 + r.highlight.duration()), r.rows[0].highlight_until[0][1]);
     try std.testing.expect(r.rows[0].desired.cells.items[6].style.bold);
-    _ = r.compose(600);
+    _ = r.compose(100 + r.highlight.duration());
     try std.testing.expect(r.rows[0].desired.cells.items[1].style.bold);
     try std.testing.expect(!r.rows[0].desired.cells.items[6].style.bold);
     try setTestPair(&content, "", "b", "right");
@@ -985,8 +976,8 @@ test "region timers restart independently and empty values advance baselines" {
     try setTestPair(&content, "x", "b", "right");
     try r.acceptContent(&content, &look);
     r.highlightChange(0, 0, 800);
-    try std.testing.expectEqual(@as(?i64, 1300), r.rows[0].highlight_until[0][0]);
-    _ = r.compose(800);
+    try std.testing.expectEqual(@as(?i64, 800 + r.highlight.duration()), r.rows[0].highlight_until[0][0]);
+    _ = r.compose(800 + r.highlight.frameMs());
     // An override activated and cleared before the next frame may leave
     // identical bytes and descriptors. Its epoch still cancels the effect.
     content.tracks[0].override_epoch[0] += 2;
@@ -1029,7 +1020,6 @@ test "region highlights expire restart and preserve base styling across repair a
     var rules = [_]?[]const u8{"·"};
     const look: Look = .{ .styles = &styles, .rules = &rules };
     var r = try Renderer.init(std.testing.allocator);
-    r.highlight.effect = .bold;
     defer r.deinit();
     try r.resize(1, 20);
     _ = setTestTracked(&content, "old\tright");
@@ -1039,19 +1029,19 @@ test "region highlights expire restart and preserve base styling across repair a
     _ = setTestTracked(&content, "new\tright");
     try r.prepare(&content, &look, false);
     r.highlightChange(0, 0, 100);
-    try std.testing.expect(r.advanceHighlights(100));
+    try std.testing.expect(r.advanceHighlights(100 + r.highlight.frameMs()));
     try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
     try std.testing.expect(!r.rows[0].desired.cells.items[19].style.bold);
     try std.testing.expect(!r.rows[0].desired.cells.items[5].style.bold);
-    try std.testing.expectEqual(@as(i64, 500), r.highlightTimeout(100));
+    try std.testing.expectEqual(@as(i64, 2 * r.highlight.frameMs()), r.highlightTimeout(100));
     _ = try r.build(24, "", true, true);
     r.commit();
-    try std.testing.expect(!r.advanceHighlights(200));
+    try std.testing.expect(r.advanceHighlights(200));
     _ = setTestTracked(&content, "new\tchanged"); // Another slot does not end or restart it.
     try r.prepare(&content, &look, false);
     _ = r.advanceHighlights(250);
     try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
-    try std.testing.expectEqual(@as(i64, 350), r.highlightTimeout(250));
+    try std.testing.expectEqual(r.highlight.frameMs(), r.highlightTimeout(250));
     _ = setTestTracked(&content, "#[bold]B#[default]x\tchanged");
     try r.prepare(&content, &look, false);
     r.highlightChange(0, 0, 300);
@@ -1059,13 +1049,13 @@ test "region highlights expire restart and preserve base styling across repair a
     try r.resize(1, 24);
     try r.prepare(&content, &look, true);
     _ = r.advanceHighlights(400);
-    try std.testing.expectEqual(@as(i64, 400), r.highlightTimeout(400));
+    try std.testing.expectEqual(@as(i64, 20), r.highlightTimeout(400));
     try std.testing.expect(r.rows[0].desired.cells.items[1].style.bold);
-    try std.testing.expect(r.advanceHighlights(800));
+    try std.testing.expect(r.advanceHighlights(300 + r.highlight.duration()));
     try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
     try std.testing.expect(!r.rows[0].desired.cells.items[1].style.bold);
-    try std.testing.expectEqual(@as(i64, -1), r.highlightTimeout(800));
-    try std.testing.expect(!r.advanceHighlights(801));
+    try std.testing.expectEqual(@as(i64, -1), r.highlightTimeout(300 + r.highlight.duration()));
+    try std.testing.expect(!r.advanceHighlights(301 + r.highlight.duration()));
 }
 
 test "invisible changes do not highlight and cancellation restores the slot" {
@@ -1095,61 +1085,6 @@ test "invisible changes do not highlight and cancellation restores the slot" {
     try std.testing.expect(r.advanceHighlights(20));
     try std.testing.expect(!r.rows[0].desired.cells.items[0].style.bold);
     try std.testing.expectEqual(@as(i64, -1), r.highlightTimeout(20));
-}
-
-test "color sequence advances skips overdue steps restarts and restores original cells" {
-    var content = try Content.init(std.testing.allocator, 1);
-    defer content.deinit();
-    var styles = [_][]const u8{""};
-    var rules = [_]?[]const u8{"·"};
-    const look: Look = .{ .styles = &styles, .rules = &rules };
-    var r = try Renderer.init(std.testing.allocator);
-    defer r.deinit();
-    r.highlight.backgrounds[0] = .{ .rgb = .{ 158, 123, 32 } };
-    r.highlight.backgrounds[1] = .{ .rgb = .{ 112, 89, 29 } };
-    r.highlight.backgrounds[2] = .{ .rgb = .{ 68, 57, 28 } };
-    r.highlight.backgrounds_len = 3;
-    r.highlight.foregrounds[0] = .{ .rgb = .{ 255, 244, 204 } };
-    r.highlight.foregrounds[1] = .{ .rgb = .{ 238, 218, 174 } };
-    r.highlight.foregrounds[2] = .{ .rgb = .{ 220, 194, 144 } };
-    r.highlight.foregrounds_len = 3;
-    r.highlight.step_ms = 150;
-    try r.resize(1, 20);
-    _ = setTestTracked(&content, "old\tright");
-    try r.prepare(&content, &look, true);
-    _ = setTestTracked(&content, "#[bold,fg=blue,bg=red]界#[default]x\tright");
-    try r.prepare(&content, &look, false);
-    r.highlightChange(0, 0, 1000);
-    _ = r.advanceHighlights(1000);
-    try std.testing.expectEqualDeep(r.highlight.backgrounds[0], r.rows[0].desired.cells.items[0].style.bg);
-    try std.testing.expectEqualDeep(r.rows[0].desired.cells.items[0].style, r.rows[0].desired.cells.items[1].style);
-    try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
-    try std.testing.expectEqualDeep(r.highlight.foregrounds[0], r.rows[0].desired.cells.items[2].style.fg);
-    try std.testing.expect(!r.rows[0].desired.cells.items[2].style.bold);
-    try std.testing.expectEqualDeep(styled.Color.default, r.rows[0].desired.cells.items[19].style.bg);
-    try std.testing.expectEqual(@as(i64, 150), r.highlightTimeout(1000));
-    try std.testing.expect(!r.advanceHighlights(1149));
-    try std.testing.expect(r.advanceHighlights(1150));
-    try std.testing.expectEqualDeep(r.highlight.backgrounds[1], r.rows[0].desired.cells.items[0].style.bg);
-    try std.testing.expectEqualDeep(r.highlight.foregrounds[1], r.rows[0].desired.cells.items[0].style.fg);
-    _ = try r.build(24, "", true, true); // Repair doesn't restart animation.
-    r.commit();
-    try r.resize(1, 22);
-    try r.prepare(&content, &look, true);
-    _ = r.advanceHighlights(1310);
-    try std.testing.expectEqualDeep(r.highlight.backgrounds[2], r.rows[0].desired.cells.items[0].style.bg);
-    try std.testing.expectEqual(@as(i64, 140), r.highlightTimeout(1310));
-    _ = setTestTracked(&content, "#[bold,fg=blue,bg=red]界#[default]y\tright");
-    try r.prepare(&content, &look, false);
-    r.highlightChange(0, 0, 1320);
-    _ = r.advanceHighlights(1320);
-    try std.testing.expectEqualDeep(r.highlight.backgrounds[0], r.rows[0].desired.cells.items[0].style.bg);
-    _ = r.advanceHighlights(1630); // Skip intermediate step after a delay.
-    try std.testing.expectEqualDeep(r.highlight.backgrounds[2], r.rows[0].desired.cells.items[0].style.bg);
-    try std.testing.expect(r.advanceHighlights(1770));
-    try std.testing.expect(r.rows[0].desired.visuallyEqual(r.rows[0].base));
-    try std.testing.expectEqual(@as(i64, -1), r.highlightTimeout(1770));
-    try std.testing.expect(!r.advanceHighlights(1771));
 }
 
 test "adaptive regions derive each grapheme from base and restore after palette updates" {

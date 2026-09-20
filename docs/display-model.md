@@ -138,9 +138,8 @@ none of them can activate an effect. Activation belongs exclusively to the
 content-update path.
 
 The scheduler is demand-driven. With no active effects or content changes,
-there is no animation tick and no idle rendering work. Discrete effects, such
-as the configured highlight color sequence, schedule their next color step.
-The adaptive color pulse samples a smooth curve every 30 ms while it is active.
+there is no animation tick and no idle rendering work. The adaptive color
+pulse samples a smooth curve every 30 ms while it is active.
 Its color range is checked before playback and cached per resolved color pair
 and pulse count. Frame sampling does not independently adjust contrast limits:
 that would introduce brightness jumps into an otherwise smooth curve. Repeated
@@ -164,16 +163,15 @@ desired cells = effect(base cells, now)
 ```
 
 A static appearance change may need only one frame. A temporary highlight
-needs at least one highlighted frame and a later restored frame. A twelve-color
-highlight can produce twelve colored frames followed by a restored frame:
+needs at least one highlighted frame and a later restored frame. An adaptive
+highlight produces sampled color frames followed by a restored frame:
 
 ```text
 content update starts highlight
-    ├── frame 1  → paint color 1
-    ├── frame 2  → paint color 2
+    ├── frame 1  → paint sampled colors
+    ├── frame 2  → paint sampled colors
     ├── ...
-    ├── frame 12 → paint color 12
-    └── frame 13 → paint restored base
+    └── final frame → paint restored base
 ```
 
 Each frame includes all effects active at that time:

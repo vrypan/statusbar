@@ -121,16 +121,15 @@ the original colors return only when the whole animation ends.
 Styles and hyperlinks are preserved. If the terminal cannot report a needed
 color, that grapheme uses a bold fallback.
 
-To try this with an existing custom highlight sequence, add this to its
-`[highlight]` section; the old sequence is retained but ignored:
-
 ```ini
-effect = relative
+[highlight]
 pulses = 2
 ```
 
 Use `pulses = 1` for 1.2 seconds or `pulses = 3` for 3.6 seconds. Each pulse
 keeps the same pace; more pulses give you longer to notice the changed value.
+Older `effect`, custom highlight color, and `step` settings are no longer
+accepted; remove them when upgrading. Markup colors remain configurable.
 
 See [Highlight changes](config.md#highlight-changes) for the complete behavior
 and `[highlight]` reference.

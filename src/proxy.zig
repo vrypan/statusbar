@@ -355,7 +355,7 @@ const Proxy = struct {
         self.terminal = .{ .io = self.io };
         self.output.damaged = true;
         const bar_rows = self.layout.bar;
-        const cursor = if (bar_rows > 0 or self.renderer.highlight.relative()) self.queryCursorRow() else null;
+        const cursor = self.queryCursorRow();
         if (bar_rows > 0) {
             const row = @min(cursor orelse outer_rows, outer_rows);
             const up = bar_rows -| (outer_rows - row);
@@ -383,15 +383,13 @@ const Proxy = struct {
     /// Asks the terminal where the cursor is. Keystrokes that arrive in the
     /// meantime are kept for the child.
     fn queryCursorRow(self: *Proxy) ?u16 {
-        if (self.renderer.highlight.relative()) {
-            var queries: [4096]u8 = undefined;
-            var writer = std.Io.Writer.fixed(&queries);
-            self.palette_probe.begin(&writer) catch return null;
-            sys.writeAll(self.io, stdout_fd, writer.buffered()) catch return null;
-            // A short grace period handles late replies without blocking the
-            // child. Its first OSC relinquishes outstanding reply ownership.
-            self.palette_deadline_ms = self.now() + 1500;
-        }
+        var queries: [4096]u8 = undefined;
+        var query_writer = std.Io.Writer.fixed(&queries);
+        self.palette_probe.begin(&query_writer) catch return null;
+        sys.writeAll(self.io, stdout_fd, query_writer.buffered()) catch return null;
+        // A short grace period handles late replies without blocking the
+        // child. Its first OSC relinquishes outstanding reply ownership.
+        self.palette_deadline_ms = self.now() + 1500;
         sys.writeAll(self.io, stdout_fd, "\x1b[6n") catch return null;
         var buf: [4608]u8 = undefined;
         var len: usize = 0;
