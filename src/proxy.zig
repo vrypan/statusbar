@@ -154,7 +154,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     defer renderer.deinit();
     if (opts.cfg) |cfg| renderer.highlight = cfg.highlight;
     try renderer.resize(layout.bar, layout.cols);
-    try renderer.prepare(&source.content, &look, true);
+    try renderer.relayout(&source.content, &look);
     var proxy: Proxy = .{
         .io = io,
         .master = pty.master,
@@ -456,12 +456,10 @@ const Proxy = struct {
 
             var now_ms = self.now();
             var timeout = minTimeout(self.paintTimeout(now_ms), self.source.timeout(now_ms));
-            timeout = minTimeout(timeout, self.renderer.highlightTimeout(now_ms));
+            timeout = minTimeout(timeout, self.renderer.nextFrameTimeout(now_ms));
             if (self.input.holding()) timeout = minTimeout(timeout, @max(self.last_input_ms + input_hold_ms - now_ms, 0));
             _ = posix.poll(fds[0 .. 3 + command_fds.len], @intCast(@min(timeout, std.math.maxInt(c_int)))) catch return;
             now_ms = self.now();
-            if (self.renderer.advanceHighlights(now_ms)) self.requestPaint(now_ms);
-
             if (sig.revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
                 try self.drainSignals(sig_r, pid, now_ms);
             }
@@ -488,6 +486,11 @@ const Proxy = struct {
                                 // cursor, which the paint would overwrite:
                                 // then wait for a pause.
                                 if (self.output.atBoundary() and !self.output.cursor_saved) {
+                                    // Damage repair is the one urgent paint
+                                    // path. Sample existing effects first;
+                                    // it must never consume source events or
+                                    // activate a new effect.
+                                    _ = self.renderer.compose(now_ms);
                                     try self.paint();
                                 } else {
                                     self.requestPaint(now_ms);
@@ -503,18 +506,20 @@ const Proxy = struct {
                 }
             }
 
-            if (self.source.update(command_fds, now_ms)) {
-                try self.renderer.prepare(&self.source.content, self.look, false);
+            const source_update = self.source.update(command_fds, now_ms);
+            if (source_update.content_changed) {
+                try self.renderer.acceptContent(&self.source.content, self.look);
                 for (0..self.renderer.rows.len) |row| for (0..2) |side| {
                     const slot = row * 2 + side;
-                    if (self.source.slotTrackedChange(slot)) self.renderer.highlightChange(row, side, now_ms);
+                    if (self.source.slotTrackedChange(slot, source_update.eligible, source_update.baseline, source_update.override_events)) self.renderer.highlightChange(row, side, now_ms);
                 };
                 self.requestPaint(now_ms);
             }
             for (0..self.renderer.rows.len) |row| for (0..2) |side| {
-                if (self.source.override_lens[row * 2 + side] != null) self.renderer.cancelHighlight(row, side);
+                const slot = row * 2 + side;
+                if (self.source.override_lens[slot] != null or source_update.override_events & (@as(u32, 1) << @intCast(slot)) != 0) self.renderer.cancelHighlight(row, side);
             };
-            if (self.renderer.advanceHighlights(now_ms)) self.requestPaint(now_ms);
+            if (self.renderer.compose(now_ms)) self.requestPaint(now_ms);
 
             try self.paintIfDue(now_ms);
             self.terminal.flush();
@@ -559,14 +564,12 @@ const Proxy = struct {
         self.output.resize(self.layout.bar, self.layout.child.row);
         self.input = .{ .bar = self.layout.bar, .rows = self.layout.child.row };
         self.source.setColumns(ws.col);
-        self.source.refreshNow(now_ms);
+        self.source.refreshGeometry(now_ms);
         try self.renderer.resize(self.layout.bar, self.layout.cols);
-        try self.renderer.prepare(&self.source.content, self.look, true);
-        _ = self.renderer.advanceHighlights(now_ms);
+        try self.renderer.relayout(&self.source.content, self.look);
         // Terminals drop the margins on resize; put them back before the
         // child redraws, if the stream allows it right now.
         self.requestPaint(now_ms);
-        if (self.output.atBoundary()) try self.paint();
     }
 };
 

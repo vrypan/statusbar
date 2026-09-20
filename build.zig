@@ -38,7 +38,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    for ([_][]const u8{ "output", "input", "bar" }) |name| {
+    for ([_][]const u8{ "output", "input", "bar", "display" }) |name| {
         const dependency = b.createModule(.{
             .root_source_file = b.path(b.fmt("src/{s}.zig", .{name})),
             .target = target,

@@ -10,6 +10,7 @@ const std = @import("std");
 const posix = std.posix;
 const c = std.c;
 const sys = @import("sys.zig");
+const display = @import("display.zig");
 
 const max_output = 8192;
 const min_deadline_ms = 5000;
@@ -29,6 +30,9 @@ pub const Command = struct {
     next_ms: i64 = 0,
     output: [max_output]u8 = undefined,
     output_len: usize = 0,
+    next_origin: display.RunOrigin = .initial,
+    active_origin: display.RunOrigin = .initial,
+    pending_origin: ?display.RunOrigin = null,
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io, shell_command: []const u8, interval_ms: i64, lines: u16, cols: u16) !Command {
         const devnull = posix.openatZ(posix.AT.FDCWD, "/dev/null", .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0) catch return error.Syscall;
@@ -64,9 +68,15 @@ pub const Command = struct {
         self.exec = exec;
     }
 
-    /// Runs the next refresh right away.
-    pub fn refreshNow(self: *Command, now_ms: i64) void {
+    /// Runs the next refresh right away, retaining why it was requested even
+    /// when a previous invocation is still collecting output.
+    pub fn refreshNow(self: *Command, now_ms: i64, origin: display.RunOrigin) void {
+        if (self.pid != null) {
+            self.pending_origin = display.preferPending(self.pending_origin, origin);
+            return;
+        }
         self.next_ms = now_ms;
+        self.next_origin = origin;
     }
 
     pub fn readFd(self: *const Command) sys.Fd {
@@ -99,6 +109,11 @@ pub const Command = struct {
                 if (sys.tryWaitFor(pid) == null) return;
                 self.pid = null;
                 self.termination_requested = false;
+                if (self.pending_origin) |origin| {
+                    self.pending_origin = null;
+                    self.next_ms = now_ms;
+                    self.next_origin = origin;
+                }
             }
         }
         if (self.pid == null and now_ms >= self.next_ms) self.start(io, now_ms);
@@ -106,7 +121,9 @@ pub const Command = struct {
 
     /// Reads what is available. Returns the complete output once the command
     /// closes its stdout.
-    pub fn onReadable(self: *Command, io: std.Io) ?[]const u8 {
+    pub const Result = struct { bytes: []const u8, origin: display.RunOrigin };
+
+    pub fn onReadable(self: *Command, io: std.Io) ?Result {
         const fd = self.fd orelse return null;
         var scratch: [1024]u8 = undefined;
         const dest = if (self.output_len < max_output) self.output[self.output_len..] else scratch[0..];
@@ -123,9 +140,14 @@ pub const Command = struct {
                     if (sys.tryWaitFor(pid) != null) {
                         self.pid = null;
                         self.termination_requested = false;
+                        if (self.pending_origin) |origin| {
+                            self.pending_origin = null;
+                            self.next_ms = 0;
+                            self.next_origin = origin;
+                        }
                     }
                 }
-                return self.output[0..self.output_len];
+                return .{ .bytes = self.output[0..self.output_len], .origin = self.active_origin };
             },
         }
     }
@@ -173,10 +195,12 @@ pub const Command = struct {
         self.termination_requested = false;
         self.started_ms = now_ms;
         self.output_len = 0;
+        self.active_origin = self.next_origin;
+        self.next_origin = .scheduled;
     }
 };
 
-fn awaitOutput(command: *Command, io: std.Io) ![]const u8 {
+fn awaitOutput(command: *Command, io: std.Io) !Command.Result {
     var attempts: usize = 0;
     while (attempts < 100) : (attempts += 1) {
         if (command.onReadable(io)) |output| return output;
@@ -189,9 +213,11 @@ test "command output exits and schedules the next refresh" {
     var command = try Command.init(std.testing.allocator, std.testing.io, "printf done", 100, 1, 80);
     defer command.deinit(std.testing.io);
 
-    command.refreshNow(0);
+    command.refreshNow(0, .scheduled);
     command.tick(std.testing.io, 0);
-    try std.testing.expectEqualStrings("done", try awaitOutput(&command, std.testing.io));
+    const result = try awaitOutput(&command, std.testing.io);
+    try std.testing.expectEqualStrings("done", result.bytes);
+    try std.testing.expectEqual(display.RunOrigin.scheduled, result.origin);
     try std.testing.expect(command.pid == null);
     try std.testing.expectEqual(@as(i64, 1), command.timeout(99));
     command.tick(std.testing.io, 99);
@@ -204,10 +230,10 @@ test "command deadline survives closed stdout until the process is reaped" {
     var command = try Command.init(std.testing.allocator, std.testing.io, "printf ready; exec 1>&-; sleep 2", 100, 1, 80);
     defer command.deinit(std.testing.io);
 
-    command.refreshNow(0);
+    command.refreshNow(0, .scheduled);
     command.tick(std.testing.io, 0);
     const first_pid = command.pid.?;
-    try std.testing.expectEqualStrings("ready", try awaitOutput(&command, std.testing.io));
+    try std.testing.expectEqualStrings("ready", (try awaitOutput(&command, std.testing.io)).bytes);
     try std.testing.expect(command.fd == null);
     try std.testing.expect(command.pid != null);
 
@@ -237,11 +263,28 @@ test "command deadline closes an open stdout pipe" {
     var command = try Command.init(std.testing.allocator, std.testing.io, "sleep 2", 100, 1, 80);
     defer command.deinit(std.testing.io);
 
-    command.refreshNow(0);
+    command.refreshNow(0, .scheduled);
     command.tick(std.testing.io, 0);
     try std.testing.expect(command.fd != null);
     command.tick(std.testing.io, command.deadline());
     try std.testing.expect(command.fd == null);
     try std.testing.expect(command.termination_requested);
     try std.testing.expectEqual(@as(i64, 50), command.timeout(command.deadline()));
+}
+
+test "geometry requests retain origin and wait behind an active run" {
+    var command = try Command.init(std.testing.allocator, std.testing.io, "sleep 0.02; printf done", 1000, 1, 80);
+    defer command.deinit(std.testing.io);
+
+    command.refreshNow(0, .scheduled);
+    command.tick(std.testing.io, 0);
+    try std.testing.expect(command.pid != null);
+    command.refreshNow(1, .geometry);
+    try std.testing.expectEqual(@as(?display.RunOrigin, .geometry), command.pending_origin);
+    const first = try awaitOutput(&command, std.testing.io);
+    try std.testing.expectEqual(display.RunOrigin.scheduled, first.origin);
+    command.tick(std.testing.io, 100);
+    try std.testing.expect(command.pid != null);
+    const second = try awaitOutput(&command, std.testing.io);
+    try std.testing.expectEqual(display.RunOrigin.geometry, second.origin);
 }

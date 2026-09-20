@@ -101,6 +101,7 @@ pub const Renderer = struct {
     parent: std.mem.Allocator,
     budget: *cells.Budget,
     scratch: *styled.Scratch,
+    semantic_scratch: *styled.Scratch,
     rows: []State = &.{},
     cols: u16 = 0,
     staging: cells.Row = .{},
@@ -116,10 +117,13 @@ pub const Renderer = struct {
         const scratch = try budget.allocator().create(styled.Scratch);
         scratch.* = .{};
         errdefer budget.allocator().destroy(scratch);
+        const semantic_scratch = try budget.allocator().create(styled.Scratch);
+        semantic_scratch.* = .{};
+        errdefer budget.allocator().destroy(semantic_scratch);
         var writer: std.Io.Writer.Allocating = .init(budget.allocator());
         errdefer writer.deinit();
         try writer.ensureTotalCapacity(128);
-        return .{ .parent = parent, .budget = budget, .scratch = scratch, .writer = writer };
+        return .{ .parent = parent, .budget = budget, .scratch = scratch, .semantic_scratch = semantic_scratch, .writer = writer };
     }
     pub fn deinit(self: *Renderer) void {
         const gpa = self.budget.allocator();
@@ -129,6 +133,8 @@ pub const Renderer = struct {
         self.writer.deinit();
         self.scratch.deinit(gpa);
         gpa.destroy(self.scratch);
+        self.semantic_scratch.deinit(gpa);
+        gpa.destroy(self.semantic_scratch);
         std.debug.assert(self.budget.live == 0);
         self.parent.destroy(self.budget);
     }
@@ -157,6 +163,10 @@ pub const Renderer = struct {
             @memset(row.changes.items, .{});
             const raw = content.line(n);
             if (!invalidate and row.raw_len != null and std.mem.eql(u8, raw, row.raw[0..row.raw_len.?])) continue;
+            const semantic_changed = if (!invalidate and row.raw_len != null)
+                try self.semanticSlotsChanged(row.raw[0..row.raw_len.?], raw, look.styles[n], look.palette)
+            else
+                [2]bool{ false, false };
             self.parsed_rows += 1;
             try self.layout(&self.staging, raw, look.styles[n], look.rules[n], look.palette);
             try row.changes.resize(gpa, self.cols);
@@ -166,8 +176,8 @@ pub const Renderer = struct {
                 if (change.visual()) {
                     const owners = .{ self.staging.cells.items[col].owner, row.base.cells.items[col].owner };
                     inline for (owners) |owner| switch (owner) {
-                        .left => row.slot_changed[0] = true,
-                        .right => row.slot_changed[1] = true,
+                        .left => row.slot_changed[0] = row.slot_changed[0] or semantic_changed[0],
+                        .right => row.slot_changed[1] = row.slot_changed[1] or semantic_changed[1],
                         .fill => {},
                     };
                 }
@@ -195,6 +205,47 @@ pub const Renderer = struct {
         var capacity: usize = 128;
         for (self.rows) |row| capacity = try std.math.add(usize, capacity, row.output_bound);
         try self.writer.ensureTotalCapacity(capacity);
+    }
+
+    fn semanticSlotsChanged(self: *Renderer, old_raw: []const u8, new_raw: []const u8, style: []const u8, palette: markup.Palette) ![2]bool {
+        var base: cells.Style = .{};
+        styled.sgr(&base, .{}, style);
+        var old_buf: [4096]u8 = undefined;
+        var new_buf: [4096]u8 = undefined;
+        const old_slots = splitSlots(markup.expand(old_raw, &old_buf, palette));
+        const new_slots = splitSlots(markup.expand(new_raw, &new_buf, palette));
+        var changed: [2]bool = undefined;
+        for (0..2) |side| {
+            try self.scratch.parse(old_slots[side], base);
+            try self.semantic_scratch.parse(new_slots[side], base);
+            changed[side] = !semanticEqual(self.scratch, self.semantic_scratch);
+        }
+        return changed;
+    }
+
+    fn semanticEqual(a: *const styled.Scratch, b: *const styled.Scratch) bool {
+        var left = a.iterator();
+        var right = b.iterator();
+        while (true) {
+            const x = left.next();
+            const y = right.next();
+            if (x == null or y == null) return x == null and y == null;
+            const xg = x.?;
+            const yg = y.?;
+            if (xg.columns != yg.columns or !styled.Style.eql(xg.style, yg.style) or !std.mem.eql(u8, xg.bytes, yg.bytes) or !std.mem.eql(u8, xg.link.params, yg.link.params) or !std.mem.eql(u8, xg.link.uri, yg.link.uri)) return false;
+        }
+    }
+
+    /// Incorporates accepted source content. Effect activation remains an
+    /// explicit caller decision after this comparison.
+    pub fn acceptContent(self: *Renderer, content: *const Content, look: *const Look) !void {
+        try self.prepare(content, look, false);
+    }
+
+    /// Rebuilds presentation after geometry or style changes. This path never
+    /// reports a content transition to an effect controller.
+    pub fn relayout(self: *Renderer, content: *const Content, look: *const Look) !void {
+        try self.prepare(content, look, true);
     }
     fn layout(self: *Renderer, row: *cells.Row, raw: []const u8, style: []const u8, rule: ?[]const u8, palette: markup.Palette) !void {
         var base: cells.Style = .{};
@@ -258,6 +309,11 @@ pub const Renderer = struct {
         return result;
     }
 
+    /// The next demand-driven frame boundary for all current effects.
+    pub fn nextFrameTimeout(self: *const Renderer, now_ms: i64) i64 {
+        return self.highlightTimeout(now_ms);
+    }
+
     /// Apply/expire appearance independently of source polling and repair.
     pub fn advanceHighlights(self: *Renderer, now_ms: i64) bool {
         var changed = false;
@@ -283,6 +339,11 @@ pub const Renderer = struct {
             }
         };
         return changed;
+    }
+
+    /// Samples all current temporary appearances into the desired frame.
+    pub fn compose(self: *Renderer, now_ms: i64) bool {
+        return self.advanceHighlights(now_ms);
     }
     /// Construct a complete batch using storage reserved during preparation.
     /// Nothing in painted is changed here, even if construction fails.
@@ -566,6 +627,15 @@ test "layout compatibility for slots rules whitespace and clipping" {
         };
         try std.testing.expectEqualStrings(c.visible, w.buffered());
     }
+}
+
+test "slot semantics compare styled graphemes before placement" {
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    const equivalent = try r.semanticSlotsChanged("#[bold]e\u{301}\tplain", "\x1b[1me\u{301}\tplain", "", .{});
+    try std.testing.expect(!equivalent[0] and !equivalent[1]);
+    const changed = try r.semanticSlotsChanged("left\tright", "left\t#[fg=red]right", "", .{});
+    try std.testing.expect(!changed[0] and changed[1]);
 }
 test "change kinds distinguish hyperlink appearance and ownership" {
     var content = try Content.init(std.testing.allocator, 1);

@@ -275,6 +275,46 @@ track = true
     print("tracked command color sequence passed" if colors else "tracked command highlight passed")
 
 
+def check_geometry_results_do_not_highlight(binary):
+    with tempfile.TemporaryDirectory(prefix="statusbar-geometry-") as folder:
+        value_path = os.path.join(folder, "value")
+        config_path = os.path.join(folder, "config")
+        with open(value_path, "w") as value:
+            value.write("one\n")
+        with open(config_path, "w") as cfg:
+            cfg.write(f"""[line.1]
+left = VALUE #(value)
+[command.value]
+run = printf 'cols:%s:' \"$STATUSBAR_COLUMNS\"; cat {shlex.quote(value_path)}
+interval = 0.2
+track = true
+""")
+        pid, master = spawn([binary, "-c", config_path, "--", "/bin/sh", "-c", "sleep 10"])
+        try:
+            suffix = b"\x1b[0m\x1b8\x1b[?7h"
+            initial = read_until(master, b"", b"cols:80:one")
+            start = initial.index(b"cols:80:one")
+            initial = initial[:start] + read_until(master, initial[start:], suffix)
+            assert b"\x1b[0;1m" not in initial, initial
+
+            resize(master, 24, 60)
+            resized = read_until(master, b"", b"cols:60:one")
+            start = resized.index(b"cols:60:one")
+            resized = resized[:start] + read_until(master, resized[start:], suffix)
+            assert b"\x1b[0;1m" not in resized, resized
+
+            next_path = os.path.join(folder, "next")
+            with open(next_path, "w") as value:
+                value.write("two\n")
+            os.replace(next_path, value_path)
+            highlighted = read_until(master, b"", b"\x1b[0;1mVALUE cols:60:two")
+            highlighted = read_until(master, highlighted, suffix)
+            assert b"cols:60:two" in highlighted, highlighted
+        finally:
+            stop(pid, master)
+    print("geometry command results establish a silent baseline")
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: multirow_pty.py STATUSBAR")
@@ -299,6 +339,7 @@ def main():
     check_fish(binary)
     check_tracking(binary)
     check_tracking(binary, colors=True)
+    check_geometry_results_do_not_highlight(binary)
     config = """\
 [line.1]
 left = one

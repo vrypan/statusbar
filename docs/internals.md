@@ -36,6 +36,10 @@ shell
 
 ## Rendering the bar
 
+The terminology and scheduling contract for content updates, effects, frames,
+and terminal writes is described in the [display and animation
+model](display-model.md).
+
 Only the statusbar has a cell grid; the child's output remains a proxied byte
 stream. Each visible row keeps three owned versions: base content, desired
 appearance, and the last queued paint. Cells record graphemes, terminal width,
@@ -58,10 +62,11 @@ constant foreground or a matching foreground sequence. Each step is derived
 from elapsed time, so delayed steps are skipped. Patches are reapplied after a
 base rebuild or resize and restored on expiry; damage repair never restarts
 the deadline.
-Command results establish a first-result baseline, and subsequent changed
-results are mapped through templates to slots and gated by semantic cell
-changes. Step boundaries and expiry participate in the proxy poll timeout and
-use the existing safe paint scheduler. Within-row selective writes are not
+Command results retain why their process ran. First results and reruns requested
+by a terminal resize establish a new baseline silently; ordinary interval
+results may start the configured slot highlight after every command used in the
+slot has produced a first result. Step boundaries and expiry share one proxy
+poll deadline and one composition pass. Within-row selective writes are not
 implemented yet.
 
 ### Unicode and styles

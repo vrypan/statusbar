@@ -216,5 +216,7 @@ restrained use of icons; see [their notes](../samples/themes/README.md).
 - [Configuration](config.md) — rows, commands, change highlights, colors, markup, and rules.
 - [Updating slots](set.md) — runtime updates from scripts and the terminal protocol.
 - [Starship](starship.md) — prompt integration and customization.
+- [Display and animation model](display-model.md) — content updates, animation
+  ticks, composed frames, and terminal paints.
 - [Internals and limitations](internals.md) — PTY behavior, supported terminal
   interactions, and edge cases relevant to terminal-tool authors.
