@@ -6,9 +6,10 @@ const std = @import("std");
 const file_prefix = "file://";
 const kitty_prefix = "kitty-shell-cwd://";
 
-/// Formats a local URI as `/path` and a remote URI as `host:/path`.
+/// Formats the directory like zsh's %3~: local home becomes ~, then only
+/// the last three components remain. Remote titles retain their host prefix.
 /// Returns null for unsupported, malformed, unsafe, or oversized input.
-pub fn title(uri: []const u8, local_hostname: []const u8, out: []u8) ?[]const u8 {
+pub fn title(uri: []const u8, local_hostname: []const u8, home_directory: []const u8, out: []u8) ?[]const u8 {
     const rest = if (std.mem.startsWith(u8, uri, file_prefix))
         uri[file_prefix.len..]
     else if (std.mem.startsWith(u8, uri, kitty_prefix))
@@ -54,6 +55,31 @@ pub fn title(uri: []const u8, local_hostname: []const u8, out: []u8) ?[]const u8
     const path_start = if (local) 0 else authority.len + 1;
     if (len == path_start or out[path_start] != '/') return null;
     if (!std.unicode.utf8ValidateSlice(out[0..len])) return null;
+    const home = std.mem.trimEnd(u8, home_directory, "/");
+    if (local and home.len > 0 and home[0] == '/' and
+        std.mem.startsWith(u8, out[path_start..len], home) and
+        (len - path_start == home.len or out[path_start + home.len] == '/'))
+    {
+        const suffix = out[path_start + home.len .. len];
+        out[path_start] = '~';
+        std.mem.copyForwards(u8, out[path_start + 1 ..], suffix);
+        len = path_start + 1 + suffix.len;
+    }
+    var i_end = len;
+    var separators: usize = 0;
+    while (i_end > path_start) {
+        i_end -= 1;
+        if (out[i_end] != '/') continue;
+        separators += 1;
+        if (separators == 3) {
+            if (i_end > path_start) {
+                const suffix = out[i_end + 1 .. len];
+                std.mem.copyForwards(u8, out[path_start..], suffix);
+                len = path_start + suffix.len;
+            }
+            break;
+        }
+    }
     return out[0..len];
 }
 
@@ -100,7 +126,7 @@ test "OSC 7 titles distinguish local and remote paths" {
 
     for (cases) |case| {
         var out: [256]u8 = undefined;
-        const got = title(case.uri, case.hostname, &out);
+        const got = title(case.uri, case.hostname, "", &out);
         if (case.expected) |expected| {
             try std.testing.expectEqualStrings(expected, got orelse return error.TestExpectedEqual);
         } else {
@@ -111,11 +137,30 @@ test "OSC 7 titles distinguish local and remote paths" {
 
 test "OSC 7 titles respect caller storage" {
     var exact: [4]u8 = undefined;
-    try std.testing.expectEqualStrings("/abc", title("file:///abc", "host", &exact).?);
+    try std.testing.expectEqualStrings("/abc", title("file:///abc", "host", "", &exact).?);
 
     var short: [3]u8 = undefined;
-    try std.testing.expect(title("file:///abc", "host", &short) == null);
+    try std.testing.expect(title("file:///abc", "host", "", &short) == null);
 
     var remote_short: [5]u8 = undefined;
-    try std.testing.expect(title("file://h/abc", "local", &remote_short) == null);
+    try std.testing.expect(title("file://h/abc", "local", "", &remote_short) == null);
+}
+
+test "directory titles use three components and local home abbreviation" {
+    const cases = [_]struct { []const u8, []const u8 }{
+        .{ "file:///", "/" },
+        .{ "file:///a/b/c", "/a/b/c" },
+        .{ "file:///a/b/c/d", "b/c/d" },
+        .{ "file:///Users/alice", "~" },
+        .{ "file:///Users/alice/a/b", "~/a/b" },
+        .{ "file:///Users/alice/a/b/c", "a/b/c" },
+        .{ "file:///Users/alice-other", "/Users/alice-other" },
+        .{ "file://remote/Users/alice", "remote:/Users/alice" },
+        .{ "file://remote/srv/a/b/c", "remote:a/b/c" },
+        .{ "file:///Users/alice/a%20b/c", "~/a b/c" },
+    };
+    for (cases) |case| {
+        var out: [256]u8 = undefined;
+        try std.testing.expectEqualStrings(case[1], title(case[0], "local", "/Users/alice", &out).?);
+    }
 }

@@ -183,6 +183,9 @@ fn setSlot(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stde
 fn shellInit(arena: std.mem.Allocator, io: Io, invoked_as: []const u8, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
     const args = command.positionals();
     const script = if (std.mem.eql(u8, args[0], "zsh")) zsh_init else if (std.mem.eql(u8, args[0], "fish")) fish_init else return usageError(stderr, command, "init supports zsh and fish");
+    const starship = command.getValue(bool, "starship") orelse true;
+    const report_cwd = command.getValue(bool, "report-cwd") orelse true;
+    if (!starship and command.present("starship-slot")) return usageError(stderr, command, "--starship-slot cannot be combined with --starship=false");
     const slot = if (command.getValue([]const u8, "starship-slot")) |raw|
         parseSlot(raw) orelse return usageError(stderr, command, "--starship-slot must be a positive decimal integer")
     else
@@ -190,7 +193,12 @@ fn shellInit(arena: std.mem.Allocator, io: Io, invoked_as: []const u8, command: 
     const line_text = @import("environment.zig").get("STATUSBAR_LINES") orelse return 0;
     const line_count = parseSlot(line_text) orelse return usageError(stderr, command, "STATUSBAR_LINES is malformed");
     const max_slot = std.math.mul(usize, line_count, 2) catch return usageError(stderr, command, "STATUSBAR_LINES is malformed");
-    if (slot > max_slot) return usageError(stderr, command, "--starship-slot does not exist in this session");
+    if (!starship and !report_cwd) return 0;
+    if (report_cwd) try stdout.writeAll(if (std.mem.eql(u8, args[0], "zsh")) zsh_cwd_init else fish_cwd_init);
+    if (!starship) {
+        try stdout.flush();
+        return 0;
+    }
 
     // Preserve the invocation rather than resolving the executable. In
     // particular, a Homebrew symlink or a bare PATH lookup must keep pointing
@@ -198,7 +206,8 @@ fn shellInit(arena: std.mem.Allocator, io: Io, invoked_as: []const u8, command: 
     // a slash absolute so a later `cd` cannot break the prompt hook.
     const executable = try shellExecutable(arena, io, invoked_as);
     const with_path = try std.mem.replaceOwned(u8, arena, script, "@STATUSBAR@", try shellQuote(arena, executable));
-    try stdout.writeAll(try std.mem.replaceOwned(u8, arena, with_path, "@SLOT@", try std.fmt.allocPrint(arena, "{d}", .{slot})));
+    const with_slot = try std.mem.replaceOwned(u8, arena, with_path, "@SLOT@", try std.fmt.allocPrint(arena, "{d}", .{slot}));
+    try stdout.writeAll(try std.mem.replaceOwned(u8, arena, with_slot, "@SLOT_VALID@", if (slot <= max_slot) "1" else "0"));
     try stdout.flush();
     return 0;
 }
@@ -239,13 +248,49 @@ fn normalizeSlotText(text: []u8) []u8 {
     return text[0..trimmed.len];
 }
 
+const zsh_cwd_init =
+    \\# Report to the controlling terminal, never captured prompt stdout.
+    \\__statusbar_report_cwd() {
+    \\  emulate -L zsh
+    \\  local LC_ALL=C encoded='' char hex
+    \\  local -i i
+    \\  for (( i = 1; i <= ${#PWD}; i++ )); do
+    \\    char=${PWD[i]}
+    \\    case $char in
+    \\      [a-zA-Z0-9/._~-]) encoded+=$char ;;
+    \\      *) builtin printf -v hex '%%%02X' "'$char"; encoded+=$hex ;;
+    \\    esac
+    \\  done
+    \\  builtin printf '\033]7;file://%s%s\033\\' "$HOST" "$encoded" 2>/dev/null >/dev/tty
+    \\  return 0
+    \\}
+    \\typeset -ga precmd_functions chpwd_functions
+    \\precmd_functions=(${precmd_functions:#__statusbar_report_cwd} __statusbar_report_cwd)
+    \\chpwd_functions=(${chpwd_functions:#__statusbar_report_cwd} __statusbar_report_cwd)
+    \\
+;
+
+const fish_cwd_init =
+    \\# Replacing the function also replaces its event registrations.
+    \\functions -e __statusbar_report_cwd
+    \\function __statusbar_report_cwd --on-event fish_prompt --on-variable PWD
+    \\  set -l saved_status $status
+    \\  set -l encoded (string escape --style=url -- "$PWD" | string replace -a '%2F' '/')
+    \\  printf '\033]7;file://%s%s\033\\' "$hostname" "$encoded" 2>/dev/null >/dev/tty
+    \\  return $saved_status
+    \\end
+    \\
+;
+
 const zsh_init =
     \\# statusbar integration for zsh: eval "$(statusbar init zsh)"
     \\#
     \\# Runs starship's normal prompt and splits it: every line but the last goes
     \\# to the bar's left slot, and the last line, the prompt character, stays in
     \\# the terminal. A one-line prompt stays whole and leaves the bar alone.
-    \\if (( $+commands[starship] )); then
+    \\if (( $+commands[starship] && ! @SLOT_VALID@ )); then
+    \\  print -u2 -- 'statusbar: --starship-slot does not exist in this session'
+    \\elif (( $+commands[starship] )); then
     \\  __statusbar_prompt() {
     \\    local out rest newline
     \\    out=$(STARSHIP_SHELL=zsh starship prompt --terminal-width="$COLUMNS" --keymap="${KEYMAP:-}" --status="${STARSHIP_CMD_STATUS:-}" --pipestatus="${STARSHIP_PIPE_STATUS[*]:-}" --cmd-duration="${STARSHIP_DURATION:-}" --jobs="$STARSHIP_JOBS_COUNT")
@@ -272,7 +317,7 @@ const zsh_init =
     \\    setopt prompt_subst
     \\    PROMPT='$(__statusbar_prompt)'
     \\  }
-    \\  precmd_functions+=(__statusbar_setup)
+    \\  precmd_functions=(${precmd_functions:#__statusbar_setup} __statusbar_setup)
     \\fi
     \\
 ;
@@ -283,7 +328,9 @@ const fish_init =
     \\# Load this after `starship init fish | source`. Fish has a prompt
     \\# function rather than Bash-style traps, so replace Starship's prompt
     \\# renderer with one that moves all but its final line into the bar.
-    \\if type -q starship
+    \\if command -q starship; and test @SLOT_VALID@ = 0
+    \\  printf '%s\n' 'statusbar: --starship-slot does not exist in this session' >&2
+    \\else if command -q starship
     \\  function fish_prompt
     \\    set -l statusbar_status $status
     \\    set -l statusbar_pipestatus $pipestatus

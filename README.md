@@ -54,6 +54,10 @@ To put Starship's prompt in the bar, add this to `~/.zshrc`:
 eval "$(statusbar init zsh)"
 ```
 
+Initialization also reports the current directory for the terminal title.
+Use `--report-cwd=false` if another integration already does this, or
+`--starship=false` for directory reporting alone.
+
 Fish uses its native prompt function; put these after one another in
 `~/.config/fish/config.fish`:
 

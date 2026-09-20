@@ -188,6 +188,10 @@ and language versions—into a bar slot:
 eval "$(statusbar init zsh)"
 ```
 
+This also reports your current directory for the terminal title. Both features
+are enabled by default. Add `--report-cwd=false` if another integration already
+reports directories, or `--starship=false` to use only directory reporting.
+
 For Fish, initialize Starship first:
 
 ```fish

@@ -18,6 +18,11 @@ Add one line to `~/.zshrc`:
 eval "$(statusbar init zsh)"
 ```
 
+Initialization also reports your working directory with OSC 7, allowing
+statusbar to update the terminal title. Add `--report-cwd=false` if another
+integration already reports it. Both features default to enabled; use
+`--starship=false` to keep only directory reporting.
+
 By default the prompt details go to slot 3, the left side of row 2. Select
 another existing slot, including a right-side slot, with:
 

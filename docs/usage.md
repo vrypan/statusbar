@@ -3,7 +3,7 @@
 ```
 statusbar [run] [options] [-- COMMAND...]
 statusbar set <N> [TEXT...]
-statusbar init <zsh|fish> [--starship-slot N]
+statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
 statusbar config [--path] [--default | --config PATH]
 statusbar completion <bash|zsh|fish>
 ```
@@ -40,10 +40,21 @@ session. See [set.md](set.md).
 
 ## `init`
 
-`statusbar init zsh` or `statusbar init fish` prints integration that moves
-Starship's prompt into slot 3. `--starship-slot N` selects another slot. Zsh
+`statusbar init zsh` or `statusbar init fish` prints shell integration that
+reports the working directory with OSC 7 and moves Starship's prompt into
+slot 3 when Starship is available. Both features default to `true`. Zsh
 uses `eval "$(statusbar init zsh)"`; Fish uses `statusbar init fish | source`
 after Starship's own initialization. See [starship.md](starship.md).
+
+Use `--starship=false` for directory reporting alone, or `--report-cwd=false`
+if another integration already reports directories. `--starship-slot N`
+selects another existing slot; it cannot be combined with `--starship=false`.
+Slot availability is checked when the generated code finds Starship. Directory
+reporting works independently, even with one bar row. Disabling both features
+prints nothing, as does running `init` outside a statusbar session.
+
+Reports are sent to the controlling terminal when the directory changes and
+before each prompt. Repeating initialization does not duplicate these hooks.
 
 ## `config`
 
@@ -116,11 +127,16 @@ sections shows `date` the same way.
 ## Terminal title
 
 When the child shell reports its working directory with OSC 7, statusbar
-forwards that report and sets the terminal title from it. Local directories
-appear as their decoded absolute path, such as `/Users/alice/project`. Remote
-reports include the host, such as `server.example:/srv/project`.
+forwards that full report and sets a shortened terminal title from it, following
+zsh's `%3~`: the local home directory becomes `~`, then only the last three
+path components are shown. For example, `~/Devel/statusbar` stays as is, while
+`~/Devel/statusbar/src` becomes `Devel/statusbar/src`. Remote reports retain the
+host prefix, such as `server.example:/srv/project`, without substituting the
+local home directory. Shell-specific named-directory aliases are not expanded.
 
-This needs shell or terminal integration that emits OSC 7. Malformed,
+`statusbar init zsh|fish` enables OSC 7 reporting by default. Other shell or
+terminal integrations can also emit it; disable statusbar's reporter with
+`--report-cwd=false` to avoid duplicates. Malformed,
 unsupported and oversized reports are still forwarded but do not change the
 derived title. A later title set by the child remains authoritative in normal
 output order. OSC 7 currently affects only the title; it does not change the

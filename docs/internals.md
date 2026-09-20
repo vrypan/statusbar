@@ -30,8 +30,10 @@ shell
   byte-for-byte visible to the terminal. A valid `file://` or
   `kitty-shell-cwd://` URI is decoded into a safe OSC 2 terminal title and
   inserted immediately after the report, preserving its order with later
-  child-provided titles. Local titles are absolute paths; remote titles use
-  `host:path`. Invalid reports cannot inject controls and produce no title.
+  child-provided titles. Titles show the last three path components, with the
+  local home directory abbreviated to `~` before shortening; remote titles
+  retain a `host:` prefix. The original directory report stays complete.
+  Invalid reports cannot inject controls and produce no title.
   This display feature does not alter status-command environments or working
   directories.
 - The bar is painted with autowrap off, so text that the terminal draws wider

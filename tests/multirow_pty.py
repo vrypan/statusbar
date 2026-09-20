@@ -16,6 +16,7 @@ import sys
 import tempfile
 import termios
 import time
+import urllib.parse
 
 
 def resize(fd, rows, cols=80):
@@ -130,8 +131,10 @@ def check_osc7_titles(binary):
     remote_title = b"\x1b]2;server.example:/srv/project\x1b\\"
     malformed = b"\x1b]7;file:///bad%zz\x07"
     oversized = b"\x1b]7;file:///" + (b"x" * 4097) + b"\x07"
-    payload = local + child_title + remote + malformed + oversized
-    expected = local + local_title + child_title + remote + remote_title + malformed + oversized
+    deep = b"\x1b]7;file:///one/two/three/four\x07"
+    deep_title = b"\x1b]2;two/three/four\x1b\\"
+    payload = local + child_title + remote + malformed + oversized + deep
+    expected = local + local_title + child_title + remote + remote_title + malformed + oversized + deep + deep_title
 
     argv = [
         binary,
@@ -171,8 +174,8 @@ def check_zsh(binary):
         [binary, "init", "zsh"], env=invalid_env,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
     )
-    assert invalid.returncode == 2
-    assert invalid.stdout == b"", "invalid init must not replace the prompt"
+    assert invalid.returncode == 0
+    assert b"__statusbar_report_cwd" in invalid.stdout
 
     zero_env = env.copy()
     zero_env["STATUSBAR_LINES"] = "0"
@@ -251,6 +254,64 @@ def check_fish(binary):
         assert b"one%literal" in data, data
 
     print("fish integration passed")
+
+
+def check_init_features(binary):
+    env = os.environ.copy()
+    env["STATUSBAR_LINES"] = "1"
+    for shell in ("zsh", "fish"):
+        for flags in (("--starship=false", "--report-cwd=false"),):
+            result = subprocess.run([binary, "init", shell, *flags], env=env, capture_output=True)
+            assert result.returncode == 0 and result.stdout == b"", result
+        for flags in (("--starship=false", "--starship-slot=1"), ("--report-cwd=wrong",)):
+            result = subprocess.run([binary, "init", shell, *flags], env=env, capture_output=True)
+            assert result.returncode == 2 and result.stdout == b"", result
+        result = subprocess.run([binary, "init", shell, "--report-cwd=false"], env=env, capture_output=True)
+        assert result.returncode == 0 and b"__statusbar_report_cwd" not in result.stdout
+
+        executable = shutil.which(shell)
+        if executable is None:
+            continue
+        # Without Starship, default initialization still works in a one-row
+        # session. Generation must not use the generator's own PATH to decide.
+        generated = subprocess.run([binary, "init", shell], env=env, capture_output=True, check=True).stdout.decode()
+        if shell == "zsh":
+            script = 'PATH=/nonexistent; ' + generated + '\n__statusbar_report_cwd'
+            args = [executable, "-f", "-c", script]
+        else:
+            script = 'set -gx PATH /nonexistent; ' + generated + '\nemit fish_prompt'
+            args = [executable, "-N", "-c", script]
+        code, data = capture_pty(args, env)
+        assert code == 0 and b"\x1b]7;file://" in data, data
+        assert b"does not exist" not in data and b"SetUserVar=" not in data, data
+        with tempfile.TemporaryDirectory(prefix="statusbar-cwd-") as directory:
+            target = os.path.join(directory, "space % café\ncontrol")
+            os.mkdir(target)
+            invocation = shlex.quote(binary) + " init " + shell + " --starship=false"
+            if shell == "zsh":
+                script = (
+                    f'eval "$({invocation})"; eval "$({invocation})"; '
+                    'cd -- "$1"; __statusbar_report_cwd; '
+                    'print -r -- "hooks:${precmd_functions[*]}:${chpwd_functions[*]}"'
+                )
+                argv = [executable, "-f", "-c", script, "zsh", target]
+            else:
+                script = (
+                    f"{invocation} | source; {invocation} | source; "
+                    'cd -- "$argv[1]"; emit fish_prompt'
+                )
+                argv = [executable, "-N", "-c", script, target]
+            code, data = capture_pty(argv, env)
+            assert code == 0, data
+            reports = re.findall(rb"\x1b\]7;file://[^/]*(/.*?)\x1b\\", data)
+            assert len(reports) == 2, data
+            for path in reports:
+                assert urllib.parse.unquote_to_bytes(path.decode()) == target.encode(), (path, target)
+                assert b"\n" not in path and b" " not in path and b"%25" in path, path
+            assert b"SetUserVar=" not in data, data
+            if shell == "zsh":
+                assert b"hooks:__statusbar_report_cwd:__statusbar_report_cwd" in data, data
+    print("independent init features and repeatable encoded CWD hooks passed")
 
 
 def stop(pid, fd):
@@ -517,6 +578,7 @@ def main():
     check_osc7_titles(binary)
     check_zsh(binary)
     check_fish(binary)
+    check_init_features(binary)
     check_tracking(binary)
     check_tracking(binary, colors=True)
     check_geometry_results_do_not_highlight(binary)

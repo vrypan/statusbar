@@ -268,9 +268,10 @@ const TerminalSink = struct {
     broken: bool = false,
     hostname: [256]u8 = undefined,
     hostname_len: usize = 0,
+    home_directory: []const u8 = "",
 
     fn init(io: std.Io) TerminalSink {
-        var self: TerminalSink = .{ .io = io };
+        var self: TerminalSink = .{ .io = io, .home_directory = sys.env("HOME") orelse "" };
         if (sys.hostName(&self.hostname)) |name| self.hostname_len = name.len;
         return self;
     }
@@ -290,7 +291,7 @@ const TerminalSink = struct {
 
     fn setDirectoryTitle(self: *TerminalSink, uri: []const u8) void {
         var title_buf: [4096]u8 = undefined;
-        const title = osc7.title(uri, self.hostname[0..self.hostname_len], &title_buf) orelse return;
+        const title = osc7.title(uri, self.hostname[0..self.hostname_len], self.home_directory, &title_buf) orelse return;
         self.write("\x1b]2;");
         self.write(title);
         self.write("\x1b\\");

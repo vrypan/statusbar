@@ -3,7 +3,7 @@
 //!
 //!     statusbar [run] [options] [-- COMMAND...]
 //!     statusbar set <N> [TEXT...]
-//!     statusbar init <zsh|fish> [--starship-slot N]
+//!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
 //!     statusbar config [--path] [--default | --config PATH]
 //!     statusbar completion <bash|zsh|fish>
 
@@ -85,12 +85,16 @@ const commands = [_]zecli.CommandSpec{
     },
     .{
         .name = "init",
-        .description = "Print shell code that moves starship's prompt into the bar",
-        .usage = "statusbar init <zsh|fish> [--starship-slot N]",
+        .description = "Print shell integration for CWD reporting and Starship",
+        .usage = "statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]",
         .arguments = &.{
             .{ .name = "SHELL", .description = "zsh or fish", .required = true, .completion = .{ .values = &.{ "zsh", "fish" } } },
         },
-        .flags = &.{.{ .name = "starship-slot", .value = .string, .value_name = "N", .description = "Slot for Starship prompt text (default: 3)" }},
+        .flags = &.{
+            .{ .name = "starship", .value = .bool_required, .description = "Move Starship prompt details into the bar (default: true)" },
+            .{ .name = "report-cwd", .value = .bool_required, .description = "Report the shell directory with OSC 7 (default: true)" },
+            .{ .name = "starship-slot", .value = .string, .value_name = "N", .description = "Slot for Starship prompt text (default: 3)" },
+        },
         .double_dash = .positionals,
         .extra_help = "Outside a statusbar session, prints nothing.\n",
     },
