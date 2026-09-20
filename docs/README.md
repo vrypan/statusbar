@@ -102,8 +102,8 @@ interval = 1
 ```
 
 The first result establishes a baseline; identical later results do nothing.
-With the `[highlight]` section from the built-in config, changes play a warm
-color pulse. Without that section, the fallback is a 500 ms bold flash. The
+By default, changes play two smooth pulses over 2.4 seconds, derived from each
+grapheme's own foreground and background colors, using your terminal's palette. The
 marked region is highlighted; its label and other content keep their normal
 appearance. Several regions in one slot can change width and pulse independently:
 
@@ -111,13 +111,26 @@ appearance. Several regions in one slot can change width and pulse independently
 left = "CPU #[track]#(cpu)#[notrack]  MEM #[track]#(mem)#[notrack]"
 ```
 
-The built-in effect warms the foreground and background through twelve steps,
-then restores every cell's exact original style. Copy the default config to
-adjust its colors or speed:
+The background smoothly moves toward the text's lightness, then returns:
+dark backgrounds brighten and light backgrounds darken. The foreground adjusts
+alongside it, and a contrast safeguard limits the pulse to keep text readable.
+Gray text on a dark background sweeps toward near-white; on a light background,
+the text moves toward near-black. Colored text keeps its hue where possible.
+Between peaks, the highlight softens without returning to the original styling;
+the original colors return only when the whole animation ends.
+Styles and hyperlinks are preserved. If the terminal cannot report a needed
+color, that grapheme uses a bold fallback.
 
-```sh
-statusbar config --default > ~/.config/statusbar/config
+To try this with an existing custom highlight sequence, add this to its
+`[highlight]` section; the old sequence is retained but ignored:
+
+```ini
+effect = relative
+pulses = 2
 ```
+
+Use `pulses = 1` for 1.2 seconds or `pulses = 3` for 3.6 seconds. Each pulse
+keeps the same pace; more pulses give you longer to notice the changed value.
 
 See [Highlight changes](config.md#highlight-changes) for the complete behavior
 and `[highlight]` reference.

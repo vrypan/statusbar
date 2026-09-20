@@ -57,7 +57,7 @@ Internal slot, region, and column-range operations can patch and restore styles
 without changing content. Patches survive unrelated-row updates, equivalent content
 rebuilds, and damage repair. A semantic base change resets that row's patches;
 resize rebuilds the grid. Each tracked region has a monotonic deadline
-and applied-step index. The default effect is bold for 500 ms;
+and applied-step index. The default effect is two adaptive color pulses over 2.4 seconds;
 `[highlight]` can instead specify up to 16 background colors and either a
 constant foreground or a matching foreground sequence. Each step is derived
 from elapsed time, so delayed steps are skipped. Patches are reapplied after a
@@ -69,6 +69,40 @@ results and clock changes may start a region highlight after every command used
 in the slot has produced a first result. Step boundaries and expiry share one proxy
 poll deadline and one composition pass. Within-row selective writes are not
 implemented yet.
+
+The adaptive effect samples OKLab lightness at 30 ms intervals. It derives
+each pulse's phase from the absolute step modulo 40, without restarting the
+effect deadline. Interior valleys stay at 45% of peak intensity, with smooth
+joins; only the first rise and final fall reach the base. The relative-only
+`pulses` setting accepts 1–3 repetitions. It derives foreground and background
+from each base style, accounts for reverse video,
+reduces chroma to remain in the sRGB gamut, and checks contrast after conversion.
+The background moves toward the original foreground lightness (at most halfway),
+while the foreground moves in the same direction to compensate. A smooth rise
+and fall starts at the base colors with no initial dip. Peak OKLab lightness
+adjustments are at most 0.20 for the background. The foreground sweeps toward
+OKLab lightness 0.98 on dark backgrounds or 0.10 on light backgrounds, without
+pulling already brighter/darker text inward. Each color pair's complete sampled
+animation is checked to retain at least 75% of its original contrast and a
+4.5:1 floor (or the original ratio when already below that floor). Background
+movement is reduced first; foreground movement is reduced only if necessary.
+This selects one range for the whole animation, not an independent correction
+each frame. A bounded 16-entry cache keys ranges by resolved foreground,
+background, and pulse count, so palette changes cannot reuse stale ranges.
+Repeated adjacent styles reuse the same per-frame result. Both wide-glyph
+cells get identical styles; the base is never modified. Unknown terminal
+colors use a bold fallback, and expiry restores the original color tokens.
+
+Startup sends read-only OSC 4/10/11 palette queries before the child is forked,
+sharing the bounded cursor-query wait. A 128-byte streaming filter consumes
+only valid replies to outstanding queries; keystrokes and unrelated, malformed,
+duplicate, or oversized sequences pass through. A brief grace period accepts
+late replies. The child's first OSC relinquishes all remaining query ownership
+because OSC responses have no request IDs. Palette replies may recompose an
+existing effect but never activate one. The palette is cached for the session.
+
+Protocol reference: [xterm control sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html).
+Color-space reference: [OKLab](https://bottosson.github.io/posts/oklab/).
 
 Static template markers compile to ordinal boundaries. Source rows own raw-byte
 spans; markup expansion and ANSI filtering map those boundaries into graphemes.

@@ -140,7 +140,14 @@ content-update path.
 The scheduler is demand-driven. With no active effects or content changes,
 there is no animation tick and no idle rendering work. Discrete effects, such
 as the configured highlight color sequence, schedule their next color step.
-Future continuous effects may use a shared frame cadence while they are active.
+The adaptive color pulse samples a smooth curve every 30 ms while it is active.
+Its color range is checked before playback and cached per resolved color pair
+and pulse count. Frame sampling does not independently adjust contrast limits:
+that would introduce brightness jumps into an otherwise smooth curve. Repeated
+pulses stay within the animated range between peaks and restore the base only
+at the end of the complete effect.
+Palette discovery can update color resolution without starting or restarting
+an effect; every sample still derives from the current base colors.
 The cadence is an implementation policy, not a terminal refresh rate.
 
 Starting an effect makes its first appearance eligible immediately. Later

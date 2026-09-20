@@ -25,11 +25,12 @@ const bar = @import("bar.zig");
 const config = @import("config.zig");
 const markup = @import("markup.zig");
 const Source = @import("source.zig").Source;
+const PaletteProbe = @import("terminal_palette.zig").Probe;
 
 const io_buf_size = 64 * 1024;
 const pending_input_capacity = 64 * 1024;
 /// Room a translated read may need beyond its own length.
-const input_headroom = 64;
+const input_headroom = 256;
 
 /// A paint waits for the child to pause this long, so it lands between the
 /// child's own updates rather than inside one.
@@ -340,6 +341,8 @@ const Proxy = struct {
     paint_requested_ms: ?i64 = null,
     last_output_ms: i64 = 0,
     last_input_ms: i64 = 0,
+    palette_probe: PaletteProbe = .{},
+    palette_deadline_ms: ?i64 = null,
 
     fn now(self: *const Proxy) i64 {
         return std.Io.Clock.now(.awake, self.io).toMilliseconds();
@@ -352,8 +355,9 @@ const Proxy = struct {
         self.terminal = .{ .io = self.io };
         self.output.damaged = true;
         const bar_rows = self.layout.bar;
+        const cursor = if (bar_rows > 0 or self.renderer.highlight.relative()) self.queryCursorRow() else null;
         if (bar_rows > 0) {
-            const row = @min(self.queryCursorRow() orelse outer_rows, outer_rows);
+            const row = @min(cursor orelse outer_rows, outer_rows);
             const up = bar_rows -| (outer_rows - row);
             var buf: [64]u8 = undefined;
             self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H", .{outer_rows}) catch "");
@@ -379,27 +383,60 @@ const Proxy = struct {
     /// Asks the terminal where the cursor is. Keystrokes that arrive in the
     /// meantime are kept for the child.
     fn queryCursorRow(self: *Proxy) ?u16 {
+        if (self.renderer.highlight.relative()) {
+            var queries: [4096]u8 = undefined;
+            var writer = std.Io.Writer.fixed(&queries);
+            self.palette_probe.begin(&writer) catch return null;
+            sys.writeAll(self.io, stdout_fd, writer.buffered()) catch return null;
+            // A short grace period handles late replies without blocking the
+            // child. Its first OSC relinquishes outstanding reply ownership.
+            self.palette_deadline_ms = self.now() + 1500;
+        }
         sys.writeAll(self.io, stdout_fd, "\x1b[6n") catch return null;
-        var buf: [256]u8 = undefined;
+        var buf: [4608]u8 = undefined;
         var len: usize = 0;
         const deadline = self.now() + cursor_query_timeout_ms;
-        while (len < buf.len) {
+        while (self.pending_input.room() > buf.len + input_headroom) {
             const remaining = deadline - self.now();
             if (remaining <= 0) break;
             var fds = [_]posix.pollfd{.{ .fd = stdin_fd, .events = posix.POLL.IN, .revents = 0 }};
             const ready = posix.poll(&fds, @intCast(remaining)) catch break;
             if (ready == 0) break;
-            const n = sys.read(stdin_fd, buf[len..]) catch break;
+            var raw: [4096]u8 = undefined;
+            const n = sys.read(stdin_fd, &raw) catch break;
             if (n == 0) break;
-            len += n;
+            var writer = std.Io.Writer.fixed(buf[len..]);
+            self.palette_probe.feed(raw[0..n], &self.renderer.palette, &WriterSink{ .w = &writer });
+            len += writer.end;
             if (findCursorReport(buf[0..len])) |report| {
                 self.pending_input.write(buf[0..report.start]);
                 self.pending_input.write(buf[report.end..len]);
                 return report.row;
             }
+            if (len > 128) {
+                self.pending_input.write(buf[0 .. len - 128]);
+                std.mem.copyForwards(u8, buf[0..128], buf[len - 128 .. len]);
+                len = 128;
+            }
         }
         self.pending_input.write(buf[0..len]);
         return null;
+    }
+
+    fn feedTerminalInput(self: *Proxy, bytes: []const u8) void {
+        // Preserve read batching for Input's CSI parser: the palette filter
+        // can release an ESC and its following byte in separate writes.
+        var buf: [4096 + input_headroom]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&buf);
+        self.palette_probe.feed(bytes, &self.renderer.palette, &WriterSink{ .w = &writer });
+        self.input.feed(writer.buffered(), &self.pending_input);
+    }
+    fn flushPalette(self: *Proxy, stop: bool) void {
+        var buf: [128]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&buf);
+        const sink = WriterSink{ .w = &writer };
+        if (stop) self.palette_probe.stop(&sink) else self.palette_probe.flush(&sink);
+        self.input.feed(writer.buffered(), &self.pending_input);
     }
 
     fn requestPaint(self: *Proxy, now_ms: i64) void {
@@ -457,9 +494,17 @@ const Proxy = struct {
             var now_ms = self.now();
             var timeout = minTimeout(self.paintTimeout(now_ms), self.source.timeout(now_ms));
             timeout = minTimeout(timeout, self.renderer.nextFrameTimeout(now_ms));
+            if (self.palette_deadline_ms) |deadline| timeout = minTimeout(timeout, @max(deadline - now_ms, 0));
+            if (self.palette_probe.holding()) timeout = minTimeout(timeout, @max(self.last_input_ms + input_hold_ms - now_ms, 0));
             if (self.input.holding()) timeout = minTimeout(timeout, @max(self.last_input_ms + input_hold_ms - now_ms, 0));
             _ = posix.poll(fds[0 .. 3 + command_fds.len], @intCast(@min(timeout, std.math.maxInt(c_int)))) catch return;
             now_ms = self.now();
+            if (self.palette_deadline_ms) |deadline| {
+                if (now_ms >= deadline) {
+                    self.flushPalette(true);
+                    self.palette_deadline_ms = null;
+                }
+            }
             if (sig.revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
                 try self.drainSignals(sig_r, pid, now_ms);
             }
@@ -478,6 +523,11 @@ const Proxy = struct {
                             // asking again would only cost an EAGAIN.
                             if (n < out_buf.len) drained = drain_limit;
                             self.output.feed(out_buf[0..n], &self.terminal);
+                            self.palette_probe.observeChild(out_buf[0..n]);
+                            if (self.palette_probe.remaining == 0) {
+                                self.flushPalette(false);
+                                self.palette_deadline_ms = null;
+                            }
                             self.last_output_ms = now_ms;
                             if (self.output.damaged) {
                                 // Repaint in the same write as the erase, so
@@ -537,11 +587,12 @@ const Proxy = struct {
                 if (n == 0) {
                     stdin_open = false;
                 } else {
-                    self.input.feed(in_buf[0..n], &self.pending_input);
+                    self.feedTerminalInput(in_buf[0..n]);
                     self.last_input_ms = now_ms;
                 }
-            } else if (self.input.holding() and now_ms - self.last_input_ms >= input_hold_ms) {
-                self.input.flush(&self.pending_input);
+            } else if (now_ms - self.last_input_ms >= input_hold_ms) {
+                self.flushPalette(false);
+                if (self.input.holding()) self.input.flush(&self.pending_input);
             }
 
             if (in.fd >= 0 and in.revents & (posix.POLL.ERR | posix.POLL.NVAL) != 0) stdin_open = false;
@@ -562,7 +613,8 @@ const Proxy = struct {
         self.layout = Layout.of(ws, self.lines);
         sys.setWinsize(self.master, &self.layout.child) catch {};
         self.output.resize(self.layout.bar, self.layout.child.row);
-        self.input = .{ .bar = self.layout.bar, .rows = self.layout.child.row };
+        self.input.bar = self.layout.bar;
+        self.input.rows = self.layout.child.row;
         self.source.setColumns(ws.col);
         self.source.refreshGeometry(now_ms);
         try self.renderer.resize(self.layout.bar, self.layout.cols);
@@ -619,6 +671,24 @@ test "cursor reports are found among keystrokes" {
     try std.testing.expectEqual(@as(usize, 5), r.start);
     try std.testing.expectEqual(@as(usize, 13), r.end);
     try std.testing.expect(findCursorReport("\x1b[12;40") == null);
+}
+
+test "palette filtering preserves CSI translation across fragmented input" {
+    var renderer = try bar.Renderer.init(std.testing.allocator);
+    defer renderer.deinit();
+    var proxy: Proxy = undefined;
+    proxy.renderer = &renderer;
+    proxy.palette_probe = .{};
+    proxy.pending_input = .{};
+    proxy.input = .{ .bar = 2, .rows = 22 };
+    var buf: [4096]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try proxy.palette_probe.begin(&writer);
+    proxy.feedTerminalInput("\x1b");
+    proxy.feedTerminalInput("[8;24;80t\x1b]11;rgb:1111/2222/3333\x1b");
+    proxy.feedTerminalInput("\\keys\x1b[<0;3;24M");
+    try std.testing.expectEqualStrings("\x1b[8;22;80tkeys", proxy.pending_input.pending());
+    try std.testing.expectEqualDeep(@import("terminal_palette.zig").Rgb{ 17, 34, 51 }, renderer.palette.background.?);
 }
 
 test "layout places the bar and gives it up on tiny terminals" {

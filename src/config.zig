@@ -87,6 +87,8 @@ pub const Command = struct {
 
 pub const Highlight = struct {
     pub const max_steps = 16;
+    effect: enum { auto, relative, sequence, bold } = .auto,
+    pulses: u8 = 2,
     backgrounds: [max_steps]styled.Color = undefined,
     backgrounds_len: u8 = 0,
     foreground: ?styled.Color = null,
@@ -94,13 +96,23 @@ pub const Highlight = struct {
     foregrounds_len: u8 = 0,
     step_ms: i64 = 500,
 
+    pub fn relative(self: Highlight) bool {
+        return self.effect == .relative or (self.effect == .auto and self.backgrounds_len == 0 and self.foregrounds_len == 0 and self.foreground == null);
+    }
+    pub fn frameMs(self: Highlight) i64 {
+        return if (self.relative()) @import("relative_highlight.zig").step_ms else self.step_ms;
+    }
+
     pub fn steps(self: Highlight) u8 {
+        if (self.relative()) return @import("relative_highlight.zig").steps * self.pulses;
+        if (self.effect == .bold) return 1;
         return @max(self.backgrounds_len, self.foregrounds_len, 1);
     }
     pub fn duration(self: Highlight) i64 {
-        return self.step_ms * self.steps();
+        return self.frameMs() * self.steps();
     }
     pub fn patch(self: Highlight, step: usize) styled.Patch {
+        if (self.effect == .bold) return .{ .bold = true };
         return .{
             .fg = if (self.foregrounds_len > 0) self.foregrounds[step] else self.foreground,
             .bg = if (self.backgrounds_len > 0) self.backgrounds[step] else null,
@@ -273,7 +285,13 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
                 config.colors_len += 1;
             },
             .highlight => {
-                if (eql(key, "backgrounds")) {
+                if (eql(key, "effect")) {
+                    config.highlight.effect = std.meta.stringToEnum(@FieldType(Highlight, "effect"), value) orelse return fail(diag, "highlight effect must be auto, relative, sequence or bold");
+                } else if (eql(key, "pulses")) {
+                    const pulses = std.fmt.parseInt(u8, value, 10) catch return fail(diag, "highlight pulses must be between 1 and 3");
+                    if (pulses < 1 or pulses > 3) return fail(diag, "highlight pulses must be between 1 and 3");
+                    config.highlight.pulses = pulses;
+                } else if (eql(key, "backgrounds")) {
                     config.highlight.backgrounds_len = 0;
                     var colors = std.mem.splitScalar(u8, value, ',');
                     while (colors.next()) |color| {
@@ -297,7 +315,7 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
                     if (!(secs >= 0.05 and secs <= 5)) return fail(diag, "highlight step must be between 0.05 and 5 seconds");
                     config.highlight.step_ms = @intFromFloat(secs * 1000);
                     highlight_step_set = true;
-                } else return fail(diag, "unknown highlight key; expected backgrounds, foreground, foregrounds or step");
+                } else return fail(diag, "unknown highlight key; expected effect, pulses, backgrounds, foreground, foregrounds or step");
             },
             .line => |n| {
                 const target = &raw[n];
@@ -738,6 +756,38 @@ test "old command tracking reports migration guidance" {
     try std.testing.expect(std.mem.indexOf(u8, diag.message, "#[track]...#[notrack]") != null);
 }
 
+test "adaptive effect is default and explicit selection preserves custom sequences" {
+    var diag: Diagnostic = .{};
+    var cfg = try parse(std.testing.allocator, "[highlight]\neffect = relative\nbackgrounds = #112233\n", &diag);
+    defer cfg.deinit();
+    try std.testing.expect(cfg.highlight.relative());
+    try std.testing.expectEqual(@as(i64, 2400), cfg.highlight.duration());
+    var bold = try parse(std.testing.allocator, "[highlight]\neffect = bold\n", &diag);
+    defer bold.deinit();
+    try std.testing.expect(!bold.highlight.relative());
+    try std.testing.expectEqual(@as(i64, 500), bold.highlight.duration());
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[highlight]\neffect = sparkle\n", &diag));
+}
+
+test "relative pulse counts are bounded without changing legacy effects" {
+    var diag: Diagnostic = .{};
+    for (1..4) |count| {
+        const text = try std.fmt.allocPrint(std.testing.allocator, "[highlight]\npulses = {d}\n", .{count});
+        defer std.testing.allocator.free(text);
+        var cfg = try parse(std.testing.allocator, text, &diag);
+        defer cfg.deinit();
+        try std.testing.expectEqual(@as(i64, @intCast(count * 1200)), cfg.highlight.duration());
+    }
+    for ([_][]const u8{ "0", "4", "256", "-1", "1.5", "many" }) |value| {
+        const text = try std.fmt.allocPrint(std.testing.allocator, "[highlight]\npulses = {s}\n", .{value});
+        defer std.testing.allocator.free(text);
+        try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, text, &diag));
+    }
+    var legacy = try parse(std.testing.allocator, "[highlight]\neffect = bold\npulses = 3\n", &diag);
+    defer legacy.deinit();
+    try std.testing.expectEqual(@as(i64, 500), legacy.highlight.duration());
+}
+
 test "highlight colors and durations are bounded and validated" {
     var diag: Diagnostic = .{};
     var cfg = try parse(std.testing.allocator, "[highlight]\nbackgrounds = #9e7b20, #70591d, #44391c\nforeground = #fff4cc\nstep = 0.15\n", &diag);
@@ -749,7 +799,8 @@ test "highlight colors and durations are bounded and validated" {
     try std.testing.expectEqual(@as(?bool, null), cfg.highlight.patch(0).bold);
     var defaults = try parse(std.testing.allocator, "", &diag);
     defer defaults.deinit();
-    try std.testing.expectEqual(@as(i64, 500), defaults.highlight.duration());
+    try std.testing.expectEqual(@as(i64, 2400), defaults.highlight.duration());
+    try std.testing.expect(defaults.highlight.relative());
     try std.testing.expectEqual(@as(?bool, true), defaults.highlight.patch(0).bold);
     var foreground = try parse(std.testing.allocator, "[highlight]\nforeground = #010203\n", &diag);
     defer foreground.deinit();

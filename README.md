@@ -10,7 +10,7 @@ working.
 - Configure the bar with templates: text, colors, strftime clocks and shell
   commands, each on its own refresh interval.
 - Wrap values in `#[track]...#[notrack]` to pulse just those regions when
-  their displayed content changes.
+  their displayed content changes, using their own colors and terminal palette.
 - Update it from your scripts with `statusbar set`.
 - Optionally move Starship's prompt details into it while keeping the prompt
   character in the terminal.

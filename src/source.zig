@@ -488,6 +488,7 @@ test "partial startup geometry and same-text overrides establish silent region b
     var lens: [2]?usize = @splat(null);
     var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = &cfg, .lines = 1, .content = content, .exec_output = &.{}, .overrides = &overrides, .override_lens = &lens };
     var r = try bar.Renderer.init(gpa);
+    r.highlight.effect = .bold;
     defer r.deinit();
     var styles = [_][]const u8{""};
     var rules = [_]?[]const u8{null};

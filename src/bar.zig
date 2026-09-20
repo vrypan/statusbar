@@ -98,6 +98,8 @@ pub const Look = struct {
 
 pub const cells = @import("cells.zig");
 const styled = @import("styled_text.zig");
+const relative_highlight = @import("relative_highlight.zig");
+const terminal_palette = @import("terminal_palette.zig");
 
 pub const State = struct {
     base: cells.Row = .{},
@@ -139,6 +141,9 @@ pub const Renderer = struct {
     parsed_rows: usize = 0,
     emitted_rows: usize = 0,
     highlight: @import("config.zig").Highlight = .{},
+    palette: terminal_palette.Palette = .{},
+    palette_revision: usize = 0,
+    pulse_cache: relative_highlight.Cache = .{},
 
     pub fn init(parent: std.mem.Allocator) !Renderer {
         const budget = try parent.create(cells.Budget);
@@ -350,7 +355,7 @@ pub const Renderer = struct {
         var result: i64 = -1;
         for (self.rows) |row| for (0..2) |side| for (row.highlight_until[side], 0..) |deadline, id| {
             if (deadline) |end| {
-                const next = if (row.highlight_step[side][id]) |step| @min(end, end - self.highlight.duration() + (@as(i64, step) + 1) * self.highlight.step_ms) else now_ms;
+                const next = if (row.highlight_step[side][id]) |step| @min(end, end - self.highlight.duration() + (@as(i64, step) + 1) * self.highlight.frameMs()) else now_ms;
                 const remaining = @max(next - now_ms, 0);
                 result = if (result < 0) remaining else @min(result, remaining);
             }
@@ -366,6 +371,16 @@ pub const Renderer = struct {
     /// Apply/expire appearance independently of source polling and repair.
     pub fn advanceHighlights(self: *Renderer, now_ms: i64) bool {
         var changed = false;
+        if (self.palette_revision != self.palette.revision) {
+            self.palette_revision = self.palette.revision;
+            if (self.highlight.relative()) for (self.rows) |*row| {
+                for (0..2) |side| for (0..16) |id| {
+                    if (row.highlight_until[side][id]) |deadline| {
+                        if (now_ms < deadline) row.highlight_step[side][id] = null;
+                    }
+                };
+            };
+        }
         for (self.rows, 0..) |*row, n| for (0..2) |side| for (0..16) |id| {
             const deadline = row.highlight_until[side][id] orelse continue;
             const target: cells.Target = .{ .region = .{ .owner = if (side == 0) .left else .right, .id = @intCast(id) } };
@@ -378,16 +393,33 @@ pub const Renderer = struct {
                 row.highlight_step[side][id] = null;
             } else {
                 const elapsed = self.highlight.duration() - (deadline - now_ms);
-                const step: u8 = @intCast(@divFloor(@max(elapsed, 0), self.highlight.step_ms));
+                const step: u8 = @intCast(@divFloor(@max(elapsed, 0), self.highlight.frameMs()));
                 if (row.highlight_step[side][id] == null or row.highlight_step[side][id].? != step) {
                     self.restore(n, target);
-                    self.patch(n, target, self.highlight.patch(step));
+                    if (self.highlight.relative()) self.relativePatch(n, side, @intCast(id), step) else self.patch(n, target, self.highlight.patch(step));
                     row.highlight_step[side][id] = step;
                     changed = true;
                 }
             }
         };
         return changed;
+    }
+
+    fn relativePatch(self: *Renderer, n: usize, side: usize, id: u4, step: u8) void {
+        const row = &self.rows[n];
+        const owner: cells.Owner = if (side == 0) .left else .right;
+        var previous: ?styled.Style = null;
+        var desired: styled.Style = undefined;
+        for (row.base.cells.items, 0..) |base, col| {
+            if (base.kind != .lead or base.owner != owner or base.region != id) continue;
+            if (previous == null or !styled.Style.eql(previous.?, base.style)) {
+                previous = base.style;
+                desired = self.pulse_cache.apply(base.style, &self.palette, step, self.highlight.pulses);
+            }
+            row.desired.cells.items[col].style = desired;
+            if (base.width == 2) row.desired.cells.items[col + 1].style = desired;
+        }
+        row.pending = true;
     }
 
     /// Samples all current temporary appearances into the desired frame.
@@ -889,6 +921,7 @@ test "right-region projection uses final left capacity and hidden rows baseline 
     var rules = [_]?[]const u8{null};
     const look: Look = .{ .styles = &styles, .rules = &rules };
     var r = try Renderer.init(std.testing.allocator);
+    r.highlight.effect = .bold;
     defer r.deinit();
     try r.resize(1, 10);
     try setTestPair(&content, "a", "b", "abcX"); // Left is 5 columns; right gets 4.
@@ -916,6 +949,7 @@ test "region timers restart independently and empty values advance baselines" {
     var rules = [_]?[]const u8{"."};
     const look: Look = .{ .styles = &styles, .rules = &rules };
     var r = try Renderer.init(std.testing.allocator);
+    r.highlight.effect = .bold;
     defer r.deinit();
     try r.resize(1, 40);
     try setTestPair(&content, "", "", "right");
@@ -988,6 +1022,7 @@ test "region highlights expire restart and preserve base styling across repair a
     var rules = [_]?[]const u8{"·"};
     const look: Look = .{ .styles = &styles, .rules = &rules };
     var r = try Renderer.init(std.testing.allocator);
+    r.highlight.effect = .bold;
     defer r.deinit();
     try r.resize(1, 20);
     _ = setTestTracked(&content, "old\tright");
@@ -1108,4 +1143,47 @@ test "color sequence advances skips overdue steps restarts and restores original
     try std.testing.expect(r.rows[0].desired.visuallyEqual(r.rows[0].base));
     try std.testing.expectEqual(@as(i64, -1), r.highlightTimeout(1770));
     try std.testing.expect(!r.advanceHighlights(1771));
+}
+
+test "adaptive regions derive each grapheme from base and restore after palette updates" {
+    var content = try Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    r.palette.foreground = .{ 235, 225, 205 };
+    r.palette.background = .{ 30, 25, 20 };
+    r.palette.indexed[1] = .{ 160, 50, 70 };
+    r.palette.indexed[4] = .{ 70, 80, 170 };
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{"."};
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    try r.resize(1, 30);
+    _ = setTestTracked(&content, "initial\tright");
+    try r.relayout(&content, &look);
+    _ = setTestTracked(&content, "#[fg=red,italics]界#[fg=blue]b#[default] \tright");
+    try r.acceptContent(&content, &look);
+    r.highlightChange(0, 0, 100);
+    try std.testing.expect(r.compose(550));
+    try std.testing.expectEqualDeep(relative_highlight.apply(r.rows[0].base.cells.items[0].style, &r.palette, 15), r.rows[0].desired.cells.items[0].style);
+    try std.testing.expectEqualDeep(r.rows[0].desired.cells.items[0].style, r.rows[0].desired.cells.items[1].style);
+    try std.testing.expect(!std.meta.eql(r.rows[0].desired.cells.items[0].style.fg, r.rows[0].desired.cells.items[2].style.fg));
+    try std.testing.expect(r.rows[0].desired.cells.items[0].style.italic);
+    try std.testing.expectEqualDeep(r.rows[0].base.cells.items[29].style, r.rows[0].desired.cells.items[29].style);
+    const deadline = r.rows[0].highlight_until[0][0];
+    try r.resize(1, 35);
+    try r.relayout(&content, &look);
+    _ = r.compose(700);
+    try std.testing.expectEqual(deadline, r.rows[0].highlight_until[0][0]);
+    _ = r.compose(1300);
+    // Interior valleys retain the effect rather than flashing back to base.
+    try std.testing.expect(!r.rows[0].base.visuallyEqual(r.rows[0].desired));
+    try std.testing.expectEqualDeep(relative_highlight.applyRepeated(r.rows[0].base.cells.items[0].style, &r.palette, 40, 2), r.rows[0].desired.cells.items[0].style);
+    try std.testing.expectEqual(deadline, r.rows[0].highlight_until[0][0]);
+    _ = r.compose(1750);
+    try std.testing.expectEqualDeep(relative_highlight.applyRepeated(r.rows[0].base.cells.items[0].style, &r.palette, 55, 2), r.rows[0].desired.cells.items[0].style);
+    r.palette.revision += 1; // A late query reply coincides with expiry.
+    _ = r.compose(2500);
+    try std.testing.expect(r.rows[0].base.visuallyEqual(r.rows[0].desired));
+    try std.testing.expectEqual(@as(i64, -1), r.nextFrameTimeout(2500));
+    try std.testing.expectEqual(styled.Color.default, r.rows[0].desired.cells.items[3].style.bg);
 }

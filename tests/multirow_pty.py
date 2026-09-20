@@ -268,6 +268,8 @@ interval = 0.1
 """)
             if colors:
                 cfg.write("[highlight]\nbackgrounds = #9e7b20, #70591d, #44391c\nforegrounds = #fff4cc, #eedaae, #dcc290\nstep = 0.15\n")
+            else:
+                cfg.write("[highlight]\neffect = bold\n")
         pid, master = spawn([binary, "-c", config_path, "--", "/bin/sh", "-c", "sleep 10"])
         try:
             suffix = b"\x1b[0m\x1b8\x1b[?7h"
@@ -357,6 +359,88 @@ interval = 0.2
     print("geometry command results establish a silent baseline")
 
 
+def check_adaptive_palette(binary):
+    """Emulate terminal queries, including a subsequent child-owned query."""
+    with tempfile.TemporaryDirectory(prefix="statusbar-palette-") as folder:
+        value_path = os.path.join(folder, "value")
+        config_path = os.path.join(folder, "config")
+        with open(value_path, "w") as value:
+            value.write("one\n")
+        with open(config_path, "w") as cfg:
+            cfg.write(f"""[highlight]
+effect = relative
+[line.1]
+left = LABEL #[track]#[fg=red,bg=blue]#(value) #[default]D#[notrack] END
+[command.value]
+run = cat {shlex.quote(value_path)}
+interval = 0.1
+""")
+        child = """import os, tty, time, termios
+tty.setraw(0, when=termios.TCSANOW)
+key = b''
+while len(key) < 7: key += os.read(0, 7-len(key))
+os.write(1, b'__KEY__:' + key.hex().encode() + b'\\n')
+os.write(1, b'\\x1b]4;200;?\\x1b\\\\')
+reply = b''
+while not reply.endswith(b'\\x1b\\\\'): reply += os.read(0, 128)
+os.write(1, b'__REPLY__:' + reply.hex().encode() + b'\\n')
+time.sleep(10)
+"""
+        pid, master = spawn([binary, "-c", config_path, "--", sys.executable, "-c", child])
+        try:
+            queries = read_until(master, b"", b"\x1b[6n")
+            assert b"\x1b]10;?\x1b\\" in queries and b"\x1b]11;?\x1b\\" in queries, queries
+            assert b"\x1b]4;255;?\x1b\\" in queries, queries
+            # Exercise BEL, ST, 8-bit and 16-bit component precision, and a
+            # reply fragmented immediately after ESC.
+            os.write(master, b"queued\n\x1b")
+            os.write(master, b"]10;rgb:e6/d2/aa\x07\x1b]11;rgb:1616/1414/1212\x1b\\"
+                             b"\x1b]4;1;rgb:bc/46/50\x07\x1b]4;4;rgb:1e/28/41\x1b\\"
+                             b"\x1b[1;1R")
+            data = read_until(master, b"", b"__KEY__:7175657565640a")
+            data = read_until(master, data, b"\x1b]4;200;?\x1b\\")
+            own_reply = b"\x1b]4;200;rgb:ff/00/ff\x1b\\"
+            os.write(master, own_reply)
+            data = read_until(master, data, b"__REPLY__:" + own_reply.hex().encode())
+            data = read_until(master, data, b"\x1b[0;38;5;1;48;5;4mone")
+            data = read_until(master, data, b"\x1b[0m\x1b8\x1b[?7h")
+            next_path = os.path.join(folder, "next")
+            with open(next_path, "w") as value:
+                value.write("two\n")
+            os.replace(next_path, value_path)
+            changed = read_until(master, b"", b"two")
+            changed = read_until(master, changed, b"\x1b[0m\x1b8\x1b[?7h")
+            # The pulse starts at the exact base style. Inspect the first
+            # subsequent RGB frame, not the content update at time zero.
+            assert_region_style(changed, "two", b"0;38;5;1;48;5;4")
+            changed = read_until(master, b"", b"\x1b[0;38;2;")
+            changed = read_until(master, changed, b"\x1b[0m\x1b8\x1b[?7h")
+            cells = painted_styles(changed)
+            text = "".join(char for char, _ in cells)
+            value_style = cells[text.index("two")][1]
+            default_style = cells[text.index("D", text.index("two"))][1]
+            for style in (value_style, default_style):
+                assert b"38;2;" in style and b"48;2;" in style, cells
+            assert value_style != default_style, cells
+            assert_region_style(changed, "LABEL ", b"0")
+            assert_region_style(changed, " END", b"0")
+            animated_at = time.monotonic()
+            restored = read_until(master, b"", b"\x1b[0;38;5;1;48;5;4mtwo", 4)
+            # No original palette tokens between the two peaks: restoration
+            # happens after the whole 2.4-second animation, not at 1.2 seconds.
+            assert time.monotonic() - animated_at > 1.8, "restored between pulses"
+            restored = read_until(master, restored, b"\x1b[0m\x1b8\x1b[?7h")
+            assert_region_style(restored, "two", b"0;38;5;1;48;5;4")
+            assert_region_style(restored, "D END", b"0")
+            colors = set(re.findall(rb"\x1b\[(0;38;2;[0-9;]+)m", changed + restored))
+            assert len(colors) >= 8, colors
+            ready, _, _ = select.select([master], [], [], 0.3)
+            assert not ready, "adaptive effect failed to settle"
+        finally:
+            stop(pid, master)
+    print("adaptive palette pulse, input preservation, and child query ownership passed")
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: multirow_pty.py STATUSBAR")
@@ -382,6 +466,7 @@ def main():
     check_tracking(binary)
     check_tracking(binary, colors=True)
     check_geometry_results_do_not_highlight(binary)
+    check_adaptive_palette(binary)
     config = """\
 [line.1]
 left = one

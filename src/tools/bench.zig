@@ -80,6 +80,7 @@ fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
     var content = try bar.Content.init(counted.allocator(), 1);
     defer content.deinit();
     var renderer = try bar.Renderer.init(counted.allocator());
+    renderer.highlight.effect = .bold;
     defer renderer.deinit();
     var styles = [_][]const u8{""};
     var rules = [_]?[]const u8{null};
@@ -125,6 +126,33 @@ fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
     if (counted.allocations != allocs or counted.allocated_bytes != allocated) return error.RendererRegression;
     const elapsed = std.Io.Clock.now(.awake, io).toNanoseconds() - start;
     try out.print("render regions: {d} ns/change+shared-frames+repair, {d} change bytes, allocs=0 bytes=0 storage={d} peak={d}\n", .{ @divTrunc(elapsed, repeats), bytes / repeats, counted.allocated_bytes - counted.freed_bytes, renderer.budget.peak });
+
+    renderer.highlight.effect = .relative;
+    renderer.palette.foreground = .{ 230, 210, 175 };
+    renderer.palette.background = .{ 30, 25, 20 };
+    const adaptive_start = std.Io.Clock.now(.awake, io).toNanoseconds();
+    var adaptive_bytes: usize = 0;
+    const pulses = 1000;
+    const frames: usize = renderer.highlight.steps() + 1;
+    for (0..pulses) |n| {
+        regionContent(&content, n % 2 == 0);
+        try renderer.acceptContent(&content, &look);
+        const now: i64 = @as(i64, @intCast(n)) * (renderer.highlight.duration() + 300);
+        renderer.highlightChange(0, 0, now);
+        const parsed = renderer.parsed_rows;
+        for (0..frames) |step| {
+            _ = renderer.compose(now + @as(i64, @intCast(step)) * renderer.highlight.frameMs());
+            const batch = try renderer.build(24, "", true, false);
+            if (batch.len > 0 and std.mem.count(u8, batch, "\x1b7") != 1) return error.UnexpectedBatchCount;
+            adaptive_bytes += batch.len;
+            renderer.commit();
+        }
+        if (renderer.parsed_rows != parsed) return error.UnexpectedParsing;
+        if (!renderer.rows[0].base.visuallyEqual(renderer.rows[0].desired)) return error.AdaptiveRestoreRegression;
+    }
+    if (counted.allocations != allocs or counted.allocated_bytes != allocated) return error.RendererRegression;
+    const adaptive_elapsed = std.Io.Clock.now(.awake, io).toNanoseconds() - adaptive_start;
+    try out.print("render adaptive: {d} ns/frame, {d} bytes/frame, allocs=0 bytes=0 ({d} complete effects)\n", .{ @divTrunc(adaptive_elapsed, pulses * frames), adaptive_bytes / (pulses * frames), pulses });
 }
 
 const Sink = struct {
