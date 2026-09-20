@@ -11,13 +11,16 @@ TARGETS := \
 	x86_64-linux-musl
 
 .DEFAULT_GOAL := build
-.PHONY: build test fmt-check check all package clean $(TARGETS)
+.PHONY: build test test-integration fmt-check check all package clean $(TARGETS)
 
 build:
 	$(ZIG) build
 
 test:
 	$(ZIG) build test
+
+test-integration: build
+	python3 -u tests/multirow_pty.py ./zig-out/bin/statusbar
 
 fmt-check:
 	$(ZIG) fmt --check src build.zig build.zig.zon

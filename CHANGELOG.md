@@ -5,6 +5,7 @@ since the latest version tag. Entries preserve commit subjects verbatim.
 
 ## dev
 
+- Gate releases on PTY tests and benchmark highlight scaling
 - Animate tracked regions using terminal-aware color ranges
 - Highlight independently tracked template regions
 - Coordinate statusbar frames and change effects

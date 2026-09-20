@@ -226,6 +226,20 @@ by a Nerd Font. Pure and Tokyo Night use ordinary terminal text and Unicode.
 The themes are a good way to explore backgrounds, colored labels, rules, and
 restrained use of icons; see [their notes](../samples/themes/README.md).
 
+## Contributing and testing
+
+Run `make check` for formatting and unit tests. Before shipping a change, run
+`make test-integration`: it builds the native binary and exercises it in a
+simulated terminal, including shell integration. Install zsh and fish to cover
+both shell-specific cases; missing shells are explicitly reported as skipped.
+The generic terminal checks always run. Release verification installs both
+shells and runs this gate before building release archives.
+
+For rendering measurements, run `zig build bench -Doptimize=ReleaseFast`.
+It separates first-use color preparation from repeated effects and tests
+multiple colors and tracked regions. See [measurement details](internals.md#resource-limits-and-measurement)
+before comparing timings; a single warm frame does not predict first-use cost.
+
 ## Reference and behavior
 
 - [Usage](usage.md) — commands, options, completions, `--exec`, and environment.

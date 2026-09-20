@@ -147,6 +147,43 @@ rows, parsed rows and allocations. The cell model reduces terminal output for
 small changes but costs memory and CPU compared with the old string renderer;
 byte savings alone are not a wall-clock speedup.
 
+Adaptive workloads are independently labeled `colors` and `regions`:
+
+- `colors` uses 1, 16, 17, or 64 distinct visible, resolved foreground/background
+  pairs on 80-column rows (up to 16 pairs per row, within input limits).
+- `regions` uses 1, 8, or 32 active regions sharing one pair on a 512-column row,
+  split across left/right slots with no more than 16 regions per slot.
+- `cold` averages 20 independent first nonzero effect frames. Each starts with
+  an empty range cache; range preparation is included in the time and counters.
+  Restoration is checked separately, outside these measurements.
+- `warm` keeps the cache across eight complete two-pulse effects (648 frames),
+  including initial and restoration frames. Warm does **not** mean every pair
+  fits in the cache: recurring misses remain part of the measured workload.
+
+Every workload reports monotonic-clock mean/max nanoseconds per frame, frame
+count, emitted bytes, range preparations, cache hits/misses, safety samples,
+effect traversal visits and storage. Safety samples count colors checked while
+preparing a safe range, not ordinary frame sampling. Cell visits include the
+whole-row restore and effect-patch scans, including skipped cells, but exclude
+layout, parsing and paint comparison. Counters reset independently of cached
+ranges; they exist only in tests and benchmarks, not production binaries.
+
+Capacity warm-up precedes the measurements, while cold color preparation stays
+inside them. A separate `setup` line reports allocations during the first full
+effect after layout, so first-preparation allocations cannot be hidden by warm-up.
+Assertions check zero measured allocations, the renderer's memory
+budget, no parsing during animation, exact restoration, idle scheduling, valid
+visible fixtures and at most one paint envelope per nonempty batch. Compare
+several runs on the same host; maximum times include scheduling noise and are
+not CI performance thresholds. The original `render adaptive` single-pair
+average remains for continuity, not as a bound on cold or many-color effects.
+
+`make check` is the quick formatting/unit gate. `make test-integration` builds
+the native executable and runs `tests/multirow_pty.py`; it must run before release
+packaging, never against a cross-compiled artifact. The standalone Python entry
+point remains useful when testing a specific native binary. Shell-specific
+checks explicitly skip missing zsh/fish locally; release CI installs both.
+
 ## Limitations
 
 - Repaints save and restore the cursor with DECSC/DECRC, the single save slot

@@ -57,6 +57,12 @@ jobs:
       - name: Check source
         run: make check
 
+      - name: Install integration shells
+        run: sudo apt-get update && sudo apt-get install -y zsh fish
+
+      - name: Check native terminal integration
+        run: make test-integration
+
       - name: Build release archives
         run: make -j3 package OPTIMIZE=ReleaseSafe
 

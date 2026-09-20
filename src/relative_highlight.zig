@@ -6,6 +6,15 @@ const terminal = @import("terminal_palette.zig");
 const Rgb = terminal.Rgb;
 pub const steps: u8 = 40;
 pub const step_ms: i64 = 30;
+pub const measuring = @import("builtin").is_test or @import("measurement_options").enabled;
+/// Per-cache counters. Reset these independently of entries to measure warm
+/// reuse; resetting the whole Cache also discards prepared ranges.
+pub const Metrics = if (measuring) struct {
+    preparations: usize = 0,
+    hits: usize = 0,
+    misses: usize = 0,
+    safety_samples: usize = 0,
+} else struct {};
 
 fn linear(value: u8) f64 {
     const v = @as(f64, @floatFromInt(value)) / 255;
@@ -113,15 +122,17 @@ const Range = struct {
         return .{ .text = shift(self.text, self.text_delta * strength), .back = shift(self.back, self.back_delta * strength) };
     }
 
-    fn safe(self: Range, minimum: f64, pulses: u8) bool {
+    fn safe(self: Range, minimum: f64, pulses: u8, metrics: *Metrics) bool {
         for (1..@as(usize, steps) * pulses) |step| {
+            if (measuring) metrics.safety_samples += 1;
             const pair = self.sample(repeatedAmount(step, pulses) / 0.13);
             if (contrast(pair.text, pair.back) + 0.000001 < minimum) return false;
         }
         return true;
     }
 
-    fn init(text: Rgb, back: Rgb, pulses: u8) Range {
+    fn init(text: Rgb, back: Rgb, pulses: u8, metrics: *Metrics) Range {
+        if (measuring) metrics.preparations += 1;
         const text_lab = toLab(text);
         const back_lab = toLab(back);
         const lighter = text_lab.l >= back_lab.l;
@@ -138,12 +149,12 @@ const Range = struct {
         // Select one safe range for the entire animation. Preserve the full
         // foreground sweep where possible by reducing background motion first.
         for (0..9) |_| {
-            if (range.safe(minimum, pulses)) return range;
+            if (range.safe(minimum, pulses, metrics)) return range;
             range.back_delta *= 0.5;
         }
         range.back_delta = 0;
         for (0..9) |_| {
-            if (range.safe(minimum, pulses)) return range;
+            if (range.safe(minimum, pulses, metrics)) return range;
             range.text_delta *= 0.5;
         }
         range.text_delta = 0;
@@ -157,12 +168,17 @@ pub const Cache = struct {
     const Entry = struct { text: Rgb, back: Rgb, pulses: u8, range: Range };
     entries: [16]?Entry = @splat(null),
     next: usize = 0,
+    metrics: Metrics = .{},
 
     fn get(self: *Cache, text: Rgb, back: Rgb, pulses: u8) Range {
         for (self.entries) |entry| if (entry) |e| {
-            if (e.pulses == pulses and std.meta.eql(e.text, text) and std.meta.eql(e.back, back)) return e.range;
+            if (e.pulses == pulses and std.meta.eql(e.text, text) and std.meta.eql(e.back, back)) {
+                if (measuring) self.metrics.hits += 1;
+                return e.range;
+            }
         };
-        const range = Range.init(text, back, pulses);
+        if (measuring) self.metrics.misses += 1;
+        const range = Range.init(text, back, pulses, &self.metrics);
         self.entries[self.next] = .{ .text = text, .back = back, .pulses = pulses, .range = range };
         self.next = (self.next + 1) % self.entries.len;
         return range;
@@ -186,6 +202,25 @@ fn fallback(base: styled.Style) styled.Style {
     var result = base;
     result.bold = true;
     return result;
+}
+
+test "range cache reuses resolved colors and invalidates colors or pulses" {
+    var palette: terminal.Palette = .{ .foreground = .{ 190, 190, 190 }, .background = .{ 10, 10, 10 } };
+    var cache: Cache = .{};
+    _ = cache.apply(.{}, &palette, 1, 2);
+    try std.testing.expectEqual(@as(usize, 1), cache.metrics.preparations);
+    try std.testing.expect(cache.metrics.safety_samples > 0);
+    cache.metrics = .{};
+    _ = cache.apply(.{}, &palette, 2, 2);
+    try std.testing.expectEqual(@as(usize, 1), cache.metrics.hits);
+    try std.testing.expectEqual(@as(usize, 0), cache.metrics.preparations);
+    palette.foreground = .{ 200, 190, 190 };
+    _ = cache.apply(.{}, &palette, 3, 2);
+    palette.background = .{ 20, 10, 10 };
+    _ = cache.apply(.{}, &palette, 4, 2);
+    _ = cache.apply(.{}, &palette, 5, 1);
+    try std.testing.expectEqual(@as(usize, 3), cache.metrics.preparations);
+    try std.testing.expectEqual(@as(usize, 3), cache.metrics.misses);
 }
 
 test "repeated pulses stay animated across interior valleys" {

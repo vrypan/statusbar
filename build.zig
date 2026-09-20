@@ -15,6 +15,9 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     mod.addOptions("build_options", options);
+    const production_metrics = b.addOptions();
+    production_metrics.addOption(bool, "enabled", false);
+    mod.addOptions("measurement_options", production_metrics);
     const zunic = b.dependency("zunic", .{}).module("zunic");
     mod.addImport("zunic", zunic);
     const zecli = b.dependency("zecli", .{});
@@ -38,6 +41,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    const benchmark_metrics = b.addOptions();
+    benchmark_metrics.addOption(bool, "enabled", true);
     for ([_][]const u8{ "output", "input", "bar", "display" }) |name| {
         const dependency = b.createModule(.{
             .root_source_file = b.path(b.fmt("src/{s}.zig", .{name})),
@@ -45,6 +50,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
         dependency.addImport("zunic", zunic);
+        dependency.addOptions("measurement_options", benchmark_metrics);
         bench_mod.addImport(name, dependency);
     }
     const bench = b.addExecutable(.{ .name = "statusbar-bench", .root_module = bench_mod });

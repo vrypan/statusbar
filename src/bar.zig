@@ -144,6 +144,9 @@ pub const Renderer = struct {
     palette: terminal_palette.Palette = .{},
     palette_revision: usize = 0,
     pulse_cache: relative_highlight.Cache = .{},
+    /// Cells inspected by effect restore/patch traversals since last reset.
+    /// Absent from production builds; excludes parsing and paint comparison.
+    effect_cells_visited: if (relative_highlight.measuring) usize else void = if (relative_highlight.measuring) 0 else {},
 
     pub fn init(parent: std.mem.Allocator) !Renderer {
         const budget = try parent.create(cells.Budget);
@@ -386,6 +389,7 @@ pub const Renderer = struct {
             const target: cells.Target = .{ .region = .{ .owner = if (side == 0) .left else .right, .id = @intCast(id) } };
             if (now_ms >= deadline) {
                 if (row.highlight_step[side][id] != null) {
+                    if (relative_highlight.measuring) self.effect_cells_visited += row.base.cells.items.len;
                     self.restore(n, target);
                     changed = true;
                 }
@@ -395,7 +399,9 @@ pub const Renderer = struct {
                 const elapsed = self.highlight.duration() - (deadline - now_ms);
                 const step: u8 = @intCast(@divFloor(@max(elapsed, 0), self.highlight.frameMs()));
                 if (row.highlight_step[side][id] == null or row.highlight_step[side][id].? != step) {
+                    if (relative_highlight.measuring) self.effect_cells_visited += row.base.cells.items.len;
                     self.restore(n, target);
+                    if (relative_highlight.measuring and !self.highlight.relative()) self.effect_cells_visited += row.base.cells.items.len;
                     if (self.highlight.relative()) self.relativePatch(n, side, @intCast(id), step) else self.patch(n, target, self.highlight.patch(step));
                     row.highlight_step[side][id] = step;
                     changed = true;
@@ -407,6 +413,7 @@ pub const Renderer = struct {
 
     fn relativePatch(self: *Renderer, n: usize, side: usize, id: u4, step: u8) void {
         const row = &self.rows[n];
+        if (relative_highlight.measuring) self.effect_cells_visited += row.base.cells.items.len;
         const owner: cells.Owner = if (side == 0) .left else .right;
         var previous: ?styled.Style = null;
         var desired: styled.Style = undefined;
