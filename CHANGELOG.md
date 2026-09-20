@@ -3,9 +3,13 @@
 Changes are grouped by version tag, newest first. `dev` contains commits
 since the latest version tag. Entries preserve commit subjects verbatim.
 
+## v0.2.2
+
+- Bump v0.2.2
+- Keep shell integrations valid across upgrades
+
 ## v0.2.1
 
-- Keep shell integrations valid across upgrades
 - Bump v0.2.1
 - Prepare highlights and streamline statusbar updates
 - Simplify adaptive highlighting and remove stale render state
