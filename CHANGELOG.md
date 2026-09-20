@@ -5,7 +5,8 @@ since the latest version tag. Entries preserve commit subjects verbatim.
 
 ## v0.2.1
 
-- Document tracked theme regions and bump v0.2.1
+- Keep shell integrations valid across upgrades
+- Bump v0.2.1
 - Prepare highlights and streamline statusbar updates
 - Simplify adaptive highlighting and remove stale render state
 - Gate releases on PTY tests and benchmark highlight scaling

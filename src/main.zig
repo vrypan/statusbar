@@ -51,7 +51,7 @@ pub fn main(init: std.process.Init) !u8 {
     return switch (try command.as(cli.CommandName)) {
         .run => runSession(arena, init.io, command, stderr),
         .set => setSlot(arena, init.io, command, stderr),
-        .init => shellInit(arena, init.io, command, stdout, stderr),
+        .init => shellInit(arena, init.io, args[0], command, stdout, stderr),
         .config => printConfig(arena, init.io, command, stdout, stderr),
         .completion => printCompletion(command, stdout, stderr),
     };
@@ -180,7 +180,7 @@ fn setSlot(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stde
 
 /// `statusbar init zsh|fish`: prints the shell integration. Outside a session it
 /// prints nothing, so the `eval` costs nothing in other terminals.
-fn shellInit(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
+fn shellInit(arena: std.mem.Allocator, io: Io, invoked_as: []const u8, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
     const args = command.positionals();
     const script = if (std.mem.eql(u8, args[0], "zsh")) zsh_init else if (std.mem.eql(u8, args[0], "fish")) fish_init else return usageError(stderr, command, "init supports zsh and fish");
     const slot = if (command.getValue([]const u8, "starship-slot")) |raw|
@@ -192,14 +192,28 @@ fn shellInit(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, st
     const max_slot = std.math.mul(usize, line_count, 2) catch return usageError(stderr, command, "STATUSBAR_LINES is malformed");
     if (slot > max_slot) return usageError(stderr, command, "--starship-slot does not exist in this session");
 
-    // Call this exact binary, as starship's own init does, so the hook works
-    // whether or not statusbar is on PATH.
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const self_path = @import("sys.zig").selfExePath(io, &path_buf) orelse "statusbar";
-    const with_path = try std.mem.replaceOwned(u8, arena, script, "@STATUSBAR@", try shellQuote(arena, self_path));
+    // Preserve the invocation rather than resolving the executable. In
+    // particular, a Homebrew symlink or a bare PATH lookup must keep pointing
+    // at the current version after an upgrade. Make relative paths containing
+    // a slash absolute so a later `cd` cannot break the prompt hook.
+    const executable = try shellExecutable(arena, io, invoked_as);
+    const with_path = try std.mem.replaceOwned(u8, arena, script, "@STATUSBAR@", try shellQuote(arena, executable));
     try stdout.writeAll(try std.mem.replaceOwned(u8, arena, with_path, "@SLOT@", try std.fmt.allocPrint(arena, "{d}", .{slot})));
     try stdout.flush();
     return 0;
+}
+
+fn shellExecutable(arena: std.mem.Allocator, io: Io, invoked_as: []const u8) ![]const u8 {
+    if (std.fs.path.isAbsolute(invoked_as) or std.mem.indexOfScalar(u8, invoked_as, '/') == null) return invoked_as;
+
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd_len = Io.Dir.cwd().realPath(io, &cwd_buf) catch return arena.dupe(u8, invoked_as);
+    return resolveShellExecutable(arena, cwd_buf[0..cwd_len], invoked_as);
+}
+
+fn resolveShellExecutable(arena: std.mem.Allocator, cwd: []const u8, invoked_as: []const u8) ![]const u8 {
+    if (std.fs.path.isAbsolute(invoked_as) or std.mem.indexOfScalar(u8, invoked_as, '/') == null) return invoked_as;
+    return std.fs.path.resolve(arena, &.{ cwd, invoked_as });
 }
 
 /// Single-quotes a word for the shell.
@@ -246,7 +260,7 @@ const zsh_init =
     \\      out=${out##*$'\n'}
     \\      # Starship marks escape codes with %{ %} and doubles literal percent
     \\      # signs for zsh; prompt expansion turns that back into plain output.
-    \\      @STATUSBAR@ set @SLOT@ "${(%)rest}"
+    \\      command @STATUSBAR@ set @SLOT@ "${(%)rest}"
     \\    fi
     \\    print -rn -- "$newline$out"
     \\  }
@@ -294,7 +308,7 @@ const fish_init =
     \\    if string match -rq '(?s)^.*\\n.*$' -- "$out"
     \\      set -l bar (string replace -r '(?s)\\n[^\\n]*$' '' -- "$out" | string collect)
     \\      set out (string replace -r '(?s)^.*\\n' '' -- "$out")
-    \\      @STATUSBAR@ set @SLOT@ "$bar"
+    \\      command @STATUSBAR@ set @SLOT@ "$bar"
     \\    end
     \\    printf '%s%s' "$prefix" "$out"
     \\  end
@@ -393,4 +407,14 @@ test "slot syntax and padding normalization are strict" {
     try std.testing.expectEqualStrings("", normalizeSlotText(&line_breaks));
     var mixed = [_]u8{ '\n', ' ', 'a', '\t', 'b', '\r', ' ', '\n' };
     try std.testing.expectEqualStrings(" a b  ", normalizeSlotText(&mixed));
+}
+
+test "shell executable preserves stable invocation names" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectEqualStrings("statusbar", try resolveShellExecutable(allocator, "/tmp", "statusbar"));
+    try std.testing.expectEqualStrings("/opt/homebrew/bin/statusbar", try resolveShellExecutable(allocator, "/tmp", "/opt/homebrew/bin/statusbar"));
+
+    const relative = try resolveShellExecutable(allocator, "/workspace/project", "./zig-out/bin/statusbar");
+    defer allocator.free(relative);
+    try std.testing.expectEqualStrings("/workspace/project/zig-out/bin/statusbar", relative);
 }

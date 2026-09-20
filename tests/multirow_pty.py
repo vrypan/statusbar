@@ -97,6 +97,31 @@ def osc_value(data, slot):
     return base64.b64decode(data[start:end])
 
 
+def check_init_invocation(binary):
+    env = os.environ.copy()
+    env["STATUSBAR_LINES"] = "2"
+    with tempfile.TemporaryDirectory() as directory:
+        stable = os.path.join(directory, "statusbar")
+        os.symlink(binary, stable)
+
+        absolute = subprocess.run(
+            [stable, "init", "zsh"], env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+        )
+        assert f"command '{stable}' set".encode() in absolute.stdout
+        assert f"command '{binary}' set".encode() not in absolute.stdout
+
+        path_env = env.copy()
+        path_env["PATH"] = directory + os.pathsep + path_env.get("PATH", "")
+        by_name = subprocess.run(
+            ["statusbar", "init", "zsh"], env=path_env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+        )
+        assert b"command 'statusbar' set" in by_name.stdout
+
+    print("shell init preserves upgrade-safe invocation paths")
+
+
 def check_zsh(binary):
     zsh = shutil.which("zsh")
     if zsh is None:
@@ -465,6 +490,7 @@ def main():
     assert invalid.returncode == 2
     assert b"STATUSBAR_LINES is malformed" in invalid.stderr
 
+    check_init_invocation(binary)
     check_zsh(binary)
     check_fish(binary)
     check_tracking(binary)

@@ -269,10 +269,3 @@ pub fn sleepMs(io: std.Io, ms: u64) void {
     const duration = std.Io.Duration.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms);
     std.Io.sleep(io, duration, .awake) catch {};
 }
-
-/// Absolute path of the running binary, so the shell plugin can invoke exactly
-/// the build that started the journal writer.
-pub fn selfExePath(io: std.Io, buf: []u8) ?[]const u8 {
-    const n = std.process.executablePath(io, buf) catch return null;
-    return buf[0..n];
-}
