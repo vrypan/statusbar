@@ -51,7 +51,7 @@ fn armMeasured(renderer: *bar.Renderer, content: *const bar.Content, now: i64) v
 }
 
 fn measuredFrame(renderer: *bar.Renderer, now: i64) !usize {
-    _ = renderer.compose(now);
+    _ = try renderer.compose(now);
     const batch = try renderer.build(20, "", true, false);
     if (batch.len > 0 and std.mem.count(u8, batch, "\x1b7") != 1) return error.UnexpectedBatchCount;
     const bytes = batch.len;
@@ -61,7 +61,7 @@ fn measuredFrame(renderer: *bar.Renderer, now: i64) !usize {
 
 fn assertRestored(renderer: *bar.Renderer, now: i64) !void {
     for (renderer.rows) |row| if (!row.base.visuallyEqual(row.desired)) return error.AdaptiveRestoreRegression;
-    if (renderer.nextFrameTimeout(now) != -1 or renderer.compose(now + 100)) return error.IdleAnimation;
+    if (renderer.nextFrameTimeout(now) != -1 or try renderer.compose(now + 100)) return error.IdleAnimation;
 }
 
 /// One fixture per workload; allocation warm-up is separate from timed color
@@ -124,6 +124,7 @@ fn adaptiveBench(io: std.Io, out: *std.Io.Writer, colors: usize, regions: usize)
         renderer.effect_cells_visited = 0;
         var elapsed: i96 = 0;
         var maximum: i96 = 0;
+        var prepare_elapsed: i96 = 0;
         var bytes: usize = 0;
         var samples: usize = 0;
         // Twenty independent cold starts; eight complete warm effects. Cache
@@ -133,9 +134,10 @@ fn adaptiveBench(io: std.Io, out: *std.Io.Writer, colors: usize, regions: usize)
             const now = @as(i64, @intCast(n + 1)) * (renderer.highlight.duration() + 300);
             armMeasured(&renderer, &content, now);
             if (std.mem.eql(u8, mode, "cold")) {
-                const metrics = renderer.pulse_cache.metrics;
-                renderer.pulse_cache = .{};
-                renderer.pulse_cache.metrics = metrics;
+                renderer.pulse_cache.invalidate();
+                const prepare_start = std.Io.Clock.now(.awake, io).toNanoseconds();
+                try renderer.prepareHighlightRanges();
+                prepare_elapsed += std.Io.Clock.now(.awake, io).toNanoseconds() - prepare_start;
             }
             const first: usize = if (std.mem.eql(u8, mode, "cold")) 1 else 0;
             const end: usize = if (std.mem.eql(u8, mode, "cold")) 2 else frames;
@@ -158,7 +160,7 @@ fn adaptiveBench(io: std.Io, out: *std.Io.Writer, colors: usize, regions: usize)
         if (renderer.parsed_rows != parsed) return error.UnexpectedParsing;
         if (counted.allocations != allocs or counted.allocated_bytes != allocated or renderer.budget.peak > 64 * 1024 * 1024) return error.RendererRegression;
         const metrics = renderer.pulse_cache.metrics;
-        try out.print("adaptive {s} {s} pairs={d} regions={d} cols={d}: mean={d} ns/frame max={d} ns/frame frames={d} bytes/frame={d} preparations={d} hits={d} misses={d} safety_samples={d} cells_visited={d} allocs=0 bytes=0 storage={d} peak={d}\n", .{ if (regions > 0) "regions" else "colors", mode, distinct, visible_regions, renderer.cols, @divTrunc(elapsed, samples), maximum, samples, bytes / samples, metrics.preparations, metrics.hits, metrics.misses, metrics.safety_samples, renderer.effect_cells_visited, counted.allocated_bytes - counted.freed_bytes, renderer.budget.peak });
+        try out.print("adaptive {s} {s} pairs={d} regions={d} cols={d}: prepare_mean={d} ns mean={d} ns/frame max={d} ns/frame frames={d} bytes/frame={d} preparations={d} hits={d} misses={d} safety_samples={d} cells_visited={d} prepare_allocs={d} frame_allocs=0 bytes=0 storage={d} peak={d}\n", .{ if (regions > 0) "regions" else "colors", mode, distinct, visible_regions, renderer.cols, @divTrunc(prepare_elapsed, repeats), @divTrunc(elapsed, samples), maximum, samples, bytes / samples, metrics.preparations, metrics.hits, metrics.misses, metrics.safety_samples, renderer.effect_cells_visited, metrics.prepare_allocations, counted.allocated_bytes - counted.freed_bytes, renderer.budget.peak });
     }
 }
 
@@ -244,7 +246,7 @@ fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
         regionContent(&content, n % 2 == 0);
         try renderer.acceptContent(&content, &look);
         renderer.highlightChange(0, 0, @intCast(n));
-        _ = renderer.compose(@intCast(n));
+        _ = try renderer.compose(@intCast(n));
         _ = try renderer.build(24, "", true, false);
         renderer.commit();
     }
@@ -259,7 +261,7 @@ fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
         try renderer.acceptContent(&content, &look);
         if (!renderer.rows[0].region_changed[0][0] or renderer.rows[0].region_changed[0][1]) return error.RegionComparisonRegression;
         renderer.highlightChange(0, 0, now);
-        _ = renderer.compose(now + renderer.highlight.frameMs());
+        _ = try renderer.compose(now + renderer.highlight.frameMs());
         const batch = try renderer.build(24, "", true, false);
         if (renderer.emitted_rows != 1 or std.mem.count(u8, batch, "\x1b7") != 1) return error.UnexpectedBatchCount;
         bytes += batch.len;
@@ -267,10 +269,10 @@ fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
         const parsed = renderer.parsed_rows;
         // Two simultaneous targets expire in one composition and one batch.
         renderer.rows[0].highlight_until[0][1] = now + renderer.highlight.duration();
-        _ = renderer.compose(now + 2 * renderer.highlight.frameMs());
+        _ = try renderer.compose(now + 2 * renderer.highlight.frameMs());
         _ = try renderer.build(24, "", true, false);
         renderer.commit();
-        _ = renderer.compose(now + renderer.highlight.duration());
+        _ = try renderer.compose(now + renderer.highlight.duration());
         const restored = try renderer.build(24, "", true, false);
         if (renderer.emitted_rows != 1 or std.mem.count(u8, restored, "\x1b7") != 1) return error.UnexpectedBatchCount;
         renderer.commit();
@@ -295,7 +297,7 @@ fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
         renderer.highlightChange(0, 0, now);
         const parsed = renderer.parsed_rows;
         for (0..frames) |step| {
-            _ = renderer.compose(now + @as(i64, @intCast(step)) * renderer.highlight.frameMs());
+            _ = try renderer.compose(now + @as(i64, @intCast(step)) * renderer.highlight.frameMs());
             const batch = try renderer.build(24, "", true, false);
             if (batch.len > 0 and std.mem.count(u8, batch, "\x1b7") != 1) return error.UnexpectedBatchCount;
             adaptive_bytes += batch.len;

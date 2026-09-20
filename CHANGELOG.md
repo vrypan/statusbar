@@ -5,6 +5,7 @@ since the latest version tag. Entries preserve commit subjects verbatim.
 
 ## dev
 
+- Prepare highlights and streamline statusbar updates
 - Simplify adaptive highlighting and remove stale render state
 - Gate releases on PTY tests and benchmark highlight scaling
 - Animate tracked regions using terminal-aware color ranges

@@ -42,6 +42,15 @@ pub const Source = struct {
     /// Slot values were activated or cleared since the last accepted update.
     override_events: u32 = 0,
     metadata_stale: bool = false,
+    dependencies: []Dependency = &.{},
+    dirty_rows: []bool = &.{},
+    /// Deterministic test/benchmark evidence for avoided formatting work.
+    rows_formatted: usize = 0,
+
+    const Dependency = struct {
+        commands: [2]u16 = .{ 0, 0 },
+        clock: [2]bool = .{ false, false },
+    };
 
     pub const Update = struct {
         content_changed: bool = false,
@@ -62,8 +71,11 @@ pub const Source = struct {
         const overrides = try gpa.alloc([output.max_value]u8, @as(usize, lines) * 2);
         errdefer gpa.free(overrides);
         const override_lens = try gpa.alloc(?usize, @as(usize, lines) * 2);
+        errdefer gpa.free(override_lens);
         @memset(override_lens, null);
-        return .{ .gpa = gpa, .io = io, .commands = commands, .cfg = null, .lines = lines, .content = content, .exec_output = exec_output, .overrides = overrides, .override_lens = override_lens };
+        const dirty_rows = try gpa.alloc(bool, lines);
+        @memset(dirty_rows, false);
+        return .{ .gpa = gpa, .io = io, .commands = commands, .cfg = null, .lines = lines, .content = content, .exec_output = exec_output, .overrides = overrides, .override_lens = override_lens, .dirty_rows = dirty_rows };
     }
 
     pub fn initConfig(gpa: std.mem.Allocator, io: std.Io, cfg: *const config.Config, lines: u16, cols: u16) !Source {
@@ -81,8 +93,24 @@ pub const Source = struct {
         const overrides = try gpa.alloc([output.max_value]u8, @as(usize, lines) * 2);
         errdefer gpa.free(overrides);
         const override_lens = try gpa.alloc(?usize, @as(usize, lines) * 2);
+        errdefer gpa.free(override_lens);
         @memset(override_lens, null);
-        var self: Source = .{ .gpa = gpa, .io = io, .commands = commands, .cfg = cfg, .lines = lines, .content = content, .exec_output = @constCast(&.{}), .overrides = overrides, .override_lens = override_lens, .stale = true };
+        const dependencies = try gpa.alloc(Dependency, lines);
+        errdefer gpa.free(dependencies);
+        const dirty_rows = try gpa.alloc(bool, lines);
+        @memset(dirty_rows, true);
+        for (cfg.line, dependencies) |line, *dependency| {
+            dependency.* = .{};
+            const templates = [2]*const config.Template{ &line.left, &line.right };
+            for (templates, 0..) |template, side| {
+                dependency.clock[side] = template.usesClock();
+                for (template.items()) |part| switch (part) {
+                    .command => |n| dependency.commands[side] |= @as(u16, 1) << @intCast(n),
+                    .text, .track_start, .track_end => {},
+                };
+            }
+        }
+        var self: Source = .{ .gpa = gpa, .io = io, .commands = commands, .cfg = cfg, .lines = lines, .content = content, .exec_output = @constCast(&.{}), .overrides = overrides, .override_lens = override_lens, .stale = true, .dependencies = dependencies, .dirty_rows = dirty_rows };
         if (cfg.usesClock()) self.clock_next_ms = 0;
         return self;
     }
@@ -94,6 +122,8 @@ pub const Source = struct {
         self.content.deinit();
         self.gpa.free(self.overrides);
         self.gpa.free(self.override_lens);
+        if (self.dependencies.len > 0) self.gpa.free(self.dependencies);
+        if (self.dirty_rows.len > 0) self.gpa.free(self.dirty_rows);
     }
 
     pub fn setColumns(self: *Source, cols: u16) void {
@@ -118,18 +148,22 @@ pub const Source = struct {
     pub fn setOverride(self: *Source, n: usize, value: []const u8) void {
         if (n >= self.override_lens.len or value.len > output.max_value) return;
         const trimmed = std.mem.trim(u8, value, "\r\n");
-        const old = self.override_lens[n];
+        const old = self.override(n);
+        var normalized: [output.max_value]u8 = undefined;
+        copyOnOneLine(normalized[0..trimmed.len], trimmed);
+        const next: ?[]const u8 = if (trimmed.len == 0) null else normalized[0..trimmed.len];
+        const same = if (old) |a| if (next) |b| std.mem.eql(u8, a, b) else false else next == null;
+        if (same) return;
         if (trimmed.len == 0) {
             self.override_lens[n] = null;
         } else {
-            copyOnOneLine(self.overrides[n][0..trimmed.len], trimmed);
+            @memcpy(self.overrides[n][0..trimmed.len], normalized[0..trimmed.len]);
             self.override_lens[n] = trimmed.len;
         }
-        if (old != self.override_lens[n]) {
-            if (n < 32) self.override_events |= @as(u32, 1) << @intCast(n);
-            self.content.tracks[n / 2].override_epoch[n % 2] +%= 1;
-            self.metadata_stale = true;
-        }
+        if (n < 32) self.override_events |= @as(u32, 1) << @intCast(n);
+        self.content.tracks[n / 2].override_epoch[n % 2] +%= 1;
+        self.metadata_stale = true;
+        self.markDirty(n / 2);
         self.stale = true;
     }
 
@@ -164,16 +198,18 @@ pub const Source = struct {
             if (fd.fd < 0 or fd.revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR) == 0) continue;
             const command_result = command.onReadable(self.io) orelse continue;
             if (self.cfg == null) {
-                const kept = command_result.bytes[0..@min(command_result.bytes.len, self.exec_output.len)];
-                @memcpy(self.exec_output[0..kept.len], kept);
-                self.exec_output_len = kept.len;
+                if (self.keepExec(command_result.bytes)) {
+                    @memset(self.dirty_rows, true);
+                    self.stale = true;
+                }
             } else {
-                const seen = self.keepFirstLine(n, command_result.bytes);
-                if (command_result.origin.baselineOnly() or !seen) {
+                const accepted = self.keepFirstLine(n, command_result.bytes);
+                if (command_result.origin.baselineOnly() or !accepted.previously_seen) {
                     result.baseline |= @as(u16, 1) << @intCast(n);
                 }
+                if (accepted.changed) self.dirtyCommand(n);
             }
-            self.stale = true;
+            if (self.cfg != null and self.dirtyAny()) self.stale = true;
         }
         for (self.commands) |*command| command.tick(self.io, now_ms);
 
@@ -181,7 +217,10 @@ pub const Source = struct {
             const real = self.realMs();
             if (real >= next) {
                 self.clock_next_ms = @divFloor(real, 1000) * 1000 + 1000;
-                self.stale = true;
+                if (self.cfg != null) {
+                    self.dirtyClockRows();
+                    self.stale = self.stale or self.dirtyAny();
+                } else self.stale = true;
             }
         }
         if (self.stale) {
@@ -197,17 +236,63 @@ pub const Source = struct {
 
     /// Stores a normalized first line and reports whether this command had
     /// previously produced output, which distinguishes its initial baseline.
-    fn keepFirstLine(self: *Source, n: usize, text: []const u8) bool {
+    fn keepFirstLine(self: *Source, n: usize, text: []const u8) struct { previously_seen: bool, changed: bool } {
         const end = std.mem.indexOfScalar(u8, text, '\n') orelse text.len;
         const line = std.mem.trimEnd(u8, text[0..end], "\r");
         const kept = line[0..@min(line.len, max_output_line)];
         var normalized: [max_output_line]u8 = undefined;
         copyOnOneLine(normalized[0..kept.len], kept);
         const seen = self.output_seen[n];
+        const changed = !seen or self.output_lens[n] != kept.len or !std.mem.eql(u8, self.outputs[n][0..self.output_lens[n]], normalized[0..kept.len]);
         @memcpy(self.outputs[n][0..kept.len], normalized[0..kept.len]);
         self.output_lens[n] = kept.len;
         self.output_seen[n] = true;
-        return seen;
+        return .{ .previously_seen = seen, .changed = changed };
+    }
+
+    /// Canonicalize the effective multiline exec value so CR/trailing-newline
+    /// differences that cannot reach the bar do not trigger row formatting.
+    fn keepExec(self: *Source, text: []const u8) bool {
+        var it = std.mem.splitScalar(u8, std.mem.trimEnd(u8, text, "\n"), '\n');
+        var offset: usize = 0;
+        var equal = true;
+        for (0..self.lines) |row| {
+            const raw = std.mem.trimEnd(u8, it.next() orelse "", "\r");
+            const line = raw[0..@min(raw.len, bar.max_line_bytes)];
+            if (row > 0) {
+                equal = equal and offset < self.exec_output_len and self.exec_output[offset] == '\n';
+                self.exec_output[offset] = '\n';
+                offset += 1;
+            }
+            equal = equal and offset + line.len <= self.exec_output_len and std.mem.eql(u8, self.exec_output[offset..][0..line.len], line);
+            @memcpy(self.exec_output[offset..][0..line.len], line);
+            offset += line.len;
+        }
+        equal = equal and self.exec_output_len == offset;
+        self.exec_output_len = offset;
+        return !equal;
+    }
+
+    fn markDirty(self: *Source, row: usize) void {
+        if (row < self.dirty_rows.len) self.dirty_rows[row] = true;
+    }
+
+    fn dirtyAny(self: *const Source) bool {
+        for (self.dirty_rows) |dirty| if (dirty) return true;
+        return false;
+    }
+
+    fn dirtyCommand(self: *Source, command: usize) void {
+        const bit = @as(u16, 1) << @intCast(command);
+        for (self.dependencies, 0..) |dependency, row| for (0..2) |side| {
+            if (dependency.commands[side] & bit != 0 and self.override_lens[row * 2 + side] == null) self.markDirty(row);
+        };
+    }
+
+    fn dirtyClockRows(self: *Source) void {
+        for (self.dependencies, 0..) |dependency, row| for (0..2) |side| {
+            if (dependency.clock[side] and self.override_lens[row * 2 + side] == null) self.markDirty(row);
+        };
     }
 
     pub fn slotContentEligible(self: *const Source, slot: usize, baseline: u16, override_events: u32) bool {
@@ -233,6 +318,9 @@ pub const Source = struct {
             const now = currentTime();
             var changed = false;
             for (cfg.line, 0..) |*line, n| {
+                if (self.dirty_rows.len > 0 and !self.dirty_rows[n]) continue;
+                if (self.dirty_rows.len > 0) self.dirty_rows[n] = false;
+                self.rows_formatted += 1;
                 var buf: [4096]u8 = undefined;
                 var tracks: bar.Tracks = .{ .override_epoch = self.content.tracks[n].override_epoch };
                 var w: std.Io.Writer = .fixed(&buf);
@@ -252,6 +340,9 @@ pub const Source = struct {
             var changed = false;
             for (0..self.lines) |n| {
                 const line = std.mem.trimEnd(u8, it.next() orelse "", "\r");
+                if (self.dirty_rows.len > 0 and !self.dirty_rows[n]) continue;
+                if (self.dirty_rows.len > 0) self.dirty_rows[n] = false;
+                self.rows_formatted += 1;
                 if (self.override(n * 2) == null and self.override(n * 2 + 1) == null) {
                     changed = self.content.setLine(n, line) or changed;
                     continue;
@@ -420,8 +511,8 @@ test "tracked slots need ready commands and suppress baseline-only results" {
     try std.testing.expect(!source.slotContentEligible(0, 1, 0));
     try std.testing.expect(!source.slotContentEligible(0, 0, 1));
     const long = "a" ** (max_output_line + 1);
-    try std.testing.expect(source.keepFirstLine(0, long));
-    try std.testing.expect(source.keepFirstLine(0, long[0..max_output_line] ++ "b"));
+    try std.testing.expect(source.keepFirstLine(0, long).previously_seen);
+    try std.testing.expect(source.keepFirstLine(0, long[0..max_output_line] ++ "b").previously_seen);
     try std.testing.expectEqualStrings(long[0..max_output_line], source.outputs[0][0..source.output_lens[0]]);
     _ = source.update(&.{}, 0);
 }
@@ -503,13 +594,13 @@ test "partial startup geometry and same-text overrides establish silent region b
     _ = source.rebuild();
     try r.acceptContent(&source.content, &look);
     if (source.slotContentEligible(0, 0, 0)) r.highlightChange(0, 0, 100);
-    _ = r.compose(100);
+    _ = try r.compose(100);
     try std.testing.expectEqual(@as(?i64, 100 + r.highlight.duration()), r.rows[0].highlight_until[0][0]);
     _ = source.keepFirstLine(0, "geometry");
     _ = source.rebuild();
     try r.acceptContent(&source.content, &look);
     if (source.slotContentEligible(0, 1, 0)) r.highlightChange(0, 0, 200);
-    _ = r.compose(200);
+    _ = try r.compose(200);
     try std.testing.expectEqual(@as(?i64, 100 + r.highlight.duration()), r.rows[0].highlight_until[0][0]);
     source.setOverride(0, "P geometry ");
     _ = source.update(&.{}, 210);
@@ -550,4 +641,87 @@ test "override epochs cover high-numbered slots and coalesced same-text transiti
     try std.testing.expectEqual(@as(usize, 1), source.content.tracks[16].len);
     const idle = source.update(&.{}, 1);
     try std.testing.expect(!idle.content_changed and idle.override_events == 0 and idle.baseline == 0);
+}
+
+test "dirty dependencies format only affected command and clock rows" {
+    const gpa = std.testing.allocator;
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(
+        gpa,
+        "[line.1]\nleft = #(a)\n" ++
+            "[line.2]\nright = %H #(b)\n" ++
+            "[command.a]\nrun = a\n" ++
+            "[command.b]\nrun = b\n",
+        &diag,
+    );
+    defer cfg.deinit();
+    var content = try bar.Content.init(gpa, 2);
+    defer content.deinit();
+    var overrides: [4][output.max_value]u8 = undefined;
+    var lens: [4]?usize = @splat(null);
+    var dependencies = [_]Source.Dependency{
+        .{ .commands = .{ 1, 0 } },
+        .{ .commands = .{ 0, 2 }, .clock = .{ false, true } },
+    };
+    var dirty = [_]bool{ true, true };
+    var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = &cfg, .lines = 2, .content = content, .exec_output = &.{}, .overrides = &overrides, .override_lens = &lens, .dependencies = &dependencies, .dirty_rows = &dirty };
+    _ = source.rebuild();
+    try std.testing.expectEqual(@as(usize, 2), source.rows_formatted);
+
+    const first = source.keepFirstLine(0, "same\r\nignored");
+    try std.testing.expect(first.changed and !first.previously_seen);
+    source.dirtyCommand(0);
+    _ = source.rebuild();
+    try std.testing.expectEqual(@as(usize, 3), source.rows_formatted);
+    const identical = source.keepFirstLine(0, "same\nother");
+    try std.testing.expect(!identical.changed and identical.previously_seen);
+    if (identical.changed) source.dirtyCommand(0);
+    _ = source.rebuild();
+    try std.testing.expectEqual(@as(usize, 3), source.rows_formatted);
+
+    source.dirtyClockRows();
+    _ = source.rebuild();
+    try std.testing.expectEqual(@as(usize, 4), source.rows_formatted);
+    source.setOverride(3, "manual");
+    _ = source.rebuild();
+    source.dirtyClockRows();
+    _ = source.rebuild();
+    try std.testing.expectEqual(@as(usize, 5), source.rows_formatted);
+}
+
+test "exec canonical equality avoids formatting unchanged effective rows" {
+    const gpa = std.testing.allocator;
+    var content = try bar.Content.init(gpa, 2);
+    defer content.deinit();
+    var exec_output: [2 * (bar.max_line_bytes + 1)]u8 = undefined;
+    var overrides: [4][output.max_value]u8 = undefined;
+    var lens: [4]?usize = @splat(null);
+    var dirty = [_]bool{ false, false };
+    var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = null, .lines = 2, .content = content, .exec_output = &exec_output, .overrides = &overrides, .override_lens = &lens, .dirty_rows = &dirty };
+    try std.testing.expect(source.keepExec("one\r\ntwo\n"));
+    @memset(source.dirty_rows, true);
+    _ = source.rebuild();
+    try std.testing.expectEqual(@as(usize, 2), source.rows_formatted);
+    try std.testing.expect(!source.keepExec("one\ntwo\n\n"));
+    _ = source.rebuild();
+    try std.testing.expectEqual(@as(usize, 2), source.rows_formatted);
+    source.setOverride(2, "manual");
+    _ = source.rebuild();
+    try std.testing.expectEqualStrings("one", source.content.line(0));
+    try std.testing.expectEqualStrings("manual\t", source.content.line(1));
+    source.setOverride(2, "");
+    _ = source.rebuild();
+    try std.testing.expectEqualStrings("two", source.content.line(1));
+}
+
+fn configAllocationScenario(gpa: std.mem.Allocator, cfg: *const config.Config) !void {
+    var source = try Source.initConfig(gpa, undefined, cfg, cfg.definedLines(), 80);
+    defer source.deinit();
+}
+
+test "config source initialization cleans every allocation failure" {
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(std.testing.allocator, "[line.1]\nleft = one\n[line.2]\nright = two\n", &diag);
+    defer cfg.deinit();
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, configAllocationScenario, .{&cfg});
 }

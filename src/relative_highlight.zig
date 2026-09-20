@@ -14,6 +14,7 @@ pub const Metrics = if (measuring) struct {
     hits: usize = 0,
     misses: usize = 0,
     safety_samples: usize = 0,
+    prepare_allocations: usize = 0,
 } else struct {};
 
 fn linear(value: u8) f64 {
@@ -107,8 +108,17 @@ pub fn apply(base: styled.Style, palette: *const terminal.Palette, step: usize) 
 }
 
 pub fn applyRepeated(base: styled.Style, palette: *const terminal.Palette, step: usize, pulses: u8) styled.Style {
-    var cache: Cache = .{};
-    return cache.apply(base, palette, step, pulses);
+    if (step >= @as(usize, steps) * pulses or step == 0) return base;
+    const fg = palette.resolve(base.fg, true) orelse return fallback(base);
+    const bg = palette.resolve(base.bg, false) orelse return fallback(base);
+    const text = if (base.reverse) bg else fg;
+    const back = if (base.reverse) fg else bg;
+    var metrics: Metrics = .{};
+    const pair = Range.init(text, back, pulses, &metrics).sample(repeatedAmount(step, pulses) / 0.13);
+    var result = base;
+    result.fg = .{ .rgb = if (base.reverse) pair.back else pair.text };
+    result.bg = .{ .rgb = if (base.reverse) pair.text else pair.back };
+    return result;
 }
 
 const Pair = struct { text: Rgb, back: Rgb };
@@ -162,26 +172,70 @@ const Range = struct {
     }
 };
 
-/// Bounded cache keyed by resolved colors, so palette/style changes cannot
-/// reuse a stale range. Eviction only recomputes the same deterministic range.
+/// Renderer-budgeted preparation generations keyed by resolved colors and
+/// pulse count. The next generation reuses matching ranges and then replaces
+/// the previous generation, so no stale or unreferenced history accumulates.
 pub const Cache = struct {
     const Entry = struct { text: Rgb, back: Rgb, pulses: u8, range: Range };
-    entries: [16]?Entry = @splat(null),
-    next: usize = 0,
+    entries: std.ArrayList(Entry) = .empty,
+    preparing: std.ArrayList(Entry) = .empty,
     metrics: Metrics = .{},
 
-    fn get(self: *Cache, text: Rgb, back: Rgb, pulses: u8) Range {
-        for (self.entries) |entry| if (entry) |e| {
+    pub fn deinit(self: *Cache, gpa: std.mem.Allocator) void {
+        self.entries.deinit(gpa);
+        self.preparing.deinit(gpa);
+        self.* = .{};
+    }
+
+    pub fn reserve(self: *Cache, gpa: std.mem.Allocator, count: usize) !void {
+        if (measuring) {
+            if (self.entries.capacity < count) self.metrics.prepare_allocations += 1;
+            if (self.preparing.capacity < count) self.metrics.prepare_allocations += 1;
+        }
+        try self.entries.ensureTotalCapacity(gpa, count);
+        try self.preparing.ensureTotalCapacity(gpa, count);
+    }
+
+    pub fn beginPreparation(self: *Cache) void {
+        self.preparing.clearRetainingCapacity();
+    }
+
+    pub fn invalidate(self: *Cache) void {
+        self.entries.clearRetainingCapacity();
+    }
+
+    fn find(entries: []const Entry, text: Rgb, back: Rgb, pulses: u8) ?Entry {
+        for (entries) |e| {
             if (e.pulses == pulses and std.meta.eql(e.text, text) and std.meta.eql(e.back, back)) {
-                if (measuring) self.metrics.hits += 1;
-                return e.range;
+                return e;
             }
-        };
+        }
+        return null;
+    }
+
+    /// Retain one resolved pair for the next preparation generation. Unknown
+    /// terminal colors deliberately remain on the allocation-free fallback.
+    pub fn prepare(self: *Cache, base: styled.Style, palette: *const terminal.Palette, pulses: u8) ?u32 {
+        const fg = palette.resolve(base.fg, true) orelse return null;
+        const bg = palette.resolve(base.bg, false) orelse return null;
+        const text = if (base.reverse) bg else fg;
+        const back = if (base.reverse) fg else bg;
+        for (self.preparing.items, 0..) |entry, index| {
+            if (entry.pulses == pulses and std.meta.eql(entry.text, text) and std.meta.eql(entry.back, back)) return @intCast(index);
+        }
+        if (find(self.entries.items, text, back, pulses)) |entry| {
+            self.preparing.appendAssumeCapacity(entry);
+            return @intCast(self.preparing.items.len - 1);
+        }
         if (measuring) self.metrics.misses += 1;
         const range = Range.init(text, back, pulses, &self.metrics);
-        self.entries[self.next] = .{ .text = text, .back = back, .pulses = pulses, .range = range };
-        self.next = (self.next + 1) % self.entries.len;
-        return range;
+        self.preparing.appendAssumeCapacity(.{ .text = text, .back = back, .pulses = pulses, .range = range });
+        return @intCast(self.preparing.items.len - 1);
+    }
+
+    pub fn finishPreparation(self: *Cache) void {
+        std.mem.swap(std.ArrayList(Entry), &self.entries, &self.preparing);
+        self.preparing.clearRetainingCapacity();
     }
 
     pub fn apply(self: *Cache, base: styled.Style, palette: *const terminal.Palette, step: usize, pulses: u8) styled.Style {
@@ -191,7 +245,21 @@ pub const Cache = struct {
         if (step == 0) return base;
         const text = if (base.reverse) bg else fg;
         const back = if (base.reverse) fg else bg;
-        const pair = self.get(text, back, pulses).sample(repeatedAmount(step, pulses) / 0.13);
+        const entry = find(self.entries.items, text, back, pulses) orelse unreachable;
+        if (measuring) self.metrics.hits += 1;
+        const pair = entry.range.sample(repeatedAmount(step, pulses) / 0.13);
+        var result = base;
+        result.fg = .{ .rgb = if (base.reverse) pair.back else pair.text };
+        result.bg = .{ .rgb = if (base.reverse) pair.text else pair.back };
+        return result;
+    }
+
+    pub fn sample(self: *Cache, index: ?u32, base: styled.Style, step: usize, pulses: u8) styled.Style {
+        if (step >= @as(usize, steps) * pulses) return base;
+        const entry = index orelse return fallback(base);
+        if (step == 0) return base;
+        if (measuring) self.metrics.hits += 1;
+        const pair = self.entries.items[entry].range.sample(repeatedAmount(step, pulses) / 0.13);
         var result = base;
         result.fg = .{ .rgb = if (base.reverse) pair.back else pair.text };
         result.bg = .{ .rgb = if (base.reverse) pair.text else pair.back };
@@ -207,6 +275,11 @@ fn fallback(base: styled.Style) styled.Style {
 test "range cache reuses resolved colors and invalidates colors or pulses" {
     var palette: terminal.Palette = .{ .foreground = .{ 190, 190, 190 }, .background = .{ 10, 10, 10 } };
     var cache: Cache = .{};
+    defer cache.deinit(std.testing.allocator);
+    try cache.reserve(std.testing.allocator, 4);
+    cache.beginPreparation();
+    _ = cache.prepare(.{}, &palette, 2);
+    cache.finishPreparation();
     _ = cache.apply(.{}, &palette, 1, 2);
     try std.testing.expectEqual(@as(usize, 1), cache.metrics.preparations);
     try std.testing.expect(cache.metrics.safety_samples > 0);
@@ -215,8 +288,15 @@ test "range cache reuses resolved colors and invalidates colors or pulses" {
     try std.testing.expectEqual(@as(usize, 1), cache.metrics.hits);
     try std.testing.expectEqual(@as(usize, 0), cache.metrics.preparations);
     palette.foreground = .{ 200, 190, 190 };
+    cache.beginPreparation();
+    _ = cache.prepare(.{}, &palette, 2);
+    cache.finishPreparation();
     _ = cache.apply(.{}, &palette, 3, 2);
     palette.background = .{ 20, 10, 10 };
+    cache.beginPreparation();
+    _ = cache.prepare(.{}, &palette, 2);
+    _ = cache.prepare(.{}, &palette, 1);
+    cache.finishPreparation();
     _ = cache.apply(.{}, &palette, 4, 2);
     _ = cache.apply(.{}, &palette, 5, 1);
     try std.testing.expectEqual(@as(usize, 3), cache.metrics.preparations);
@@ -254,6 +334,11 @@ test "gray uses full foreground range and single pulses have no brightness rever
         .{ .text = .{ 128, 128, 128 }, .back = .{ 245, 245, 245 } },
     };
     var cache: Cache = .{};
+    defer cache.deinit(std.testing.allocator);
+    try cache.reserve(std.testing.allocator, pairs.len);
+    cache.beginPreparation();
+    for (pairs) |pair| _ = cache.prepare(.{ .fg = .{ .rgb = pair.text }, .bg = .{ .rgb = pair.back } }, &palette, 1);
+    cache.finishPreparation();
     for (pairs, 0..) |pair, i| {
         const base: styled.Style = .{ .fg = .{ .rgb = pair.text }, .bg = .{ .rgb = pair.back } };
         const peak = cache.apply(base, &palette, 16, 1);

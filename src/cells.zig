@@ -65,6 +65,8 @@ pub const Cell = struct {
     style: Style = .{},
     owner: Owner = .fill,
     region: ?u4 = null,
+    /// Index into the renderer's current adaptive-range generation.
+    highlight_range: ?u32 = null,
 };
 pub const Changes = packed struct {
     glyph: bool = false,

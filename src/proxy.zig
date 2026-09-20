@@ -422,14 +422,20 @@ const Proxy = struct {
     }
 
     fn feedTerminalInput(self: *Proxy, bytes: []const u8) void {
+        if (self.palette_probe.bypassable()) {
+            self.input.feed(bytes, &self.pending_input);
+            return;
+        }
         // Preserve read batching for Input's CSI parser: the palette filter
         // can release an ESC and its following byte in separate writes.
         var buf: [4096 + input_headroom]u8 = undefined;
         var writer = std.Io.Writer.fixed(&buf);
         self.palette_probe.feed(bytes, &self.renderer.palette, &WriterSink{ .w = &writer });
         self.input.feed(writer.buffered(), &self.pending_input);
+        if (self.palette_probe.bypassable()) self.palette_deadline_ms = null;
     }
     fn flushPalette(self: *Proxy, stop: bool) void {
+        if (!stop and !self.palette_probe.holding()) return;
         var buf: [128]u8 = undefined;
         var writer = std.Io.Writer.fixed(&buf);
         const sink = WriterSink{ .w = &writer };
@@ -521,10 +527,12 @@ const Proxy = struct {
                             // asking again would only cost an EAGAIN.
                             if (n < out_buf.len) drained = drain_limit;
                             self.output.feed(out_buf[0..n], &self.terminal);
-                            self.palette_probe.observeChild(out_buf[0..n]);
-                            if (self.palette_probe.remaining == 0) {
-                                self.flushPalette(false);
-                                self.palette_deadline_ms = null;
+                            if (self.palette_probe.remaining > 0) {
+                                self.palette_probe.observeChild(out_buf[0..n]);
+                                if (self.palette_probe.remaining == 0) {
+                                    self.flushPalette(false);
+                                    self.palette_deadline_ms = null;
+                                }
                             }
                             self.last_output_ms = now_ms;
                             if (self.output.damaged) {
@@ -538,7 +546,7 @@ const Proxy = struct {
                                     // path. Sample existing effects first;
                                     // it must never consume source events or
                                     // activate a new effect.
-                                    _ = self.renderer.compose(now_ms);
+                                    _ = try self.renderer.compose(now_ms);
                                     try self.paint();
                                 } else {
                                     self.requestPaint(now_ms);
@@ -567,7 +575,7 @@ const Proxy = struct {
                 const slot = row * 2 + side;
                 if (self.source.override_lens[slot] != null or (slot < 32 and source_update.override_events & (@as(u32, 1) << @intCast(slot)) != 0)) self.renderer.cancelHighlight(row, side);
             };
-            if (self.renderer.compose(now_ms)) self.requestPaint(now_ms);
+            if (try self.renderer.compose(now_ms)) self.requestPaint(now_ms);
 
             try self.paintIfDue(now_ms);
             self.terminal.flush();
@@ -589,7 +597,7 @@ const Proxy = struct {
                     self.last_input_ms = now_ms;
                 }
             } else if (now_ms - self.last_input_ms >= input_hold_ms) {
-                self.flushPalette(false);
+                if (self.palette_probe.holding()) self.flushPalette(false);
                 if (self.input.holding()) self.input.flush(&self.pending_input);
             }
 
@@ -687,6 +695,19 @@ test "palette filtering preserves CSI translation across fragmented input" {
     proxy.feedTerminalInput("\\keys\x1b[<0;3;24M");
     try std.testing.expectEqualStrings("\x1b[8;22;80tkeys", proxy.pending_input.pending());
     try std.testing.expectEqualDeep(@import("terminal_palette.zig").Rgb{ 17, 34, 51 }, renderer.palette.background.?);
+}
+
+test "completed palette discovery bypasses its copy stage" {
+    var renderer = try bar.Renderer.init(std.testing.allocator);
+    defer renderer.deinit();
+    var proxy: Proxy = undefined;
+    proxy.renderer = &renderer;
+    proxy.palette_probe = .{};
+    proxy.pending_input = .{};
+    proxy.input = .{ .bar = 0, .rows = 24 };
+    proxy.feedTerminalInput("keys\x1b[A");
+    try std.testing.expectEqual(@as(usize, 0), proxy.palette_probe.filter_calls);
+    try std.testing.expectEqualStrings("keys\x1b[A", proxy.pending_input.pending());
 }
 
 test "layout places the bar and gives it up on tiny terminals" {

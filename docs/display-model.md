@@ -59,8 +59,9 @@ update the desired appearance from the current base and effect state. Painting
 compares desired with painted, emits only necessary rows, then advances the
 painted snapshot.
 
-Effects modify appearance, never the base. When an effect expires, composing
-from the base naturally restores the exact current foreground, background,
+Effects modify appearance, never the base. Each affected row is traversed once
+per animation tick, applying all live samples and expirations at the shared
+timestamp. When an effect expires, composing from the base naturally restores the exact current foreground, background,
 attributes, and hyperlinks. It does not restore a stale copy captured when the
 effect began.
 
@@ -140,8 +141,11 @@ content-update path.
 The scheduler is demand-driven. With no active effects or content changes,
 there is no animation tick and no idle rendering work. The adaptive color
 pulse samples a smooth curve every 30 ms while it is active.
-Its color range is checked before playback and cached per resolved color pair
-and pulse count. Frame sampling does not independently adjust contrast limits:
+Its color range is checked before playback and retained in a renderer-owned
+preparation generation keyed by resolved color pair and pulse count. Every
+visible tracked style is prepared together when content, layout, or palette
+resolution changes. Frame sampling neither allocates nor prepares a missing
+range and does not independently adjust contrast limits:
 that would introduce brightness jumps into an otherwise smooth curve. Repeated
 pulses stay within the animated range between peaks and restore the base only
 at the end of the complete effect.

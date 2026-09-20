@@ -47,9 +47,12 @@ style, hyperlink, left/right/fill ownership, and optional tracking-region ID.
 Wide graphemes also have a continuation cell, so clipping and appearance changes
 cannot split them.
 
-Ordinary updates rebuild only source rows whose bytes or region metadata
-changed, compare their cells, and repaint only rows whose appearance changed. Identical updates emit
-nothing. Startup, resize and screen damage repaint all visible rows. Damage
+Compiled templates record per-side command and clock dependencies. Accepted
+command output is normalized before comparison and dirties only dependent rows
+whose slots are not overridden; clock ticks likewise dirty only live clock
+templates. Overrides dirty their own row. Identical configured and `--exec`
+updates format no rows. Dirty rows compare their cells, and only rows whose
+appearance changed are repainted. Startup, resize and screen damage repaint all visible rows. Damage
 repair uses existing cells without parsing content again. Paints still use the
 same safe output boundaries and cursor-save timing as before.
 
@@ -86,9 +89,13 @@ animation is checked to retain at least 75% of its original contrast and a
 4.5:1 floor (or the original ratio when already below that floor). Background
 movement is reduced first; foreground movement is reduced only if necessary.
 This selects one range for the whole animation, not an independent correction
-each frame. A bounded 16-entry cache keys ranges by resolved foreground,
-background, and pulse count, so palette changes cannot reuse stale ranges.
-Repeated adjacent styles reuse the same per-frame result. Both wide-glyph
+each frame. Before playback, the renderer builds a deduplicated generation of
+every resolved foreground/background and pulse-count key referenced by visible
+tracked cells. The generation is budget-owned, has no arbitrary entry limit,
+reuses unchanged ranges, and is replaced when content, layout, or palette
+resolution changes. Animation sampling only looks up prepared ranges; it never
+allocates or validates contrast. Lead cells retain their generation index so
+sampling does not search the table; continuations share the lead's style. Both wide-glyph
 cells get identical styles; the base is never modified. Unknown terminal
 colors use a bold fallback, and expiry restores the original color tokens.
 
@@ -99,6 +106,9 @@ duplicate, or oversized sequences pass through. A brief grace period accepts
 late replies. The child's first OSC relinquishes all remaining query ownership
 because OSC responses have no request IDs. Palette replies may recompose an
 existing effect but never activate one. The palette is cached for the session.
+Once no replies or held probe bytes remain, terminal input bypasses the palette
+copy buffer and retains its original read batching. Child output is observed
+for OSC ownership only while replies are outstanding.
 
 Protocol reference: [xterm control sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html).
 Color-space reference: [OKLab](https://bottosson.github.io/posts/oklab/).
@@ -152,23 +162,22 @@ Adaptive workloads are independently labeled `colors` and `regions`:
   pairs on 80-column rows (up to 16 pairs per row, within input limits).
 - `regions` uses 1, 8, or 32 active regions sharing one pair on a 512-column row,
   split across left/right slots with no more than 16 regions per slot.
-- `cold` averages 20 independent first nonzero effect frames. Each starts with
-  an empty range cache; range preparation is included in the time and counters.
-  Restoration is checked separately, outside these measurements.
-- `warm` keeps the cache across eight complete two-pulse effects (648 frames),
-  including initial and restoration frames. Warm does **not** mean every pair
-  fits in the cache: recurring misses remain part of the measured workload.
+- `cold` averages 20 independent preparations and first nonzero effect frames.
+  Preparation time is reported separately from frame time. Restoration is
+  checked separately, outside these measurements.
+- `warm` retains prepared ranges across eight complete two-pulse effects (648
+  frames), including initial and restoration frames.
 
 Every workload reports monotonic-clock mean/max nanoseconds per frame, frame
 count, emitted bytes, range preparations, cache hits/misses, safety samples,
-effect traversal visits and storage. Safety samples count colors checked while
+effect traversal visits, preparation allocations and storage. Safety samples count colors checked while
 preparing a safe range, not ordinary frame sampling. Cell visits include the
-whole-row restore and effect-patch scans, including skipped cells, but exclude
+single affected-row composition scans, including skipped cells, but exclude
 layout, parsing and paint comparison. Counters reset independently of cached
 ranges; they exist only in tests and benchmarks, not production binaries.
 
-Capacity warm-up precedes the measurements, while cold color preparation stays
-inside them. A separate `setup` line reports allocations during the first full
+Capacity warm-up precedes the measurements, while cold color preparation is
+timed independently. A separate `setup` line reports allocations during the first full
 effect after layout, so first-preparation allocations cannot be hidden by warm-up.
 Assertions check zero measured allocations, the renderer's memory
 budget, no parsing during animation, exact restoration, idle scheduling, valid

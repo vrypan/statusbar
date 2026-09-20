@@ -49,6 +49,8 @@ pub const Probe = struct {
     remaining: usize = 0,
     input: Frame = .{},
     child: Frame = .{},
+    /// Test/benchmark evidence that completed probes leave the copy path.
+    filter_calls: usize = 0,
 
     pub fn begin(self: *Probe, writer: *std.Io.Writer) !void {
         self.* = .{};
@@ -66,6 +68,9 @@ pub const Probe = struct {
     pub fn holding(self: *const Probe) bool {
         return self.input.len > 0;
     }
+    pub fn bypassable(self: *const Probe) bool {
+        return self.remaining == 0 and !self.holding();
+    }
     pub fn flush(self: *Probe, sink: anytype) void {
         self.input.flush(sink);
     }
@@ -78,10 +83,11 @@ pub const Probe = struct {
     /// Only one complete, valid reply to an outstanding query is consumed.
     /// Duplicate, malformed, unrelated, and oversized sequences pass unchanged.
     pub fn feed(self: *Probe, bytes: []const u8, palette: *Palette, sink: anytype) void {
-        if (self.remaining == 0 and self.input.len == 0) {
+        if (self.bypassable()) {
             sink.write(bytes);
             return;
         }
+        self.filter_calls += 1;
         for (bytes) |byte| {
             if (self.input.len == 0) {
                 if (byte == 0x1b) {
@@ -222,4 +228,30 @@ test "oversized malformed and incomplete palette input is lossless and bounded" 
         try std.testing.expectEqual(@as(usize, 0), palette.revision);
         try std.testing.expect(!probe.holding() and probe.remaining == 0);
     }
+}
+
+test "probe is bypassable only after outstanding and held input are gone" {
+    const Sink = struct {
+        writer: *std.Io.Writer,
+        pub fn write(self: *@This(), bytes: []const u8) void {
+            self.writer.writeAll(bytes) catch unreachable;
+        }
+    };
+    var probe: Probe = .{};
+    try std.testing.expect(probe.bypassable());
+    var query: [4096]u8 = undefined;
+    var query_writer = std.Io.Writer.fixed(&query);
+    try probe.begin(&query_writer);
+    try std.testing.expect(!probe.bypassable());
+    var palette: Palette = .{};
+    var output: [16]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&output);
+    var sink: Sink = .{ .writer = &writer };
+    probe.feed("\x1b", &palette, &sink);
+    probe.remaining = 0;
+    try std.testing.expect(!probe.bypassable());
+    probe.flush(&sink);
+    try std.testing.expect(probe.bypassable());
+    probe.feed("keys", &palette, &sink);
+    try std.testing.expectEqualStrings("\x1bkeys", writer.buffered());
 }
