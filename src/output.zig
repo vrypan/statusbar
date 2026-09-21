@@ -65,6 +65,8 @@ pub const Output = struct {
     /// DECAWM as the child last set it. The paint turns wrapping off and
     /// needs to know what to put back.
     autowrap: bool = true,
+    /// Latest bracketed-paste mode requested by the child.
+    bracketed_paste: bool = false,
 
     values: [2][max_value]u8 = undefined,
     value_lens: [2]usize = .{ 0, 0 },
@@ -486,6 +488,7 @@ pub const Output = struct {
     fn hardReset(self: *Output, sink: anytype) void {
         self.origin_mode = false;
         self.autowrap = true;
+        self.bracketed_paste = false;
         self.cursor_saved = false;
         self.top = 0;
         self.bottom = 0;
@@ -562,6 +565,7 @@ pub const Output = struct {
             for (params[0..count]) |mode| switch (mode) {
                 7 => self.autowrap = final == 'h',
                 6 => self.origin_mode = final == 'h',
+                2004 => self.bracketed_paste = final == 'h',
                 47, 1047, 1049 => switched = true,
                 else => {},
             };

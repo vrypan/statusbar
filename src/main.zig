@@ -76,6 +76,12 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
         return if (err == error.ReportedConfigError) 2 else err;
     };
     const cfg = loaded.config;
+    const config_path = if (loaded.path) |path| blk: {
+        if (std.fs.path.isAbsolute(path)) break :blk path;
+        var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const cwd_ptr = std.c.getcwd(&cwd_buf, cwd_buf.len) orelse break :blk path;
+        break :blk try std.fs.path.resolve(arena, &.{ std.mem.sliceTo(cwd_ptr, 0), path });
+    } else null;
 
     // Precedence: command-line flags, then the config file (or the built-in
     // one), then defaults.
@@ -90,6 +96,7 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
         .command = if (templates) null else exec orelse "date",
         .interval_ms = interval_ms orelse 1000,
         .cfg = cfg,
+        .config_path = config_path,
         // Reverse video marks a plain command's bar; a config draws its own.
         .style = style orelse cfg.style orelse (if (templates) "" else "7"),
     };
@@ -163,8 +170,14 @@ fn setSlot(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stde
     if (text.items.len > @import("output.zig").max_value) return usageError(stderr, command, "TEXT must be at most 1024 bytes");
 
     // Outside a session there is no bar to update, and nothing is written.
-    const line_text = @import("environment.zig").get("STATUSBAR_LINES") orelse return 0;
-    const line_count = parseSlot(line_text) orelse return usageError(stderr, command, "STATUSBAR_LINES is malformed");
+    const env = @import("environment.zig");
+    const line_count = if (env.get("STATUSBAR_STATE")) |state_path|
+        @import("session_state.zig").readLines(io, state_path) catch
+            return usageError(stderr, command, "STATUSBAR_STATE is unavailable or malformed")
+    else blk: {
+        const line_text = env.get("STATUSBAR_LINES") orelse return 0;
+        break :blk parseSlot(line_text) orelse return usageError(stderr, command, "STATUSBAR_LINES is malformed");
+    };
     const max_slot = std.math.mul(usize, line_count, 2) catch return usageError(stderr, command, "STATUSBAR_LINES is malformed");
     if (slot > max_slot) return usageError(stderr, command, "SLOT does not exist in this session");
     const encoder = std.base64.standard.Encoder;
@@ -191,8 +204,7 @@ fn shellInit(arena: std.mem.Allocator, io: Io, invoked_as: []const u8, command: 
     else
         3;
     const line_text = @import("environment.zig").get("STATUSBAR_LINES") orelse return 0;
-    const line_count = parseSlot(line_text) orelse return usageError(stderr, command, "STATUSBAR_LINES is malformed");
-    const max_slot = std.math.mul(usize, line_count, 2) catch return usageError(stderr, command, "STATUSBAR_LINES is malformed");
+    _ = parseSlot(line_text) orelse return usageError(stderr, command, "STATUSBAR_LINES is malformed");
     if (!starship and !report_cwd) return 0;
     if (report_cwd) try stdout.writeAll(if (std.mem.eql(u8, args[0], "zsh")) zsh_cwd_init else fish_cwd_init);
     if (!starship) {
@@ -207,7 +219,7 @@ fn shellInit(arena: std.mem.Allocator, io: Io, invoked_as: []const u8, command: 
     const executable = try shellExecutable(arena, io, invoked_as);
     const with_path = try std.mem.replaceOwned(u8, arena, script, "@STATUSBAR@", try shellQuote(arena, executable));
     const with_slot = try std.mem.replaceOwned(u8, arena, with_path, "@SLOT@", try std.fmt.allocPrint(arena, "{d}", .{slot}));
-    try stdout.writeAll(try std.mem.replaceOwned(u8, arena, with_slot, "@SLOT_VALID@", if (slot <= max_slot) "1" else "0"));
+    try stdout.writeAll(with_slot);
     try stdout.flush();
     return 0;
 }
@@ -288,12 +300,11 @@ const zsh_init =
     \\# Runs starship's normal prompt and splits it: every line but the last goes
     \\# to the bar's left slot, and the last line, the prompt character, stays in
     \\# the terminal. A one-line prompt stays whole and leaves the bar alone.
-    \\if (( $+commands[starship] && ! @SLOT_VALID@ )); then
-    \\  print -u2 -- 'statusbar: --starship-slot does not exist in this session'
-    \\elif (( $+commands[starship] )); then
+    \\if (( $+commands[starship] )); then
     \\  __statusbar_prompt() {
-    \\    local out rest newline
+    \\    local out full rest newline
     \\    out=$(STARSHIP_SHELL=zsh starship prompt --terminal-width="$COLUMNS" --keymap="${KEYMAP:-}" --status="${STARSHIP_CMD_STATUS:-}" --pipestatus="${STARSHIP_PIPE_STATUS[*]:-}" --cmd-duration="${STARSHIP_DURATION:-}" --jobs="$STARSHIP_JOBS_COUNT")
+    \\    full=$out
     \\    # Starship's add_newline blank line separates the prompt from the last
     \\    # command's output; it stays with the prompt, not the bar.
     \\    if [[ $out == $'\n'* ]]; then
@@ -305,7 +316,10 @@ const zsh_init =
     \\      out=${out##*$'\n'}
     \\      # Starship marks escape codes with %{ %} and doubles literal percent
     \\      # signs for zsh; prompt expansion turns that back into plain output.
-    \\      command @STATUSBAR@ set @SLOT@ "${(%)rest}"
+    \\      if ! command @STATUSBAR@ set @SLOT@ "${(%)rest}" 2>/dev/null; then
+    \\        out=$full
+    \\        newline=''
+    \\      fi
     \\    fi
     \\    print -rn -- "$newline$out"
     \\  }
@@ -328,9 +342,7 @@ const fish_init =
     \\# Load this after `starship init fish | source`. Fish has a prompt
     \\# function rather than Bash-style traps, so replace Starship's prompt
     \\# renderer with one that moves all but its final line into the bar.
-    \\if command -q starship; and test @SLOT_VALID@ = 0
-    \\  printf '%s\n' 'statusbar: --starship-slot does not exist in this session' >&2
-    \\else if command -q starship
+    \\if command -q starship
     \\  function fish_prompt
     \\    set -l statusbar_status $status
     \\    set -l statusbar_pipestatus $pipestatus
@@ -345,6 +357,7 @@ const fish_init =
     \\      set statusbar_columns $COLUMNS
     \\    end
     \\    set -l out (STARSHIP_SHELL=fish starship prompt --terminal-width="$statusbar_columns" --keymap="$statusbar_keymap" --status="$statusbar_status" --pipestatus="(string join ' ' -- $statusbar_pipestatus)" --cmd-duration="$statusbar_duration" --jobs="(jobs -p 2>/dev/null | count)" | string collect)
+    \\    set -l full "$out"
     \\    # Starship clears below the old prompt before its optional leading
     \\    # newline. That terminal sequence belongs with the prompt, not the bar.
     \\    set -l prefix ""
@@ -355,7 +368,10 @@ const fish_init =
     \\    if string match -rq '(?s)^.*\\n.*$' -- "$out"
     \\      set -l bar (string replace -r '(?s)\\n[^\\n]*$' '' -- "$out" | string collect)
     \\      set out (string replace -r '(?s)^.*\\n' '' -- "$out")
-    \\      command @STATUSBAR@ set @SLOT@ "$bar"
+    \\      if not command @STATUSBAR@ set @SLOT@ "$bar" 2>/dev/null
+    \\        set prefix ""
+    \\        set out "$full"
+    \\      end
     \\    end
     \\    printf '%s%s' "$prefix" "$out"
     \\  end
@@ -425,6 +441,8 @@ fn usageError(stderr: *Io.Writer, command: *const zecli.Command, message: []cons
 test {
     _ = @import("output.zig");
     _ = @import("input.zig");
+    _ = @import("config_dialog.zig");
+    _ = @import("session_state.zig");
     _ = @import("bar.zig");
     _ = @import("markup.zig");
     _ = @import("config.zig");

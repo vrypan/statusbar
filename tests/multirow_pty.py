@@ -214,6 +214,20 @@ def check_zsh(binary):
         assert b"SetUserVar=StatusBarSlot" not in data
         assert b"one%%literal" in data, data
 
+        # A slot that is absent from the current layout leaves Starship's
+        # complete prompt in the terminal. The same installed hook can begin
+        # using it after a later configuration reload adds the slot.
+        one_row_env = zenv.copy()
+        one_row_env["STATUSBAR_LINES"] = "1"
+        script = (
+            f'export STARSHIP_TEST_MODE=multi; eval "$({quoted_binary} init zsh)"; '
+            "__statusbar_prompt"
+        )
+        code, data = capture_pty([zsh, "-f", "-c", script], one_row_env)
+        assert code == 0, data
+        assert b"SetUserVar=StatusBarSlot" not in data
+        assert b"bar%%literal\r\nprompt" in data, data
+
     print("zsh -f integration passed")
 
 
@@ -252,6 +266,17 @@ def check_fish(binary):
         assert code == 0, data
         assert b"SetUserVar=StatusBarSlot" not in data
         assert b"one%literal" in data, data
+
+        one_row_env = fenv.copy()
+        one_row_env["STATUSBAR_LINES"] = "1"
+        script = (
+            f"set -gx STARSHIP_TEST_MODE multi; {quoted_binary} init fish | source; "
+            "fish_prompt"
+        )
+        code, data = capture_pty([fish, "-N", "-c", script], one_row_env)
+        assert code == 0, data
+        assert b"SetUserVar=StatusBarSlot" not in data
+        assert b"bar%literal\r\nprompt" in data, data
 
     print("fish integration passed")
 
@@ -554,6 +579,58 @@ time.sleep(10)
     print("adaptive palette pulse, input preservation, and child query ownership passed")
 
 
+def check_config_dialog(binary):
+    config = """\
+[line.1]
+left = RELOADED_ONE
+[line.2]
+left = RELOADED_TWO
+[line.3]
+left = RELOADED_THREE
+"""
+    with tempfile.NamedTemporaryFile("w", delete=False) as cfg:
+        cfg.write(config)
+        config_path = cfg.name
+    pid = master = None
+    try:
+        script = r'''
+printf RELOAD_READY
+while IFS= read -r command; do
+  case "$command" in
+    SET) "$1" set 6 LIVE_SLOT; printf '__SET__\n' ;;
+    EXIT) exit 0 ;;
+  esac
+done
+'''
+        pid, master = spawn([
+            binary, "-e", "printf RELOAD_READY", "--",
+            "/bin/sh", "-c", script, "sh", binary,
+        ], rows=12)
+        data = read_until(master, b"", b"RELOAD_READY", timeout=5)
+        os.write(master, b"\x18\x12")
+        data = read_until(master, data, b"Enter config path:", timeout=3)
+        os.write(master, b"\x15" + os.fsencode(config_path) + b"\r")
+        data = read_until(master, data, b"RELOADED_THREE", timeout=5)
+        assert b"\x1b[1;9r" in data, data[-1000:]
+        os.write(master, b"SET\n")
+        data = read_until(master, data, b"__SET__", timeout=3)
+        data = read_until(master, data, b"LIVE_SLOT", timeout=3)
+        with open(config_path, "w", encoding="utf-8") as replacement:
+            replacement.write("[line.1]\nleft = SHRUNK\n")
+        before_shrink = len(data)
+        os.write(master, b"\x18\x12")
+        data += read_until(master, b"", b"Enter config path:", timeout=3)
+        os.write(master, b"\r")
+        data += read_until(master, b"", b"SHRUNK", timeout=5)
+        assert b"\x1b[1;11r" in data[before_shrink:], data[-1000:]
+        os.write(master, b"EXIT\n")
+    finally:
+        if pid is not None:
+            stop(pid, master)
+        os.unlink(config_path)
+    print("interactive config replacement and row growth passed")
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: multirow_pty.py STATUSBAR")
@@ -583,6 +660,7 @@ def main():
     check_tracking(binary, colors=True)
     check_geometry_results_do_not_highlight(binary)
     check_adaptive_palette(binary)
+    check_config_dialog(binary)
     config = """\
 [line.1]
 left = one

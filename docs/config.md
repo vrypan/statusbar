@@ -25,6 +25,21 @@ statusbar config --default > ~/.config/statusbar/config
 it parses, and `statusbar config --path` shows which file that is; see
 [usage.md](usage.md#config).
 
+## Replace the running config
+
+Press **Ctrl-X Ctrl-R** in a statusbar session to open its config-path editor.
+Enter loads the selected file; Escape or Ctrl-C cancels. The current file path
+is prefilled, Ctrl-U clears it, and ordinary navigation and deletion keys edit
+it. Relative paths use statusbar's startup directory, while `~/` uses `HOME`.
+The path is literal and is not evaluated by a shell.
+
+Loading is transactional: unreadable or invalid files leave the active bar in
+place and show an error in the editor. A successful replacement applies every
+setting, including its number of `[line.N]` sections. Existing numbered-slot
+overrides survive only where the same slot number exists in the new layout.
+Configured commands restart and establish their first values without a change
+highlight. Because those commands are executable code, load trusted configs.
+
 ## Example
 
 ```ini

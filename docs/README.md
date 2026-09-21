@@ -18,6 +18,7 @@ This guide calls the visible parts of the bar *rows*. In a config file, each
 |---|---|
 | Show a clock or one command's output | [A single command](#start-with-one-command) |
 | Build a persistent personal layout | [Make a config](#make-a-config) |
+| Change layouts without restarting the shell | [Load another config](#load-another-config) |
 | Notice when a command's value changes | [Highlight changed values](#highlight-changed-values) |
 | Show changing directory or Git context | [Update slots from your shell](#put-live-context-in-a-slot) |
 | Move Starship's details out of the prompt | [Use Starship](#use-starship) |
@@ -85,6 +86,24 @@ The terminal shows as many configured rows as fit while preserving at least
 two rows for the program inside it. Rows that do not fit are hidden and return
 when the terminal grows. [Configuration](config.md) explains templates,
 commands, markup, colors, rules, and all layout details.
+
+## Load another config
+
+Press **Ctrl-X Ctrl-R** inside a running statusbar session. The bar becomes an
+`Enter config path:` field. Enter a path and press Enter to replace the whole
+configuration; press Escape or Ctrl-C to leave the current bar unchanged.
+Ctrl-U clears the field, and the arrow, Home, End, Backspace, and Delete keys
+edit it.
+
+The active config path is filled in automatically. A relative path is resolved
+from the directory where statusbar started, not the shell's current directory;
+`~/` expands from `HOME`. Paths are literal—there is no shell expansion.
+
+The running statusbar reads and validates the file before replacing anything.
+An error remains in the input field so it can be corrected. A successful load
+can add or remove rows and change every configuration setting without restarting
+the shell or foreground program. Overrides in numbered slots that still exist
+are retained. Config files run shell commands, so load only files you trust.
 
 ## Highlight changed values
 

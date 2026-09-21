@@ -22,7 +22,8 @@ statusbar set 4
 Slots exist for every desired row, including rows temporarily hidden because
 the terminal is short. Updating a hidden slot persists and appears when its
 row becomes visible. A slot outside the session's configured range is an
-error and never creates another row.
+error and never creates another row. Validation uses the session's current
+config after an interactive replacement, not its startup row count.
 
 Words are joined with spaces. Tabs and interior line breaks become spaces,
 while quoted spaces—including an all-space value—are preserved as padding.

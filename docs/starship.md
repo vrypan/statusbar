@@ -24,7 +24,7 @@ integration already reports it. Both features default to enabled; use
 `--starship=false` to keep only directory reporting.
 
 By default the prompt details go to slot 3, the left side of row 2. Select
-another existing slot, including a right-side slot, with:
+another slot, including a right-side slot, with:
 
 ```zsh
 eval "$(statusbar init zsh --starship-slot 5)"
@@ -43,6 +43,9 @@ turns red after a failed command and follows vi keymaps.
   `.zshrc` works in every terminal.
 - A one-line Starship prompt is left whole in the terminal, and the bar keeps
   its configured content.
+- If the selected slot is not present, the complete Starship prompt stays in
+  the terminal. The integration starts moving its details automatically when
+  a configuration loaded later adds that slot.
 - Starship's `add_newline` blank line stays in the terminal, above the
   prompt, as it would without statusbar.
 - The bar's right slot, and the right prompt (`right_format`), are untouched.
@@ -60,7 +63,7 @@ starship init fish | source
 statusbar init fish | source
 ```
 
-The same `--starship-slot N` option selects another existing slot:
+The same `--starship-slot N` option selects another slot:
 
 ```fish
 statusbar init fish --starship-slot 5 | source

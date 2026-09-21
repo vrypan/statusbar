@@ -451,6 +451,39 @@ pub const Renderer = struct {
     pub fn compose(self: *Renderer, now_ms: i64) !bool {
         return try self.advanceHighlights(now_ms);
     }
+
+    /// Replaces the first desired row with literal UI text while leaving the
+    /// base frame intact underneath. Doubling `#` prevents config markup from
+    /// being interpreted when a filename contains `#[`.
+    pub fn overlayLiteral(self: *Renderer, text: []const u8) !void {
+        if (self.rows.len == 0) return;
+        var escaped: [max_line_bytes * 2]u8 = undefined;
+        var len: usize = 0;
+        for (text) |byte| {
+            if (len == escaped.len) break;
+            if (byte == '#') {
+                if (len + 2 > escaped.len) break;
+                escaped[len] = '#';
+                escaped[len + 1] = '#';
+                len += 2;
+            } else {
+                escaped[len] = if (byte < 0x20 or byte == 0x7f) ' ' else byte;
+                len += 1;
+            }
+        }
+        try self.layout(&self.staging, escaped[0..len], .{}, "7", null, .{});
+        const row = &self.rows[0];
+        try row.desired.reserveCopy(self.budget.allocator(), self.staging);
+        row.desired.copyReserved(self.staging);
+        row.pending = true;
+    }
+
+    pub fn clearOverlay(self: *Renderer) void {
+        if (self.rows.len == 0) return;
+        const row = &self.rows[0];
+        row.desired.copyReserved(row.base);
+        row.pending = true;
+    }
     /// Construct a complete batch using storage reserved during preparation.
     /// Nothing in painted is changed here, even if construction fails.
     pub fn build(self: *Renderer, first_row: u16, region: []const u8, autowrap: bool, force: bool) ![]const u8 {

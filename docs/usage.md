@@ -33,6 +33,13 @@ Options take their value as the next argument (`-n 3`), and long options
 also after `=` (`--lines=3`). `--lines` requires `--exec`; config height
 comes from its `[line.N]` sections.
 
+During a session, **Ctrl-X Ctrl-R** opens `Enter config path:` in the bar.
+Submitting a valid file replaces the complete layout—including its row count—
+without restarting the command. Escape or Ctrl-C cancels. See
+[configuration](config.md#replace-the-running-config) for path and replacement
+semantics. There is deliberately no external reload command or reload escape
+sequence.
+
 ## `set`
 
 `statusbar set N [TEXT...]` replaces a numbered slot of the bar from inside a
@@ -48,10 +55,12 @@ after Starship's own initialization. See [starship.md](starship.md).
 
 Use `--starship=false` for directory reporting alone, or `--report-cwd=false`
 if another integration already reports directories. `--starship-slot N`
-selects another existing slot; it cannot be combined with `--starship=false`.
-Slot availability is checked when the generated code finds Starship. Directory
-reporting works independently, even with one bar row. Disabling both features
-prints nothing, as does running `init` outside a statusbar session.
+selects another slot; it cannot be combined with `--starship=false`. The hook
+checks the live layout at every prompt, so it starts using the slot if a loaded
+configuration adds it and leaves the full prompt in the terminal while the
+slot is absent. Directory reporting works independently, even with one bar
+row. Disabling both features prints nothing, as does running `init` outside a
+statusbar session.
 
 Reports are sent to the controlling terminal when the directory changes and
 before each prompt. Repeating initialization does not duplicate these hooks.
@@ -146,6 +155,7 @@ working directory or environment of statusbar commands.
 
 | Variable            | Set for                   | Meaning                                  |
 |---------------------|---------------------------|------------------------------------------|
-| `STATUSBAR_LINES`   | the child and bar commands | desired rows; marks a statusbar session |
+| `STATUSBAR_LINES`   | the child and bar commands | desired rows at process start           |
 | `STATUSBAR_COLUMNS` | bar commands              | the bar's width                          |
 | `STATUSBAR_CONFIG`  | read by statusbar         | config file, when `--config` isn't given |
+| `STATUSBAR_STATE`   | the child                  | private live row-count metadata used by `set` |

@@ -3,6 +3,10 @@
 Changes are grouped by version tag, newest first. `dev` contains commits
 since the latest version tag. Entries preserve commit subjects verbatim.
 
+## dev
+
+- Replace configuration from an in-session path editor
+
 ## v0.2.3
 
 - Bump v0.2.3
