@@ -4,7 +4,8 @@
 //!     statusbar [run] [options] [-- COMMAND...]
 //!     statusbar set <N> [TEXT...]
 //!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
-//!     statusbar config [--path | --default | --config PATH | --load PATH]
+//!     statusbar config [--path] [--default | --config PATH]
+//!     statusbar config --load PATH
 //!     statusbar completion <bash|zsh|fish>
 
 const std = @import("std");
@@ -103,7 +104,7 @@ const commands = [_]zecli.CommandSpec{
     .{
         .name = "config",
         .description = "Print or replace the complete configuration",
-        .usage = "statusbar config [--path | --default | --config PATH | --load PATH]",
+        .usage = "statusbar config [--path] [--default | --config PATH] | statusbar config --load PATH",
         .flags = &config_flags,
         .double_dash = .positionals,
         .extra_help =

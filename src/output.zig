@@ -305,10 +305,12 @@ pub const Output = struct {
                             self.config_len = 0;
                             self.config_overflow = false;
                         } else if (!std.mem.startsWith(u8, user_var_prefix, probe) and !std.mem.startsWith(u8, config_protocol.namespace, probe)) {
-                            // Not ours: release the complete probe and stream
-                            // the remainder as an ordinary OSC.
+                            // Reprocess the mismatching byte as string content:
+                            // it may terminate or interrupt this OSC.
                             sink.write("\x1b]");
-                            sink.write(probe);
+                            sink.write(probe[0 .. probe.len - 1]);
+                            i -= 1;
+                            run = i;
                             self.state = .string;
                             self.string_is_osc = true;
                         }
@@ -717,6 +719,24 @@ fn expectTranslation(input: []const u8, expected: []const u8) !void {
         const got = try translate(&out, input, chunk);
         defer std.testing.allocator.free(got);
         try std.testing.expectEqualStrings(expected, got);
+    }
+}
+
+test "OSC prefix mismatches retain control byte semantics at every split" {
+    for ([_][]const u8{ "", "3", "3110;STATUSBAR", "1337;SetUserVar=Status" }) |prefix| {
+        for ([_][]const u8{ "\x07", "\x18", "\x1a", "\x1b\\", "\x1b[99H" }) |ending| {
+            const input = try std.mem.concat(std.testing.allocator, u8, &.{ "\x1b]", prefix, ending });
+            defer std.testing.allocator.free(input);
+            const expected = try std.mem.concat(std.testing.allocator, u8, &.{ "\x1b]", prefix, if (std.mem.eql(u8, ending, "\x1b[99H")) "\x1b[22H" else ending });
+            defer std.testing.allocator.free(expected);
+            for (1..input.len + 1) |chunk| {
+                var out: Output = .{ .bar = 2, .rows = 22 };
+                const got = try translate(&out, input, chunk);
+                defer std.testing.allocator.free(got);
+                try std.testing.expectEqualStrings(expected, got);
+                try std.testing.expect(out.atBoundary());
+            }
+        }
     }
 }
 

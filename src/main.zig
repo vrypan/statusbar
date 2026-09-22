@@ -136,9 +136,9 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
 fn printConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
     const flag = command.getValue([]const u8, "config");
     const load = command.getValue([]const u8, "load");
-    const modes: usize = @intFromBool(command.enabled("default"));
-    const selected_modes = modes + @intFromBool(command.enabled("path")) + @intFromBool(flag != null) + @intFromBool(load != null);
-    if (selected_modes > 1) return usageError(stderr, command, "--load, --path, --default and --config are mutually exclusive");
+    if (command.enabled("default") and flag != null) return usageError(stderr, command, "--default and --config are mutually exclusive");
+    if (load != null and (command.enabled("path") or command.enabled("default") or flag != null))
+        return usageError(stderr, command, "--load cannot be combined with --path, --default or --config");
     if (load) |path| return sendConfig(arena, io, command, path, stderr);
     // Reading nothing for --default matters when stdout is redirected to the
     // config file: the shell has already emptied it.

@@ -622,6 +622,19 @@ def check_osc_config(binary):
             config_file.write(initial)
         with open(replacement_path, "w") as config_file:
             config_file.write(replacement)
+        for args, expected in [
+            (["--path", "--default"], b"built-in\n"),
+            (["--path", "--config", initial_path], os.fsencode(initial_path) + b"\n"),
+        ]:
+            result = subprocess.run([binary, "config", *args], capture_output=True)
+            assert result.returncode == 0 and result.stdout == expected, result
+        for args in [
+            ["--default", "--config", initial_path],
+            ["--load", replacement_path, "--default"],
+            ["--load", replacement_path, "--config", initial_path],
+        ]:
+            result = subprocess.run([binary, "config", *args], capture_output=True)
+            assert result.returncode == 2 and not result.stdout, result
         no_session = subprocess.run(
             [binary, "config", "--load", replacement_path],
             capture_output=True, check=False,
@@ -732,6 +745,21 @@ for command in sys.stdin:
 
 
 def check_theme_growth(binary):
+    # The new region must precede text in the very same child write.
+    child = r'''
+import os, base64, time
+text = ''.join('[line.%d]\nleft = ROW%d\n' % (n, n) for n in range(1, 6))
+envelope = b'1;' + os.environ['STATUSBAR_SESSION_ID'].encode() + b';' + text.encode()
+frame = b'\x1b]3110;STATUSBAR;CONFIG;' + base64.b64encode(envelope) + b'\x1b\\'
+os.write(1, frame + b'\nAFTER_CONFIG\n')
+time.sleep(.3)
+'''
+    pid, master = spawn([binary, "-n", "2", "-e", "printf BEFORE_BAR", "--", sys.executable, "-c", child], rows=24)
+    try:
+        data = read_until(master, b"", b"AFTER_CONFIG", timeout=5)
+        assert data.index(b"\x1b7\x1b[1;19r\x1b8") < data.index(b"AFTER_CONFIG"), data
+    finally:
+        stop(pid, master)
     pastel = os.path.abspath("samples/themes/pastel-powerline.config")
     multi = os.path.abspath("samples/themes/multi-line.config")
     script = r'''

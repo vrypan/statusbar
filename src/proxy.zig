@@ -344,6 +344,24 @@ const PendingInput = struct {
     }
 };
 
+fn inputReady(fd: posix.fd_t) bool {
+    var fds = [_]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
+    _ = posix.poll(&fds, 0) catch return false;
+    return fds[0].revents & (posix.POLL.IN | posix.POLL.HUP) != 0;
+}
+
+test "input readiness is refreshed after another reader consumes input" {
+    var fds: [2]c_int = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.pipe(&fds));
+    defer _ = c.close(fds[0]);
+    defer _ = c.close(fds[1]);
+    try std.testing.expectEqual(@as(isize, 1), c.write(fds[1], "x", 1));
+    try std.testing.expect(inputReady(fds[0]));
+    var buf: [1]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 1), try sys.read(fds[0], &buf));
+    try std.testing.expect(!inputReady(fds[0]));
+}
+
 const Proxy = struct {
     log: ?*@import("log.zig").Log = null,
     gpa: std.mem.Allocator,
@@ -614,6 +632,11 @@ const Proxy = struct {
         self.renderer = &self.runtime.renderer;
         self.session_state.write(self.runtime.lines) catch {};
         self.output.resize(new_layout.bar, new_layout.child.row);
+        // DECSTBM homes the cursor. Install the new margins immediately,
+        // preserving the corrected cursor before any following child bytes.
+        self.terminal.write("\x1b7");
+        self.output.writeRegion(&self.terminal);
+        self.terminal.write("\x1b8");
         self.output.max_slot = @as(usize, self.runtime.lines) * 2;
         self.output.update_handler.?.context = &self.runtime.source;
         self.input.bar = new_layout.bar;
@@ -836,7 +859,9 @@ const Proxy = struct {
                 }
             }
 
-            if (in.fd >= 0 and in.revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
+            // A config growth query may have consumed stdin since the poll.
+            // Recheck readiness before reading this blocking terminal fd.
+            if (in.fd >= 0 and in.revents & (posix.POLL.IN | posix.POLL.HUP) != 0 and inputReady(in.fd)) {
                 const n = sys.read(stdin_fd, &in_buf) catch 0;
                 if (n == 0) {
                     stdin_open = false;

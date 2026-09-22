@@ -4,7 +4,8 @@
 statusbar [run] [options] [-- COMMAND...]
 statusbar set <N> [TEXT...]
 statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
-statusbar config [--path | --default | --config PATH | --load PATH]
+statusbar config [--path] [--default | --config PATH]
+statusbar config --load PATH
 statusbar completion <bash|zsh|fish>
 ```
 
