@@ -3,8 +3,15 @@
 Changes are grouped by version tag, newest first. `dev` contains commits
 since the latest version tag. Entries preserve commit subjects verbatim.
 
-## dev
+## v0.3.0
 
+- Restructure config command around stdin and explicit printing
+- Fix config replacement ordering and OSC recovery
+- Add minimal statusbar theme
+- Add OSC config replacement
+- Add optional runtime logging with run --log
+- Style help output and refresh the description
+- Upgrade zecli to 0.4.3
 - Replace configuration from an in-session path editor
 
 ## v0.2.3

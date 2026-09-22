@@ -101,7 +101,7 @@ const commands = [_]zecli.CommandSpec{
     },
     .{
         .name = "config",
-        .description = "Print or replace the complete configuration",
+        .description = "Print or replace the current configuration",
         .usage = "statusbar config [--print] [--path] [--default]",
         .flags = &config_flags,
         .double_dash = .positionals,
