@@ -132,13 +132,16 @@ pub const application = application: {
     @setEvalBranchQuota(10_000);
     break :application zecli.comptimeValidated(.{
         .name = "statusbar",
-        .description = "statusbar - a status bar for any terminal",
+        // Nonbreaking spaces preserve the second row's indent in zecli's word wrapper.
+        .description = "⡎⠉⠉⢱ statusbar\n\u{a0}\u{a0}⢇⣒⣒⡸ a status bar for any terminal",
         .usage = "statusbar [command] [options]",
         .flags = &root_flags,
         .commands = &commands,
         .extra_help =
-        \\Runs a shell in a pty with rows reserved at the bottom, and keeps
-        \\a status bar in the rows it gave up. `run` is the default command.
+        \\Display a configurable, multi-line status bar at the bottom
+        \\of your terminal.
+        \\
+        \\Use `statusbar <command> --help` for more information on a command.
         ++ "\n",
     });
 };

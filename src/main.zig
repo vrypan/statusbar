@@ -25,6 +25,10 @@ pub fn main(init: std.process.Init) !u8 {
     var stdout_buf: [4096]u8 = undefined;
     var stdout_file: Io.File.Writer = .initStreaming(.stdout(), init.io, &stdout_buf);
     const stdout = &stdout_file.interface;
+    const help_output = zecli.helpWriter(
+        stdout,
+        zecli.HelpStyle.auto.detect(init.io, .stdout(), init.environ_map),
+    );
 
     const routed = try cli.routeDefaultCommand(arena, args[1..]);
     const invocation = zecli.Invocation.init(arena, stderr, cli.application, routed, init.environ_map) catch |err| {
@@ -33,7 +37,7 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     };
 
-    if (try invocation.printHelpIfRequested(arena, stdout)) {
+    if (try invocation.printHelpIfRequested(arena, help_output)) {
         try stdout.flush();
         return 0;
     }
@@ -43,7 +47,7 @@ pub fn main(init: std.process.Init) !u8 {
         return 0;
     }
     const command = invocation.getCommand() orelse {
-        try zecli.printApplicationHelp(arena, stdout, cli.application);
+        try zecli.printApplicationHelp(arena, help_output, cli.application);
         try stdout.flush();
         return 0;
     };
