@@ -624,25 +624,30 @@ def check_osc_config(binary):
             config_file.write(replacement)
         for args, expected in [
             (["--path", "--default"], b"built-in\n"),
-            (["--path", "--config", initial_path], os.fsencode(initial_path) + b"\n"),
         ]:
             result = subprocess.run([binary, "config", *args], capture_output=True)
             assert result.returncode == 0 and result.stdout == expected, result
         for args in [
+            ["--config", initial_path],
+            ["-c", initial_path],
             ["--default", "--config", initial_path],
-            ["--load", replacement_path, "--default"],
-            ["--load", replacement_path, "--config", initial_path],
+            [replacement_path, "--default"],
+            [replacement_path, "--config", initial_path],
+            [replacement_path, initial_path],
+            [replacement_path],
+            ["-"],
+            ["--load", replacement_path],
         ]:
             result = subprocess.run([binary, "config", *args], capture_output=True)
             assert result.returncode == 2 and not result.stdout, result
         no_session = subprocess.run(
-            [binary, "config", "--load", replacement_path],
+            [binary, "config"], input=replacement.encode(),
             capture_output=True, check=False,
         )
         assert no_session.returncode == 2 and not no_session.stdout
         assert b"not inside a compatible statusbar session" in no_session.stderr
         incompatible = subprocess.run(
-            [binary, "config", "--load", replacement_path, "--path"],
+            [binary, "config", replacement_path, "--path"],
             capture_output=True, check=False,
         )
         assert incompatible.returncode == 2 and not incompatible.stdout
@@ -651,14 +656,37 @@ def check_osc_config(binary):
             config_file.write("#" + "x" * 24522 + "\n")
         oversized_env = os.environ.copy()
         oversized_env["STATUSBAR_SESSION_ID"] = "0" * 32
-        oversized = subprocess.run(
-            [binary, "config", "--load", oversized_path], env=oversized_env,
-            capture_output=True, check=False,
-        )
+        with open(oversized_path, "rb") as source:
+            oversized = subprocess.run(
+                [binary, "config"], stdin=source, env=oversized_env,
+                capture_output=True, check=False,
+            )
         assert oversized.returncode != 0 and not oversized.stdout
+        for content in [b"", b"x" * 24524, b"[broken\n"]:
+            rejected = subprocess.run(
+                [binary, "config"], input=content, env=oversized_env,
+                capture_output=True, timeout=3,
+            )
+            assert rejected.returncode != 0 and not rejected.stdout
+            assert b"stdin" in rejected.stderr, rejected
+        ignored = subprocess.run(
+            [binary, "config", "--default"], input=b"[broken\n", capture_output=True,
+        )
+        assert ignored.returncode == 0 and ignored.stdout
+        print_env = os.environ.copy()
+        print_env["STATUSBAR_CONFIG"] = initial_path
+        printed = subprocess.run(
+            [binary, "config", "--print"], input=b"[broken\n",
+            env=print_env, capture_output=True,
+        )
+        assert printed.returncode == 0 and printed.stdout == initial.encode(), printed
         child = r'''
 import base64, os, subprocess, sys
 binary, replacement, direct, nested_token_path, rejected_command_path = sys.argv[1:]
+help_result = subprocess.run([binary, "config"], capture_output=True)
+explicit_help = subprocess.run([binary, "config", "--help"], capture_output=True)
+assert help_result.returncode == 0 and help_result.stdout == explicit_help.stdout, help_result
+assert b"EXAMPLES" in help_result.stdout and b"cat my.config | statusbar config" in help_result.stdout
 def frame(config, token=None):
     token = token or os.environ["STATUSBAR_SESSION_ID"]
     envelope = b"1;" + token.encode() + b";" + config.encode()
@@ -673,8 +701,20 @@ for command in sys.stdin:
         emit(rejected, "0" * 32)
         print("__BAD__", flush=True)
     elif command == "LOAD":
-        result = subprocess.run([binary, "config", "--load", replacement])
+        with open(replacement, "rb") as source:
+            result = subprocess.run([binary, "config"], stdin=source, capture_output=True)
+        assert not result.stdout and result.returncode == 0, result
         print(f"__LOAD__:{result.returncode}", flush=True)
+    elif command == "STDIN":
+        result = subprocess.run([binary, "config"], input=b'[line.1]\nleft = FROM_STDIN\n', capture_output=True)
+        assert not result.stdout and result.returncode == 0, result
+        print("__STDIN__", flush=True)
+    elif command == "PIPE":
+        producer = subprocess.Popen([binary, "config", "--default"], stdout=subprocess.PIPE)
+        result = subprocess.run([binary, "config"], stdin=producer.stdout, capture_output=True)
+        producer.stdout.close()
+        assert producer.wait() == 0 and result.returncode == 0 and not result.stdout, result
+        print("__PIPE__", flush=True)
     elif command == "DIRECT":
         emit(direct)
         print("__DIRECT__", flush=True)
@@ -713,6 +753,11 @@ for command in sys.stdin:
             data = read_until(master, data, b"__LOAD__:0", timeout=5)
             data = read_until(master, data, b"REPLACED_TWO", timeout=5)
             assert b"\x1b[1;10r" in data, data[-1000:]
+            os.write(master, b"STDIN\n")
+            data = read_until(master, data, b"FROM_STDIN", timeout=5)
+            data = read_until(master, data, b"__STDIN__", timeout=5)
+            os.write(master, b"PIPE\n")
+            data = read_until(master, data, b"__PIPE__", timeout=5)
             os.write(master, b"DIRECT\n")
             data = read_until(master, data, "DIRECT; Καλημέρα".encode(), timeout=5)
             data = read_until(master, data, b"__DIRECT__", timeout=3)
@@ -765,7 +810,7 @@ time.sleep(.3)
     script = r'''
 printf THEME_GROWTH_READY
 IFS= read -r command
-"$1" config --load "$2"
+"$1" config < "$2"
 printf __THEME_LOADED__
 IFS= read -r command
 '''

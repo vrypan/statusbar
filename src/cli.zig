@@ -4,8 +4,7 @@
 //!     statusbar [run] [options] [-- COMMAND...]
 //!     statusbar set <N> [TEXT...]
 //!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
-//!     statusbar config [--path] [--default | --config PATH]
-//!     statusbar config --load PATH
+//!     statusbar config [--print] [--path] [--default]
 //!     statusbar completion <bash|zsh|fish>
 
 const std = @import("std");
@@ -21,10 +20,9 @@ const config_flag = zecli.FlagSpec{
 };
 
 const config_flags = [_]zecli.FlagSpec{
-    config_flag,
+    .{ .name = "print", .description = "Print the config, ignoring stdin" },
     .{ .name = "default", .description = "Use the built-in config, ignoring any config file" },
     .{ .name = "path", .description = "Print only where the config comes from" },
-    .{ .name = "load", .value = .string, .value_name = "PATH", .description = "Replace the running session's complete config", .completion = .files },
 };
 
 const run_flags = [_]zecli.FlagSpec{
@@ -104,18 +102,25 @@ const commands = [_]zecli.CommandSpec{
     .{
         .name = "config",
         .description = "Print or replace the complete configuration",
-        .usage = "statusbar config [--path] [--default | --config PATH] | statusbar config --load PATH",
+        .usage = "statusbar config [--print] [--path] [--default]",
         .flags = &config_flags,
         .double_dash = .positionals,
         .extra_help =
-        \\Prints the config file, or the built-in config when there is none, after
-        \\checking that it parses. With --path, prints the file's path, or
-        \\"built-in". With --load, sends a complete config to the running
-        \\statusbar session. To start a config of your own:
-        \\
-        \\  mkdir -p ~/.config/statusbar
-        \\  statusbar config --default > ~/.config/statusbar/config
+        \\With no flags, reads piped or redirected stdin until EOF and replaces
+        \\the running session's config. Prints nothing on success; empty input
+        \\is an error. With terminal stdin, shows this help instead.
+        \\--print prints the config after validating it. --path prints its path
+        \\or "built-in". --default prints defaults. Printing flags ignore stdin.
         ++ "\n",
+        .examples = &.{
+            "statusbar config --print",
+            "statusbar config --print > saved.config",
+            "statusbar config --default > my.config",
+            "statusbar config --path",
+            "cat my.config | statusbar config",
+            "statusbar config < my.config",
+            "statusbar config --default | statusbar config",
+        },
     },
     .{
         .name = "completion",

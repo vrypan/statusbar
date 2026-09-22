@@ -21,7 +21,7 @@ mkdir -p ~/.config/statusbar
 statusbar config --default > ~/.config/statusbar/config
 ```
 
-`statusbar config` prints the config statusbar would use after checking that
+`statusbar config --print` prints the config statusbar would use after checking that
 it parses, and `statusbar config --path` shows which file that is; see
 [usage.md](usage.md#config).
 
@@ -43,7 +43,8 @@ highlight. Because those commands are executable code, load trusted configs.
 A program can perform the same complete replacement from inside the session:
 
 ```sh
-statusbar config --load ./themes/dark.config
+cat ./themes/dark.config | statusbar config
+statusbar config < ./themes/dark.config
 ```
 
 The command reads the file in its own process and sends its contents to the

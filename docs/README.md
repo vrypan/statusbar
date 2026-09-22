@@ -103,7 +103,8 @@ Programs and scripts can load the same complete config without opening the
 editor:
 
 ```sh
-statusbar config --load ./themes/dark.config
+cat ./themes/dark.config | statusbar config
+statusbar config --default | statusbar config
 ```
 
 The command reads the file locally and sends its contents to the running

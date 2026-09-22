@@ -14,7 +14,7 @@ working.
 - Update it from your scripts with `statusbar set`.
 - Press Ctrl-X Ctrl-R to load another complete config without restarting the
   shell, including configs with a different number of rows.
-- Let scripts replace the complete running config with `statusbar config --load`.
+- Let scripts replace the complete running config with `cat FILE | statusbar config`.
 - Optionally move Starship's prompt details into it while keeping the prompt
   character in the terminal.
 

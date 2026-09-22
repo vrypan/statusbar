@@ -56,7 +56,7 @@ pub fn main(init: std.process.Init) !u8 {
         .run => runSession(arena, init.io, command, stderr),
         .set => setSlot(arena, init.io, command, stderr),
         .init => shellInit(arena, init.io, args[0], command, stdout, stderr),
-        .config => printConfig(arena, init.io, command, stdout, stderr),
+        .config => printConfig(arena, init.io, command, stdout, stderr, help_output),
         .completion => printCompletion(command, stdout, stderr),
     };
 }
@@ -133,16 +133,16 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
 }
 
 /// `statusbar config`: the config text statusbar would run with, checked.
-fn printConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
-    const flag = command.getValue([]const u8, "config");
-    const load = command.getValue([]const u8, "load");
-    if (command.enabled("default") and flag != null) return usageError(stderr, command, "--default and --config are mutually exclusive");
-    if (load != null and (command.enabled("path") or command.enabled("default") or flag != null))
-        return usageError(stderr, command, "--load cannot be combined with --path, --default or --config");
-    if (load) |path| return sendConfig(arena, io, command, path, stderr);
+fn printConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer, help_output: anytype) !u8 {
+    if (!command.enabled("print") and !command.enabled("path") and !command.enabled("default")) {
+        if (!(try Io.File.stdin().isTty(io))) return sendConfig(arena, io, command, stderr);
+        try zecli.printCommandHelp(arena, help_output, command.spec);
+        try stdout.flush();
+        return 0;
+    }
     // Reading nothing for --default matters when stdout is redirected to the
     // config file: the shell has already emptied it.
-    const loaded = if (command.enabled("default")) try builtInConfig(arena) else loadConfig(arena, io, flag, stderr) catch |err| {
+    const loaded = if (command.enabled("default")) try builtInConfig(arena) else loadConfig(arena, io, null, stderr) catch |err| {
         try stderr.flush();
         return if (err == error.ReportedConfigError) 2 else err;
     };
@@ -156,30 +156,23 @@ fn printConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, 
     return 0;
 }
 
-fn sendConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, path: []const u8, stderr: *Io.Writer) !u8 {
+fn sendConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
     const protocol = @import("config_protocol.zig");
     const token = @import("environment.zig").get("STATUSBAR_SESSION_ID") orelse
         return usageError(stderr, command, "not inside a compatible statusbar session");
     if (!protocol.validToken(token)) return usageError(stderr, command, "STATUSBAR_SESSION_ID is malformed");
-    const stat = Io.Dir.cwd().statFile(io, path, .{}) catch |err| {
-        try stderr.print("statusbar: cannot inspect {s}: {t}\n", .{ path, err });
+    var buffer: [4096]u8 = undefined;
+    var reader = Io.File.stdin().reader(io, &buffer);
+    const text = reader.interface.allocRemaining(arena, .limited(protocol.max_config)) catch |err| {
+        try stderr.print("statusbar: cannot read stdin: {t}\n", .{err});
         try stderr.flush();
         return 1;
     };
-    if (stat.kind != .file) {
-        try stderr.print("statusbar: {s}: not a regular file\n", .{path});
-        try stderr.flush();
-        return 1;
-    }
-    const text = Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(protocol.max_config)) catch |err| {
-        try stderr.print("statusbar: cannot read {s}: {t}\n", .{ path, err });
-        try stderr.flush();
-        return 1;
-    };
+    if (text.len == 0) return usageError(stderr, command, "stdin contains no config");
     var diag: config.Diagnostic = .{};
     var checked = config.parse(arena, text, &diag) catch |err| {
         if (err == error.OutOfMemory) return err;
-        if (diag.line > 0) try stderr.print("statusbar: {s}:{d}: {s}\n", .{ path, diag.line, diag.message }) else try stderr.print("statusbar: {s}: {s}\n", .{ path, diag.message });
+        if (diag.line > 0) try stderr.print("statusbar: stdin:{d}: {s}\n", .{ diag.line, diag.message }) else try stderr.print("statusbar: stdin: {s}\n", .{diag.message});
         try stderr.flush();
         return 2;
     };
