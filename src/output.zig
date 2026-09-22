@@ -18,6 +18,7 @@
 //! they could still be one of the proxy's own user variables.
 
 const std = @import("std");
+const config_protocol = @import("config_protocol.zig");
 
 const max_seq = 64;
 const max_params = 16;
@@ -73,12 +74,17 @@ pub const Output = struct {
     value_changed: [2]bool = .{ false, false },
 
     osc_len: usize = 0,
+    osc_probe: [user_var_prefix.len]u8 = undefined,
     payload: [2 * max_value]u8 = undefined,
     payload_len: usize = 0,
     payload_overflow: bool = false,
     osc7_payload: [4096]u8 = undefined,
     osc7_len: usize = 0,
     osc7_overflow: bool = false,
+    config_payload: [config_protocol.max_osc - config_protocol.namespace.len]u8 = undefined,
+    config_len: usize = 0,
+    config_overflow: bool = false,
+    config_ready: bool = false,
 
     state: State = .ground,
     string_is_osc: bool = false,
@@ -101,6 +107,8 @@ pub const Output = struct {
         osc7_esc,
         user_var,
         user_var_esc,
+        config,
+        config_esc,
     };
 
     fn active(self: *const Output) bool {
@@ -115,7 +123,16 @@ pub const Output = struct {
 
     /// `sink.write(bytes)` receives the translated stream.
     pub fn feed(self: *Output, bytes: []const u8, sink: anytype) void {
-        self.utf8_pending = self.pendingAfter(bytes);
+        var offset: usize = 0;
+        while (offset < bytes.len) {
+            offset += self.feedUntilConfig(bytes[offset..], sink);
+            if (self.config_ready) self.config_ready = false;
+        }
+    }
+
+    /// Feeds through the first complete STATUSBAR request, allowing the proxy
+    /// to apply it before later bytes from the same pty read.
+    pub fn feedUntilConfig(self: *Output, bytes: []const u8, sink: anytype) usize {
         var run: usize = 0;
         var i: usize = 0;
         while (i < bytes.len) {
@@ -273,23 +290,28 @@ pub const Output = struct {
                         i += 1;
                         run = i;
                         self.state = .osc7_prefix;
-                    } else if (self.osc_len < user_var_prefix.len and b == user_var_prefix[self.osc_len]) {
+                    } else {
+                        self.osc_probe[self.osc_len] = b;
                         i += 1;
                         run = i;
                         self.osc_len += 1;
-                        if (self.osc_len == user_var_prefix.len) {
+                        const probe = self.osc_probe[0..self.osc_len];
+                        if (std.mem.eql(u8, probe, user_var_prefix)) {
                             self.state = .user_var;
                             self.payload_len = 0;
                             self.payload_overflow = false;
+                        } else if (std.mem.eql(u8, probe, config_protocol.namespace)) {
+                            self.state = .config;
+                            self.config_len = 0;
+                            self.config_overflow = false;
+                        } else if (!std.mem.startsWith(u8, user_var_prefix, probe) and !std.mem.startsWith(u8, config_protocol.namespace, probe)) {
+                            // Not ours: release the complete probe and stream
+                            // the remainder as an ordinary OSC.
+                            sink.write("\x1b]");
+                            sink.write(probe);
+                            self.state = .string;
+                            self.string_is_osc = true;
                         }
-                    } else {
-                        // Not ours: release what was held, and let this byte
-                        // continue an ordinary OSC.
-                        sink.write("\x1b]");
-                        sink.write(user_var_prefix[0..self.osc_len]);
-                        run = i;
-                        self.state = .string;
-                        self.string_is_osc = true;
                     }
                 },
                 .osc7_prefix => {
@@ -376,9 +398,44 @@ pub const Output = struct {
                         self.state = .esc;
                     }
                 },
+                .config => {
+                    i += 1;
+                    run = i;
+                    switch (b) {
+                        0x07 => self.state = .ground,
+                        esc => self.state = .config_esc,
+                        0x18, 0x1a => self.state = .ground,
+                        else => if (self.config_len < self.config_payload.len) {
+                            self.config_payload[self.config_len] = b;
+                            self.config_len += 1;
+                        } else {
+                            self.config_overflow = true;
+                        },
+                    }
+                },
+                .config_esc => {
+                    if (b == '\\') {
+                        i += 1;
+                        run = i;
+                        self.state = .ground;
+                        self.config_ready = !self.config_overflow;
+                        self.utf8_pending = self.pendingAfter(bytes[0..i]);
+                        return i;
+                    } else {
+                        self.state = .esc;
+                    }
+                },
             }
         }
         if (run < bytes.len) sink.write(bytes[run..]);
+        self.utf8_pending = self.pendingAfter(bytes);
+        return bytes.len;
+    }
+
+    pub fn takeConfig(self: *Output) ?[]const u8 {
+        if (!self.config_ready) return null;
+        self.config_ready = false;
+        return self.config_payload[0..self.config_len];
     }
 
     /// Returns a slot value set since the last call, or null if there is none.
@@ -666,6 +723,49 @@ fn expectTranslation(input: []const u8, expected: []const u8) !void {
 test "text and unrelated sequences pass through" {
     const input = "héllo\r\n\x1b[31mred\x1b[0m\x1b]0;title\x07\x1b[?25l\x1b[5A\x1b(0\x1b[?6h\x1b[2;2H\x1b[?6l";
     try expectTranslation(input, input);
+}
+
+test "STATUSBAR config requests are consumed across every read partition" {
+    const token = "0123456789abcdef0123456789abcdef";
+    const config_text = "[line.1]\nleft = \"one;δύο\"\n";
+    const frame = try config_protocol.encode(std.testing.allocator, token, config_text);
+    defer std.testing.allocator.free(frame);
+    const input = try std.mem.concat(std.testing.allocator, u8, &.{ "before", frame, "after" });
+    defer std.testing.allocator.free(input);
+    for (1..input.len + 1) |chunk| {
+        var out: Output = .{ .bar = 1, .rows = 10 };
+        var collector: Collector = .{};
+        defer collector.bytes.deinit(std.testing.allocator);
+        var decoded: [config_protocol.max_config + config_protocol.envelope_overhead]u8 = undefined;
+        var requests: usize = 0;
+        var start: usize = 0;
+        while (start < input.len) {
+            const end = @min(start + chunk, input.len);
+            var offset = start;
+            while (offset < end) {
+                offset += out.feedUntilConfig(input[offset..end], &collector);
+                if (out.takeConfig()) |payload| {
+                    try std.testing.expectEqualStrings(config_text, try config_protocol.decode(&decoded, payload, token));
+                    requests += 1;
+                }
+            }
+            start = end;
+        }
+        try std.testing.expectEqual(@as(usize, 1), requests);
+        try std.testing.expectEqualStrings("beforeafter", collector.bytes.items);
+    }
+}
+
+test "STATUSBAR owns its exact namespace and rejects non-ST termination" {
+    const foreign = "\x1b]3110;CONTEXT;abc\x1b\\\x1b]3110;STATUSBARX;CONFIG;abc\x1b\\";
+    try expectTranslation(foreign, foreign);
+    var out: Output = .{ .bar = 0, .rows = 10 };
+    const owned = "\x1b]3110;STATUSBAR;FUTURE;opaque\x1b\\" ++
+        "\x1b]3110;STATUSBAR;CONFIG;ignored\x07" ++
+        "\x1b]3110;STATUSBAR;CONFIG;cancelled\x18";
+    const got = try translate(&out, owned, 1);
+    defer std.testing.allocator.free(got);
+    try std.testing.expectEqualStrings("", got);
 }
 
 test "rows past the child's screen are clamped off the bar" {

@@ -26,6 +26,7 @@ const bar = @import("bar.zig");
 const config = @import("config.zig");
 const Source = @import("source.zig").Source;
 const Runtime = @import("runtime_config.zig").Runtime;
+const config_protocol = @import("config_protocol.zig");
 const Dialog = @import("config_dialog.zig").Dialog;
 const SessionState = @import("session_state.zig").State;
 const PaletteProbe = @import("terminal_palette.zig").Probe;
@@ -135,6 +136,8 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     var number: [8]u8 = undefined;
     try child_environment.put("STATUSBAR_LINES", try std.fmt.bufPrint(&number, "{d}", .{runtime.lines}));
     try child_environment.put("STATUSBAR_STATE", session_state.path());
+    const session_token = config_protocol.makeToken(io);
+    try child_environment.put("STATUSBAR_SESSION_ID", &session_token);
     const default_argv = [_][]const u8{sys.env("SHELL") orelse "/bin/sh"};
     var executable = try sys.Exec.init(gpa, if (opts.argv.len == 0) &default_argv else opts.argv, &child_environment);
     defer executable.deinit();
@@ -157,6 +160,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         .runtime = &runtime,
         .renderer = &runtime.renderer,
         .session_state = &session_state,
+        .session_token = session_token,
     };
     defer proxy.releaseRows();
     try proxy.reserveRows(outer_ws.row);
@@ -352,6 +356,7 @@ const Proxy = struct {
     /// Stable alias used by terminal filtering and renderer-only tests.
     renderer: *bar.Renderer,
     session_state: *SessionState,
+    session_token: [config_protocol.token_len]u8,
     dialog: Dialog = .{},
 
     terminal: TerminalSink = undefined,
@@ -567,19 +572,26 @@ const Proxy = struct {
         };
         defer self.gpa.free(text);
         stage = "terminal size";
-        const outer = sys.getWinsize(stdin_fd) catch {
-            self.dialog.setError("cannot read terminal size", .{});
-            return self.requestPaint(now_ms);
-        };
         var diag: config.Diagnostic = .{};
         stage = "config preparation";
-        var candidate = Runtime.initFile(self.gpa, self.io, text, expanded, outer.row, outer.col, &diag) catch |err| {
+        self.replaceConfig(text, expanded, now_ms, &diag) catch |err| {
             if (self.log) |log| log.write("config preparation failed: {t}, line={d}", .{ err, diag.line });
             if (err == error.InvalidConfig) {
                 if (diag.line > 0) self.dialog.setError("line {d}: {s}", .{ diag.line, diag.message }) else self.dialog.setError("{s}", .{diag.message});
+            } else if (err == error.TerminalSizeUnavailable) {
+                self.dialog.setError("cannot read terminal size", .{});
+            } else if (err == error.ChildResizeFailed) {
+                self.dialog.setError("cannot resize child terminal", .{});
             } else self.dialog.setError("cannot prepare config: {t}", .{err});
             return self.requestPaint(now_ms);
         };
+        applied = true;
+        if (self.log) |log| log.write("config replaced: rows={d}", .{self.runtime.lines});
+    }
+
+    fn replaceConfig(self: *Proxy, text: []const u8, path: ?[]const u8, now_ms: i64, diag: *config.Diagnostic) !void {
+        const outer = sys.getWinsize(stdin_fd) catch return error.TerminalSizeUnavailable;
+        var candidate = try Runtime.initText(self.gpa, self.io, text, path, outer.row, outer.col, diag);
         errdefer candidate.deinit();
         candidate.renderer.palette = self.runtime.renderer.palette;
         candidate.renderer.palette_revision = self.runtime.renderer.palette_revision;
@@ -589,13 +601,14 @@ const Proxy = struct {
 
         const old_layout = self.layout;
         const new_layout = Layout.of(outer, candidate.lines);
+        self.makeRoomForGrowth(old_layout, new_layout);
         self.eraseRows(old_layout);
         self.layout = new_layout;
-        stage = "child terminal resize";
         sys.setWinsize(self.master, &new_layout.child) catch {
             self.layout = old_layout;
-            self.dialog.setError("cannot resize child terminal", .{});
-            return self.requestPaint(now_ms);
+            self.output.damaged = true;
+            self.requestPaint(now_ms);
+            return error.ChildResizeFailed;
         };
         std.mem.swap(Runtime, self.runtime, &candidate);
         self.renderer = &self.runtime.renderer;
@@ -611,8 +624,45 @@ const Proxy = struct {
         self.output.damaged = true;
         self.requestPaint(now_ms);
         candidate.deinit();
-        applied = true;
-        if (self.log) |log| log.write("config replaced: rows={d}", .{self.runtime.lines});
+    }
+
+    /// Growing the bar shortens the child's physical area. Scroll only when
+    /// needed to keep its cursor visible, then put the cursor on the matching
+    /// row while preserving its column. The following paint saves/restores
+    /// this corrected position instead of restoring into the new bar.
+    fn makeRoomForGrowth(self: *Proxy, old: Layout, new: Layout) void {
+        if (new.bar <= old.bar) return;
+        self.terminal.flush();
+        const reported = self.queryCursorRow() orelse old.child.row;
+        const row = @min(reported, old.child.row);
+        const scroll = row -| new.child.row;
+        var buf: [64]u8 = undefined;
+        if (scroll > 0) {
+            self.terminal.write("\x1b7");
+            self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H", .{old.child.row}) catch "");
+            for (0..scroll) |_| self.terminal.write("\n");
+            self.terminal.write("\x1b8");
+        }
+        self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d}d", .{@min(row, new.child.row)}) catch "");
+    }
+
+    fn applyConfigRequest(self: *Proxy, payload: []const u8, now_ms: i64) bool {
+        if (self.output.cursor_saved) {
+            if (self.log) |log| log.write("OSC config rejected: child cursor is saved", .{});
+            return false;
+        }
+        var decoded: [config_protocol.max_config + config_protocol.envelope_overhead]u8 = undefined;
+        const text = config_protocol.decode(&decoded, payload, &self.session_token) catch |err| {
+            if (self.log) |log| log.write("OSC config rejected: {t}", .{err});
+            return false;
+        };
+        var diag: config.Diagnostic = .{};
+        self.replaceConfig(text, null, now_ms, &diag) catch |err| {
+            if (self.log) |log| log.write("OSC config rejected: {t}, line={d}", .{ err, diag.line });
+            return false;
+        };
+        if (self.log) |log| log.write("OSC config applied: rows={d}", .{self.runtime.lines});
+        return true;
     }
 
     fn eraseRows(self: *Proxy, old: Layout) void {
@@ -695,6 +745,7 @@ const Proxy = struct {
                 try self.drainSignals(sig_r, pid, now_ms);
             }
 
+            var runtime_replaced = false;
             if (out.revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
                 // Keep reading while reads come back full, which means the
                 // pty had more than one read's worth waiting. A short read
@@ -708,7 +759,14 @@ const Proxy = struct {
                             // A short read means the pty had nothing more;
                             // asking again would only cost an EAGAIN.
                             if (n < out_buf.len) drained = drain_limit;
-                            self.output.feed(out_buf[0..n], &self.terminal);
+                            var offset: usize = 0;
+                            while (offset < n) {
+                                const consumed = self.output.feedUntilConfig(out_buf[offset..n], &self.terminal);
+                                offset += consumed;
+                                if (self.output.takeConfig()) |payload| {
+                                    runtime_replaced = self.applyConfigRequest(payload, now_ms) or runtime_replaced;
+                                }
+                            }
                             if (self.dialog.active and !self.output.bracketed_paste) self.terminal.write("\x1b[?2004h");
                             if (self.palette_probe.remaining > 0) {
                                 self.palette_probe.observeChild(out_buf[0..n]);
@@ -746,22 +804,24 @@ const Proxy = struct {
                 }
             }
 
-            const source_update = self.runtime.source.update(command_fds, now_ms);
-            if (source_update.content_changed) {
-                try self.runtime.renderer.acceptContent(&self.runtime.source.content, &self.runtime.look);
-                if (!self.runtime.silent_baseline) {
-                    for (0..self.runtime.renderer.rows.len) |row| for (0..2) |side| {
-                        const slot = row * 2 + side;
-                        if (self.runtime.source.slotContentEligible(slot, source_update.baseline, source_update.override_events)) self.runtime.renderer.highlightChange(row, side, now_ms);
-                    };
+            if (!runtime_replaced) {
+                const source_update = self.runtime.source.update(command_fds, now_ms);
+                if (source_update.content_changed) {
+                    try self.runtime.renderer.acceptContent(&self.runtime.source.content, &self.runtime.look);
+                    if (!self.runtime.silent_baseline) {
+                        for (0..self.runtime.renderer.rows.len) |row| for (0..2) |side| {
+                            const slot = row * 2 + side;
+                            if (self.runtime.source.slotContentEligible(slot, source_update.baseline, source_update.override_events)) self.runtime.renderer.highlightChange(row, side, now_ms);
+                        };
+                    }
+                    self.runtime.silent_baseline = false;
+                    self.requestPaint(now_ms);
                 }
-                self.runtime.silent_baseline = false;
-                self.requestPaint(now_ms);
+                for (0..self.runtime.renderer.rows.len) |row| for (0..2) |side| {
+                    const slot = row * 2 + side;
+                    if (self.runtime.source.override_lens[slot] != null or (slot < 32 and source_update.override_events & (@as(u32, 1) << @intCast(slot)) != 0)) self.runtime.renderer.cancelHighlight(row, side);
+                };
             }
-            for (0..self.runtime.renderer.rows.len) |row| for (0..2) |side| {
-                const slot = row * 2 + side;
-                if (self.runtime.source.override_lens[slot] != null or (slot < 32 and source_update.override_events & (@as(u32, 1) << @intCast(slot)) != 0)) self.runtime.renderer.cancelHighlight(row, side);
-            };
             if (try self.runtime.renderer.compose(now_ms)) self.requestPaint(now_ms);
             try self.renderDialog();
 

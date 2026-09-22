@@ -608,6 +608,157 @@ def check_logging(binary):
     print("logging append, permissions, exit status, and startup failures passed")
 
 
+def check_osc_config(binary):
+    initial = "[line.1]\nleft = ORIGINAL\n"
+    replacement = "[line.1]\nleft = REPLACED_ONE\n[line.2]\nleft = REPLACED_TWO\n"
+    direct = '[line.1]\nleft = "DIRECT; Καλημέρα"\n'
+    with tempfile.TemporaryDirectory() as folder:
+        initial_path = os.path.join(folder, "initial")
+        replacement_path = os.path.join(folder, "replacement")
+        log_path = os.path.join(folder, "session.log")
+        nested_token_path = os.path.join(folder, "nested-token")
+        rejected_command_path = os.path.join(folder, "rejected-command-ran")
+        with open(initial_path, "w") as config_file:
+            config_file.write(initial)
+        with open(replacement_path, "w") as config_file:
+            config_file.write(replacement)
+        no_session = subprocess.run(
+            [binary, "config", "--load", replacement_path],
+            capture_output=True, check=False,
+        )
+        assert no_session.returncode == 2 and not no_session.stdout
+        assert b"not inside a compatible statusbar session" in no_session.stderr
+        incompatible = subprocess.run(
+            [binary, "config", "--load", replacement_path, "--path"],
+            capture_output=True, check=False,
+        )
+        assert incompatible.returncode == 2 and not incompatible.stdout
+        oversized_path = os.path.join(folder, "oversized")
+        with open(oversized_path, "w") as config_file:
+            config_file.write("#" + "x" * 24522 + "\n")
+        oversized_env = os.environ.copy()
+        oversized_env["STATUSBAR_SESSION_ID"] = "0" * 32
+        oversized = subprocess.run(
+            [binary, "config", "--load", oversized_path], env=oversized_env,
+            capture_output=True, check=False,
+        )
+        assert oversized.returncode != 0 and not oversized.stdout
+        child = r'''
+import base64, os, subprocess, sys
+binary, replacement, direct, nested_token_path, rejected_command_path = sys.argv[1:]
+def frame(config, token=None):
+    token = token or os.environ["STATUSBAR_SESSION_ID"]
+    envelope = b"1;" + token.encode() + b";" + config.encode()
+    return b"\x1b]3110;STATUSBAR;CONFIG;" + base64.b64encode(envelope) + b"\x1b\\"
+def emit(config, token=None):
+    os.write(1, frame(config, token))
+print("OSC_CONFIG_READY", flush=True)
+for command in sys.stdin:
+    command = command.strip()
+    if command == "BAD":
+        rejected = f"[line.1]\nleft = #(bad)\n[command.bad]\nrun = touch {rejected_command_path}\n"
+        emit(rejected, "0" * 32)
+        print("__BAD__", flush=True)
+    elif command == "LOAD":
+        result = subprocess.run([binary, "config", "--load", replacement])
+        print(f"__LOAD__:{result.returncode}", flush=True)
+    elif command == "DIRECT":
+        emit(direct)
+        print("__DIRECT__", flush=True)
+    elif command == "ORDER":
+        first = "[line.1]\nleft = ORDER_ONE\n[line.2]\nleft = ORDER_TWO\n"
+        final = "[line.1]\nleft = FINAL_ONE\n[line.2]\nleft = FINAL_TWO\n"
+        slot = b"\x1b]1337;SetUserVar=StatusBarSlot4=S0VFUA==\x1b\\"
+        os.write(1, frame(first) + slot + frame(final))
+        print("__ORDER__", flush=True)
+    elif command == "SAVED":
+        os.write(1, b"\x1b7")
+        emit('[line.1]\nleft = SHOULD_NOT_APPLY\n')
+        os.write(1, b"\x1b8")
+        print("__SAVED__", flush=True)
+    elif command == "NESTED":
+        code = 'import os,sys; open(sys.argv[1], "w").write(os.environ["STATUSBAR_SESSION_ID"])'
+        result = subprocess.run([binary, "-e", "printf NESTED_BAR", "--", sys.executable, "-c", code, nested_token_path])
+        nested = open(nested_token_path).read()
+        print(f"__NESTED__:{result.returncode}:{nested != os.environ['STATUSBAR_SESSION_ID']}", flush=True)
+    elif command == "EXIT":
+        raise SystemExit(0)
+'''
+        pid, master = spawn([
+            binary, "--log", log_path, "-c", initial_path, "--",
+            sys.executable, "-u", "-c", child, binary, replacement_path, direct,
+            nested_token_path, rejected_command_path,
+        ], rows=12)
+        data = b""
+        try:
+            data = read_until(master, data, b"OSC_CONFIG_READY", timeout=5)
+            data = read_until(master, data, b"ORIGINAL", timeout=5)
+            os.write(master, b"BAD\n")
+            data = read_until(master, data, b"__BAD__", timeout=3)
+            assert not os.path.exists(rejected_command_path)
+            os.write(master, b"LOAD\n")
+            data = read_until(master, data, b"__LOAD__:0", timeout=5)
+            data = read_until(master, data, b"REPLACED_TWO", timeout=5)
+            assert b"\x1b[1;10r" in data, data[-1000:]
+            os.write(master, b"DIRECT\n")
+            data = read_until(master, data, "DIRECT; Καλημέρα".encode(), timeout=5)
+            data = read_until(master, data, b"__DIRECT__", timeout=3)
+            os.write(master, b"ORDER\n")
+            data = read_until(master, data, b"FINAL_TWO", timeout=5)
+            data = read_until(master, data, b"KEEP", timeout=5)
+            data = read_until(master, data, b"__ORDER__", timeout=3)
+            os.write(master, b"NESTED\n")
+            data = read_until(master, data, b"__NESTED__:0:True", timeout=5)
+            os.write(master, b"SAVED\n")
+            data = read_until(master, data, b"__SAVED__", timeout=3)
+            assert b"SHOULD_NOT_APPLY" not in data
+            assert b"3110;STATUSBAR" not in data
+            deadline = time.monotonic() + 3
+            while True:
+                with open(log_path) as log_file:
+                    logged = log_file.read()
+                if "OSC config rejected: child cursor is saved" in logged:
+                    break
+                assert time.monotonic() < deadline, logged
+                time.sleep(0.05)
+            assert "OSC config applied: rows=2" in logged
+            assert "OSC config applied: rows=1" in logged
+            assert "AuthenticationFailed" in logged
+            assert "REPLACED_ONE" not in logged and "Καλημέρα" not in logged
+            os.write(master, b"EXIT\n")
+        finally:
+            stop(pid, master)
+    print("authenticated OSC config replacement and rejection passed")
+
+
+def check_theme_growth(binary):
+    pastel = os.path.abspath("samples/themes/pastel-powerline.config")
+    multi = os.path.abspath("samples/themes/multi-line.config")
+    script = r'''
+printf THEME_GROWTH_READY
+IFS= read -r command
+"$1" config --load "$2"
+printf __THEME_LOADED__
+IFS= read -r command
+'''
+    pid, master = spawn([
+        binary, "-c", pastel, "--", "/bin/sh", "-c", script, "sh", binary, multi,
+    ], rows=24)
+    data = b""
+    try:
+        data = read_until(master, data, b"THEME_GROWTH_READY", timeout=5)
+        os.write(master, b"LOAD\n")
+        data = read_until(master, data, b"__THEME_LOADED__", timeout=5)
+        data = read_until(master, data, b"\x1b[1;19r", timeout=5)
+        growth = b"\x1b7\x1b[22;1H\n\n\n\x1b8\x1b[19d"
+        assert growth in data, data[-2000:]
+        assert b"\x1b[20;1H" in data and b"\x1b[24;1H" in data, data[-2000:]
+        os.write(master, b"EXIT\n")
+    finally:
+        stop(pid, master)
+    print("two-row to five-row theme growth preserves terminal geometry")
+
+
 def check_config_dialog(binary):
     config = """\
 [line.1]
@@ -708,6 +859,8 @@ def main():
     check_geometry_results_do_not_highlight(binary)
     check_adaptive_palette(binary)
     check_logging(binary)
+    check_osc_config(binary)
+    check_theme_growth(binary)
     check_config_dialog(binary)
     config = """\
 [line.1]

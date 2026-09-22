@@ -4,7 +4,7 @@
 //!     statusbar [run] [options] [-- COMMAND...]
 //!     statusbar set <N> [TEXT...]
 //!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
-//!     statusbar config [--path] [--default | --config PATH]
+//!     statusbar config [--path | --default | --config PATH | --load PATH]
 //!     statusbar completion <bash|zsh|fish>
 
 const std = @import("std");
@@ -23,6 +23,7 @@ const config_flags = [_]zecli.FlagSpec{
     config_flag,
     .{ .name = "default", .description = "Use the built-in config, ignoring any config file" },
     .{ .name = "path", .description = "Print only where the config comes from" },
+    .{ .name = "load", .value = .string, .value_name = "PATH", .description = "Replace the running session's complete config", .completion = .files },
 };
 
 const run_flags = [_]zecli.FlagSpec{
@@ -101,14 +102,15 @@ const commands = [_]zecli.CommandSpec{
     },
     .{
         .name = "config",
-        .description = "Print the configuration statusbar would use",
-        .usage = "statusbar config [--path] [--default | --config PATH]",
+        .description = "Print or replace the complete configuration",
+        .usage = "statusbar config [--path | --default | --config PATH | --load PATH]",
         .flags = &config_flags,
         .double_dash = .positionals,
         .extra_help =
         \\Prints the config file, or the built-in config when there is none, after
         \\checking that it parses. With --path, prints the file's path, or
-        \\"built-in". To start a config of your own:
+        \\"built-in". With --load, sends a complete config to the running
+        \\statusbar session. To start a config of your own:
         \\
         \\  mkdir -p ~/.config/statusbar
         \\  statusbar config --default > ~/.config/statusbar/config

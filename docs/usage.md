@@ -4,7 +4,7 @@
 statusbar [run] [options] [-- COMMAND...]
 statusbar set <N> [TEXT...]
 statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
-statusbar config [--path] [--default | --config PATH]
+statusbar config [--path | --default | --config PATH | --load PATH]
 statusbar completion <bash|zsh|fish>
 ```
 
@@ -48,8 +48,8 @@ During a session, **Ctrl-X Ctrl-R** opens `Enter config path:` in the bar.
 Submitting a valid file replaces the complete layout—including its row count—
 without restarting the command. Escape or Ctrl-C cancels. See
 [configuration](config.md#replace-the-running-config) for path and replacement
-semantics. There is deliberately no external reload command or reload escape
-sequence.
+semantics. A program can also request replacement with `statusbar config
+--load PATH`.
 
 ## `set`
 
@@ -87,6 +87,15 @@ it: a broken file reports its error and exits with status 2.
 | `--path`              | print only where the config comes from, or `built-in` |
 | `--default`           | use the built-in config, ignoring any config file    |
 | `-c`, `--config PATH` | use this file, as `run --config` would               |
+| `--load PATH`         | replace the running session with this complete config |
+
+`--load` reads and validates the named file in the caller's current directory,
+then sends its contents to the current statusbar session. It prints nothing on
+success. The request is one-way: success means it was written to the terminal,
+while the running session still rejects invalid or unauthenticated requests
+transactionally. Files transported this way are limited to 24,523 bytes. Large
+concurrent writers should serialize requests because terminal writes are not an
+interprocess message queue. See [OSC config replacement](osc-3110.md).
 
 To start a config of your own from the built-in one:
 

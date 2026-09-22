@@ -36,7 +36,7 @@ pub const Runtime = struct {
         return init(gpa, io, opts.cfg, null, null, opts.path, opts.lines, opts.command, opts.interval_ms, opts.style, visible, cols);
     }
 
-    pub fn initFile(gpa: std.mem.Allocator, io: std.Io, text: []const u8, path: []const u8, outer_rows: u16, cols: u16, diag: *config.Diagnostic) !Runtime {
+    pub fn initText(gpa: std.mem.Allocator, io: std.Io, text: []const u8, path: ?[]const u8, outer_rows: u16, cols: u16, diag: *config.Diagnostic) !Runtime {
         const owned_text = try gpa.dupe(u8, text);
         errdefer gpa.free(owned_text);
         const cfg = try gpa.create(config.Config);

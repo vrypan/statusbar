@@ -40,6 +40,18 @@ overrides survive only where the same slot number exists in the new layout.
 Configured commands restart and establish their first values without a change
 highlight. Because those commands are executable code, load trusted configs.
 
+A program can perform the same complete replacement from inside the session:
+
+```sh
+statusbar config --load ./themes/dark.config
+```
+
+The command reads the file in its own process and sends its contents to the
+running proxy. The receiver does not resolve the filename. OSC transport limits
+these configs to 24,523 bytes; the interactive path editor retains its 64 KiB
+file limit. A config loaded over OSC has no receiver-side source path, so the
+path editor opens empty afterward. See [the protocol](osc-3110.md).
+
 ## Example
 
 ```ini

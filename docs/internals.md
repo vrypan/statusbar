@@ -40,6 +40,11 @@ shell
   than statusbar measured is clipped at the right edge rather than wrapping.
 - Numbered `StatusBarSlotN` user variables are taken out of the
   output stream; see [set.md](set.md).
+- Exact OSC 3110 `STATUSBAR` messages are also taken out of the output stream.
+  A session token authenticates complete `CONFIG` replacement requests. The
+  streaming parser stops at each request boundary so config and slot updates
+  in one PTY read remain ordered. Foreign ELLO messages pass through. See
+  [the protocol](osc-3110.md).
 - On a resize the child's pty follows the terminal. The visible row count is
   the smaller of the configured count and the terminal height minus two.
   Hidden rows retain their content and numbered-slot overrides.

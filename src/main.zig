@@ -135,7 +135,11 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
 /// `statusbar config`: the config text statusbar would run with, checked.
 fn printConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
     const flag = command.getValue([]const u8, "config");
-    if (command.enabled("default") and flag != null) return usageError(stderr, command, "--default and --config are mutually exclusive");
+    const load = command.getValue([]const u8, "load");
+    const modes: usize = @intFromBool(command.enabled("default"));
+    const selected_modes = modes + @intFromBool(command.enabled("path")) + @intFromBool(flag != null) + @intFromBool(load != null);
+    if (selected_modes > 1) return usageError(stderr, command, "--load, --path, --default and --config are mutually exclusive");
+    if (load) |path| return sendConfig(arena, io, command, path, stderr);
     // Reading nothing for --default matters when stdout is redirected to the
     // config file: the shell has already emptied it.
     const loaded = if (command.enabled("default")) try builtInConfig(arena) else loadConfig(arena, io, flag, stderr) catch |err| {
@@ -149,6 +153,53 @@ fn printConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, 
         if (loaded.text.len > 0 and loaded.text[loaded.text.len - 1] != '\n') try stdout.writeByte('\n');
     }
     try stdout.flush();
+    return 0;
+}
+
+fn sendConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, path: []const u8, stderr: *Io.Writer) !u8 {
+    const protocol = @import("config_protocol.zig");
+    const token = @import("environment.zig").get("STATUSBAR_SESSION_ID") orelse
+        return usageError(stderr, command, "not inside a compatible statusbar session");
+    if (!protocol.validToken(token)) return usageError(stderr, command, "STATUSBAR_SESSION_ID is malformed");
+    const stat = Io.Dir.cwd().statFile(io, path, .{}) catch |err| {
+        try stderr.print("statusbar: cannot inspect {s}: {t}\n", .{ path, err });
+        try stderr.flush();
+        return 1;
+    };
+    if (stat.kind != .file) {
+        try stderr.print("statusbar: {s}: not a regular file\n", .{path});
+        try stderr.flush();
+        return 1;
+    }
+    const text = Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(protocol.max_config)) catch |err| {
+        try stderr.print("statusbar: cannot read {s}: {t}\n", .{ path, err });
+        try stderr.flush();
+        return 1;
+    };
+    var diag: config.Diagnostic = .{};
+    var checked = config.parse(arena, text, &diag) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        if (diag.line > 0) try stderr.print("statusbar: {s}:{d}: {s}\n", .{ path, diag.line, diag.message }) else try stderr.print("statusbar: {s}: {s}\n", .{ path, diag.message });
+        try stderr.flush();
+        return 2;
+    };
+    checked.deinit();
+    const frame = protocol.encode(arena, token, text) catch |err| {
+        try stderr.print("statusbar: cannot encode config request: {t}\n", .{err});
+        try stderr.flush();
+        return 1;
+    };
+    const tty = Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .write_only }) catch |err| {
+        try stderr.print("statusbar: cannot open /dev/tty: {t}\n", .{err});
+        try stderr.flush();
+        return 1;
+    };
+    defer tty.close(io);
+    tty.writeStreamingAll(io, frame) catch |err| {
+        try stderr.print("statusbar: cannot send config request: {t}\n", .{err});
+        try stderr.flush();
+        return 1;
+    };
     return 0;
 }
 
@@ -465,6 +516,7 @@ test {
     _ = @import("source.zig");
     _ = @import("child.zig");
     _ = @import("status.zig");
+    _ = @import("config_protocol.zig");
     _ = proxy;
 }
 

@@ -99,6 +99,18 @@ The active config path is filled in automatically. A relative path is resolved
 from the directory where statusbar started, not the shell's current directory;
 `~/` expands from `HOME`. Paths are literal—there is no shell expansion.
 
+Programs and scripts can load the same complete config without opening the
+editor:
+
+```sh
+statusbar config --load ./themes/dark.config
+```
+
+The command reads the file locally and sends its contents to the running
+session. See [configuration](config.md#replace-the-running-config) for the
+transactional behavior and [OSC config replacement](osc-3110.md) for the wire
+format and size limit.
+
 The running statusbar reads and validates the file before replacing anything.
 An error remains in the input field so it can be corrected. A successful load
 can add or remove rows and change every configuration setting without restarting
