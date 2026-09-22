@@ -94,7 +94,17 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
     const child = command.passthrough() orelse &.{};
     const argv = try arena.alloc([]const u8, child.len);
     for (child, argv) |arg, *slot| slot.* = arg;
+    var log: @import("log.zig").Log = .{ .io = io };
+    if (command.getValue([]const u8, "log")) |path| {
+        log = @import("log.zig").Log.open(io, path) catch |err| {
+            try stderr.print("statusbar: cannot open log file '{s}': {t}\n", .{ path, err });
+            try stderr.flush();
+            return 1;
+        };
+    }
+    defer log.deinit();
     const opts: proxy.Options = .{
+        .log = &log,
         .argv = argv,
         .lines = lines orelse (if (templates) cfg.definedLines() else 1),
         .command = if (templates) null else exec orelse "date",
@@ -110,6 +120,7 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
     const gpa = if (@import("builtin").mode == .Debug) debug_allocator.allocator() else std.heap.smp_allocator;
 
     return proxy.run(gpa, io, opts) catch |err| {
+        log.write("session failed: {t}", .{err});
         const message = switch (err) {
             error.NotATerminal => "statusbar: stdin and stdout must be a terminal\n",
             error.ForkFailed => "statusbar: cannot fork\n",

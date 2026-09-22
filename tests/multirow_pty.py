@@ -579,6 +579,35 @@ time.sleep(10)
     print("adaptive palette pulse, input preservation, and child query ownership passed")
 
 
+def check_logging(binary):
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "session.log")
+        for command in (["run", "--log", path], ["--log", path]):
+            code, data = capture_pty([
+                binary, *command, "-e", "printf LOG_BAR", "--",
+                "/bin/sh", "-c", "printf LOG_CHILD; exit 7",
+            ])
+            assert code == 7, (code, data)
+            assert b"LOG_CHILD" in data
+            assert b"session started:" not in data
+        with open(path) as log:
+            text = log.read()
+        assert len(re.findall(r"^\d+ statusbar: session started:", text, re.M)) == 2, text
+        assert text.count("session ended: exit=7") == 2, text
+        assert "LOG_CHILD" not in text and "LOG_BAR" not in text, text
+        assert os.stat(path).st_mode & 0o777 == 0o600
+        fifo = os.path.join(folder, "fifo")
+        os.mkfifo(fifo)
+        for invalid in [folder, os.path.join(folder, "missing", "log"), fifo, "/dev/null"]:
+            result = subprocess.run([
+                binary, "run", "--log", invalid, "--", "/bin/sh", "-c", "printf SHOULD_NOT_RUN",
+            ], capture_output=True, timeout=5)
+            assert result.returncode != 0
+            assert b"cannot open log file" in result.stderr, result.stderr
+            assert not result.stdout and b"\x1b[" not in result.stderr
+    print("logging append, permissions, exit status, and startup failures passed")
+
+
 def check_config_dialog(binary):
     config = """\
 [line.1]
@@ -591,6 +620,7 @@ left = RELOADED_THREE
     with tempfile.NamedTemporaryFile("w", delete=False) as cfg:
         cfg.write(config)
         config_path = cfg.name
+    log_path = config_path + ".log"
     pid = master = None
     try:
         script = r'''
@@ -603,12 +633,24 @@ while IFS= read -r command; do
 done
 '''
         pid, master = spawn([
-            binary, "-e", "printf RELOAD_READY", "--",
+            binary, "--log", log_path, "-e", "printf RELOAD_READY", "--",
             "/bin/sh", "-c", script, "sh", binary,
         ], rows=12)
         data = read_until(master, b"", b"RELOAD_READY", timeout=5)
         os.write(master, b"\x18\x12")
         data = read_until(master, data, b"Enter config path:", timeout=3)
+        os.write(master, b"\x15" + os.fsencode(config_path + ".missing") + b"\r")
+        deadline = time.monotonic() + 3
+        while True:
+            with open(log_path) as log:
+                if "config replacement failed: file inspection" in log.read():
+                    break
+            assert time.monotonic() < deadline, "config rejection was not logged"
+            ready, _, _ = select.select([master], [], [], 0.05)
+            if ready:
+                data += os.read(master, 65536)
+        with open(log_path) as log:
+            assert "config replacement failed: file inspection" in log.read()
         os.write(master, b"\x15" + os.fsencode(config_path) + b"\r")
         data = read_until(master, data, b"RELOADED_THREE", timeout=5)
         assert b"\x1b[1;9r" in data, data[-1000:]
@@ -623,11 +665,16 @@ done
         os.write(master, b"\r")
         data += read_until(master, b"", b"SHRUNK", timeout=5)
         assert b"\x1b[1;11r" in data[before_shrink:], data[-1000:]
+        with open(log_path) as log:
+            logged = log.read()
+        assert "config replaced: rows=3" in logged and "config replaced: rows=1" in logged, logged
+        assert "RELOADED_THREE" not in logged
         os.write(master, b"EXIT\n")
     finally:
         if pid is not None:
             stop(pid, master)
         os.unlink(config_path)
+        os.unlink(log_path)
     print("interactive config replacement and row growth passed")
 
 
@@ -660,6 +707,7 @@ def main():
     check_tracking(binary, colors=True)
     check_geometry_results_do_not_highlight(binary)
     check_adaptive_palette(binary)
+    check_logging(binary)
     check_config_dialog(binary)
     config = """\
 [line.1]

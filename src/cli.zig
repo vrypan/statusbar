@@ -27,6 +27,7 @@ const config_flags = [_]zecli.FlagSpec{
 
 const run_flags = [_]zecli.FlagSpec{
     config_flag,
+    .{ .name = "log", .value = .string, .value_name = "PATH", .description = "Append runtime diagnostics to a file" },
     .{
         .name = "lines",
         .short = 'n',

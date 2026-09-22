@@ -28,10 +28,21 @@ always follows `--`.
 | `-e`, `--exec COMMAND`  | fill the bar from one shell command instead of the config's lines       |
 | `-i`, `--interval SECS` | how often commands rerun (default 1 with `--exec`, else the config's)   |
 | `-s`, `--style STYLE`   | bar style, as SGR parameters (`7`) or markup attributes (`fg=blue,bold`); `''` for none |
+| `--log PATH`           | append runtime diagnostics to a regular file |
 
 Options take their value as the next argument (`-n 3`), and long options
 also after `=` (`--lines=3`). `--lines` requires `--exec`; config height
 comes from its `[line.N]` sections.
+
+For session diagnostics, use `statusbar run --log /tmp/statusbar.log` (or omit
+`run`). The file is opened before terminal mode starts; an invalid destination
+is a startup error. New files have owner-only permissions; existing files are
+appended to without changing their permissions. Parent directories must exist.
+Records start with Unix time in milliseconds and cover session start/exit and
+config replacement results. Config contents and terminal output are not logged.
+Logging is capped at 32 records per second; excess records are dropped. A write
+failure disables logging for the rest of that session without interrupting the
+shell. Without `--log`, no diagnostic log is created.
 
 During a session, **Ctrl-X Ctrl-R** opens `Enter config path:` in the bar.
 Submitting a valid file replaces the complete layout—including its row count—

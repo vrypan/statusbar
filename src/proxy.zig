@@ -78,6 +78,7 @@ pub fn restoreOnPanic() void {
 }
 
 pub const Options = struct {
+    log: ?*@import("log.zig").Log = null,
     argv: []const []const u8 = &.{},
     lines: u16 = 1,
     /// `--exec`: this command's output lines are the bar. Without it the
@@ -146,6 +147,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     }
 
     var proxy: Proxy = .{
+        .log = opts.log,
         .gpa = gpa,
         .io = io,
         .master = pty.master,
@@ -163,6 +165,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     const pid = c.fork();
     if (pid < 0) return error.ForkFailed;
     if (pid == 0) childExec(pty, &executable);
+    if (opts.log) |log| log.write("session started: pid={d}, rows={d}", .{ pid, runtime.lines });
     sys.close(io, pty.slave);
     slave_open = false;
 
@@ -177,7 +180,9 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         return err;
     };
     sys.close(io, pty.master);
-    return sys.waitFor(pid).code;
+    const code = sys.waitFor(pid).code;
+    if (opts.log) |log| log.write("session ended: exit={d}", .{code});
+    return code;
 }
 
 const Layout = struct {
@@ -336,6 +341,7 @@ const PendingInput = struct {
 };
 
 const Proxy = struct {
+    log: ?*@import("log.zig").Log = null,
     gpa: std.mem.Allocator,
     io: std.Io,
     master: sys.Fd,
@@ -519,11 +525,17 @@ const Proxy = struct {
     }
 
     fn loadConfig(self: *Proxy, now_ms: i64) !void {
+        var applied = false;
+        var stage: []const u8 = "path validation";
+        defer if (!applied) {
+            if (self.log) |log| log.write("config replacement failed: {s}", .{stage});
+        };
         const raw = self.dialog.value();
         if (!std.unicode.utf8ValidateSlice(raw)) {
             self.dialog.setError("path is not valid UTF-8", .{});
             return self.requestPaint(now_ms);
         }
+        stage = "path resolution";
         var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
         const cwd_ptr = c.getcwd(&cwd_buf, cwd_buf.len) orelse {
             self.dialog.setError("cannot resolve startup directory", .{});
@@ -538,25 +550,31 @@ const Proxy = struct {
             break :blk try std.fs.path.resolve(self.gpa, &.{ home, raw[2..] });
         } else try std.fs.path.resolve(self.gpa, &.{ cwd, raw });
         defer self.gpa.free(expanded);
+        stage = "file inspection";
         const stat = std.Io.Dir.cwd().statFile(self.io, expanded, .{}) catch |err| {
             self.dialog.setError("cannot inspect config: {t}", .{err});
             return self.requestPaint(now_ms);
         };
         if (stat.kind != .file) {
+            stage = "not a regular file";
             self.dialog.setError("config path is not a regular file", .{});
             return self.requestPaint(now_ms);
         }
+        stage = "file read";
         const text = std.Io.Dir.cwd().readFileAlloc(self.io, expanded, self.gpa, .limited(max_config_bytes)) catch |err| {
             self.dialog.setError("cannot read config: {t}", .{err});
             return self.requestPaint(now_ms);
         };
         defer self.gpa.free(text);
+        stage = "terminal size";
         const outer = sys.getWinsize(stdin_fd) catch {
             self.dialog.setError("cannot read terminal size", .{});
             return self.requestPaint(now_ms);
         };
         var diag: config.Diagnostic = .{};
+        stage = "config preparation";
         var candidate = Runtime.initFile(self.gpa, self.io, text, expanded, outer.row, outer.col, &diag) catch |err| {
+            if (self.log) |log| log.write("config preparation failed: {t}, line={d}", .{ err, diag.line });
             if (err == error.InvalidConfig) {
                 if (diag.line > 0) self.dialog.setError("line {d}: {s}", .{ diag.line, diag.message }) else self.dialog.setError("{s}", .{diag.message});
             } else self.dialog.setError("cannot prepare config: {t}", .{err});
@@ -573,6 +591,7 @@ const Proxy = struct {
         const new_layout = Layout.of(outer, candidate.lines);
         self.eraseRows(old_layout);
         self.layout = new_layout;
+        stage = "child terminal resize";
         sys.setWinsize(self.master, &new_layout.child) catch {
             self.layout = old_layout;
             self.dialog.setError("cannot resize child terminal", .{});
@@ -592,6 +611,8 @@ const Proxy = struct {
         self.output.damaged = true;
         self.requestPaint(now_ms);
         candidate.deinit();
+        applied = true;
+        if (self.log) |log| log.write("config replaced: rows={d}", .{self.runtime.lines});
     }
 
     fn eraseRows(self: *Proxy, old: Layout) void {
