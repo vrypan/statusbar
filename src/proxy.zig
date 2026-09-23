@@ -46,6 +46,11 @@ const drain_limit = 1024 * 1024;
 
 /// An incomplete report from the terminal is released after this long.
 const input_hold_ms = 25;
+/// Once the child exits, output still in flight is forwarded until it pauses
+/// this long, so background jobs holding the pty cannot keep the session open.
+const exit_quiet_ms = 50;
+/// Continuous output from those jobs cannot hold it open beyond this.
+const exit_drain_ms = 500;
 const cursor_query_timeout_ms = 500;
 
 const stdin_fd: sys.Fd = 0;
@@ -179,7 +184,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         return err;
     };
     sys.close(io, pty.master);
-    const code = sys.waitFor(pid).code;
+    const code = (proxy.child_status orelse sys.waitFor(pid)).code;
     if (opts.log) |log| log.write("session ended: exit={d}", .{code});
     return code;
 }
@@ -397,6 +402,10 @@ const Proxy = struct {
     /// newest one is kept.
     held_config: [config_protocol.max_config]u8 = undefined,
     held_config_len: ?usize = null,
+    /// Set once the child has been reaped, which ends the session even while
+    /// background jobs still hold the pty open.
+    child_status: ?sys.Wait = null,
+    child_exited_ms: i64 = 0,
 
     fn now(self: *const Proxy) i64 {
         return std.Io.Clock.now(.awake, self.io).toMilliseconds();
@@ -676,6 +685,7 @@ const Proxy = struct {
             var timeout = minTimeout(self.paintTimeout(now_ms), self.runtime.source.timeout(now_ms));
             timeout = minTimeout(timeout, self.runtime.renderer.nextFrameTimeout(now_ms));
             if (self.palette_deadline_ms) |deadline| timeout = minTimeout(timeout, @max(deadline - now_ms, 0));
+            if (self.child_status != null) timeout = minTimeout(timeout, self.exitTimeout(now_ms));
             if (self.held_config_len != null and self.output.atBoundary()) timeout = minTimeout(timeout, @max(self.last_output_ms + paint_quiet_ms - now_ms, 0));
             if (self.palette_probe.holding()) timeout = minTimeout(timeout, @max(self.last_input_ms + input_hold_ms - now_ms, 0));
             if (self.input.holding()) timeout = minTimeout(timeout, @max(self.last_input_ms + input_hold_ms - now_ms, 0));
@@ -748,6 +758,11 @@ const Proxy = struct {
                 }
             }
 
+            if (self.child_status != null and self.exitTimeout(now_ms) == 0) {
+                self.terminal.flush();
+                return;
+            }
+
             if (self.heldConfigDue(now_ms)) runtime_replaced = self.applyHeldConfig(now_ms) or runtime_replaced;
 
             if (!runtime_replaced) {
@@ -801,16 +816,28 @@ const Proxy = struct {
         }
     }
 
+    /// Milliseconds until an exited child's session ends, 0 when it is due.
+    fn exitTimeout(self: *const Proxy, now_ms: i64) i64 {
+        const quiet = @max(self.last_output_ms, self.child_exited_ms) + exit_quiet_ms;
+        return @max(@min(quiet, self.child_exited_ms + exit_drain_ms) - now_ms, 0);
+    }
+
     fn drainSignals(self: *Proxy, sig_r: sys.Fd, pid: c.pid_t, now_ms: i64) !void {
         var buf: [64]u8 = undefined;
         const n = sys.read(sig_r, &buf) catch return;
         var resized = false;
         for (buf[0..n]) |raw| {
             const s: posix.SIG = @enumFromInt(raw);
-            // SIGCHLD only wakes the loop; the reaping happens in the source update.
+            // Status commands are reaped in the source update; only the
+            // session's own child is reaped here.
             switch (s) {
                 .WINCH => resized = true,
-                .CHLD => {},
+                .CHLD => if (self.child_status == null) {
+                    if (sys.tryWaitFor(pid)) |status| {
+                        self.child_status = status;
+                        self.child_exited_ms = now_ms;
+                    }
+                },
                 else => sys.killGroup(pid, s),
             }
         }
@@ -1115,6 +1142,20 @@ test "a config request waits while the child holds a saved cursor" {
     proxy.session_token = "fedcba9876543210fedcba9876543210".*;
     try std.testing.expect(!proxy.applyConfigRequest(payload, 100));
     try std.testing.expect(proxy.held_config_len == null);
+}
+
+test "an exited child ends the session once its output pauses" {
+    var proxy = schedulerProxy();
+    proxy.child_exited_ms = 1_000;
+    proxy.last_output_ms = 900;
+    // Output written just before the exit may still be in flight.
+    try std.testing.expectEqual(@as(i64, 50), proxy.exitTimeout(1_000));
+    try std.testing.expectEqual(@as(i64, 0), proxy.exitTimeout(1_050));
+    proxy.last_output_ms = 1_040;
+    try std.testing.expectEqual(@as(i64, 40), proxy.exitTimeout(1_050));
+    // Background jobs writing continuously cannot hold the session open.
+    proxy.last_output_ms = 1_480;
+    try std.testing.expectEqual(@as(i64, 0), proxy.exitTimeout(1_500));
 }
 
 test "min timeout ignores absent timers" {

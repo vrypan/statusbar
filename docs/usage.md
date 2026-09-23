@@ -15,7 +15,9 @@ each one's options.
 
 Runs a command, by default `$SHELL`, in a pty shortened by the configured
 rows that fit, and keeps a status bar in the rows it gave up. The session
-ends when the command exits, with the command's exit status.
+ends when the command exits, with the command's exit status. Background jobs
+that still hold the terminal do not keep it open: output still arriving is
+forwarded until it pauses, for at most half a second.
 
 `run` is the default command, so it can be left out:
 `statusbar -n 1 -- vim` is `statusbar run -n 1 -- vim`. The command to run

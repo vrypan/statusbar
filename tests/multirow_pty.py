@@ -837,6 +837,17 @@ IFS= read -r command
     print("two-row to five-row theme growth preserves terminal geometry")
 
 
+def check_background_job_exit(binary):
+    # The job ignores SIGHUP and keeps the pty open after the shell exits.
+    script = "(trap '' HUP; exec sleep 10) & printf LAST_WORDS; exit 3"
+    started = time.monotonic()
+    code, data = capture_pty([binary, "-e", "printf BAR", "--", "/bin/sh", "-c", script], timeout=4)
+    assert code == 3, (code, data[-500:])
+    assert b"LAST_WORDS" in data, data[-500:]
+    assert time.monotonic() - started < 3
+    print("a background job holding the pty does not keep the session open")
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: multirow_pty.py STATUSBAR")
@@ -869,6 +880,7 @@ def main():
     check_logging(binary)
     check_osc_config(binary)
     check_theme_growth(binary)
+    check_background_job_exit(binary)
     config = """\
 [line.1]
 left = one
