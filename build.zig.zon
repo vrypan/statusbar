@@ -9,8 +9,8 @@
             .hash = "zunic-0.5.0-yeyUTQnOAAFkzjXRgvW4KsrZIlaSIta1AfGfLL9hW7ud",
         },
         .zecli = .{
-            .url = "git+https://github.com/vrypan/zecli.git?ref=v0.4.3#8cc8b08bf63bec22660507b0812c204e1ac2187b",
-            .hash = "zecli-0.4.3-j151kxWcAwDhpiaped1v4n1toFU5tFT3SePOeM_FYcTo",
+            .url = "git+https://github.com/vrypan/zecli.git?ref=v0.4.4#644c2668b209d0637d7b7245ee786fbb29f2b496",
+            .hash = "zecli-0.4.4-j151kwOjAwC6rTbPTKN1BAQUUYAIACV4A2Xr3qG11q6U",
         },
     },
     .paths = .{
