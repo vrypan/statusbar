@@ -12,9 +12,6 @@ working.
 - Wrap values in `#[track]...#[notrack]` to pulse just those regions when
   their displayed content changes, using their own colors and terminal palette.
 - Update it from your scripts with `statusbar set`.
-- Replace the complete running config with `cat FILE | statusbar config`,
-  without restarting the shell, including configs with a different number of
-  rows.
 - Optionally move Starship's prompt details into it while keeping the prompt
   character in the terminal.
 
