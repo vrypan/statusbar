@@ -67,10 +67,6 @@ pub const Output = struct {
     /// needs to know what to put back.
     autowrap: bool = true,
 
-    values: [2][max_value]u8 = undefined,
-    value_lens: [2]usize = .{ 0, 0 },
-    value_changed: [2]bool = .{ false, false },
-
     osc_len: usize = 0,
     osc_probe: [user_var_prefix.len]u8 = undefined,
     payload: [2 * max_value]u8 = undefined,
@@ -438,14 +434,6 @@ pub const Output = struct {
         return self.config_payload[0..self.config_len];
     }
 
-    /// Returns a slot value set since the last call, or null if there is none.
-    /// An empty value clears the slot.
-    pub fn takeValue(self: *Output, slot: usize) ?[]const u8 {
-        if (slot >= self.values.len or !self.value_changed[slot]) return null;
-        self.value_changed[slot] = false;
-        return self.values[slot][0..self.value_lens[slot]];
-    }
-
     fn finishOsc7(self: *Output) void {
         if (self.osc7_overflow) return;
         if (self.osc7_handler) |handler| handler.callback(handler.context, self.osc7_payload[0..self.osc7_len]);
@@ -470,13 +458,7 @@ pub const Output = struct {
         if (size > max_value) return;
         var decoded: [max_value]u8 = undefined;
         decoder.decode(decoded[0..size], encoded) catch return;
-        if (self.update_handler) |handler| {
-            handler.callback(handler.context, slot - 1, decoded[0..size]);
-        } else if (slot <= self.values.len) {
-            @memcpy(self.values[slot - 1][0..size], decoded[0..size]);
-            self.value_lens[slot - 1] = size;
-            self.value_changed[slot - 1] = true;
-        }
+        if (self.update_handler) |handler| handler.callback(handler.context, slot - 1, decoded[0..size]);
     }
 
     /// Carries an incomplete scalar over read boundaries. Only the leading
@@ -694,6 +676,31 @@ const Osc7Collector = struct {
         self.write("<title:");
         self.write(uri);
         self.write(">");
+    }
+};
+
+/// Keeps the latest value of the first two slots.
+const Slots = struct {
+    values: [2][max_value]u8 = undefined,
+    lens: [2]usize = .{ 0, 0 },
+    changed: [2]bool = .{ false, false },
+
+    fn handler(self: *Slots) UpdateHandler {
+        return .{ .context = self, .callback = receive };
+    }
+
+    fn receive(context: *anyopaque, slot: usize, value: []const u8) void {
+        const self: *Slots = @ptrCast(@alignCast(context));
+        @memcpy(self.values[slot][0..value.len], value);
+        self.lens[slot] = value.len;
+        self.changed[slot] = true;
+    }
+
+    /// Returns a value set since the last call, or null if there is none.
+    fn take(self: *Slots, slot: usize) ?[]const u8 {
+        if (!self.changed[slot]) return null;
+        self.changed[slot] = false;
+        return self.values[slot][0..self.lens[slot]];
     }
 };
 
@@ -928,13 +935,14 @@ test "status bar user variables are taken and never forwarded" {
         "\x1b]1337;SetUserVar=StatusBarSlot2=cmlnaHQ=\x1b\\c";
     var chunk: usize = 1;
     while (chunk <= input.len) : (chunk += 1) {
-        var out: Output = .{ .bar = 1, .rows = 10 };
+        var slots: Slots = .{};
+        var out: Output = .{ .bar = 1, .rows = 10, .update_handler = slots.handler() };
         const got = try translate(&out, input, chunk);
         defer std.testing.allocator.free(got);
         try std.testing.expectEqualStrings("abc", got);
-        try std.testing.expectEqualStrings("left side", out.takeValue(0).?);
-        try std.testing.expectEqualStrings("right", out.takeValue(1).?);
-        try std.testing.expect(out.takeValue(0) == null);
+        try std.testing.expectEqualStrings("left side", slots.take(0).?);
+        try std.testing.expectEqualStrings("right", slots.take(1).?);
+        try std.testing.expect(slots.take(0) == null);
         try std.testing.expect(out.atBoundary());
     }
 }
@@ -1036,12 +1044,13 @@ test "invalid incomplete and oversized OSC 7 reports do not notify" {
 }
 
 test "an empty value clears and a bad one is ignored" {
-    var out: Output = .{ .bar = 1, .rows = 10 };
+    var slots: Slots = .{};
+    var out: Output = .{ .bar = 1, .rows = 10, .update_handler = slots.handler() };
     const got = try translate(&out, "\x1b]1337;SetUserVar=StatusBarSlot1=\x07\x1b]1337;SetUserVar=StatusBarSlot2=%%%\x07\x1b]1337;SetUserVar=StatusBarMiddle=eA==\x07\x1b]1337;SetUserVar=StatusBarLeft=eA==\x07\x1b]1337;SetUserVar=StatusBarRight=eA==\x07", 3);
     defer std.testing.allocator.free(got);
     try std.testing.expectEqualStrings("", got);
-    try std.testing.expectEqualStrings("", out.takeValue(0).?);
-    try std.testing.expect(out.takeValue(1) == null);
+    try std.testing.expectEqualStrings("", slots.take(0).?);
+    try std.testing.expect(slots.take(1) == null);
 }
 
 test "malformed out of range and oversized numbered updates are dropped" {
@@ -1051,12 +1060,13 @@ test "malformed out of range and oversized numbered updates are dropped" {
         "\x1b]1337;SetUserVar=StatusBarSlot3=eA==\x07" ++
         "\x1b]1337;SetUserVar=StatusBarSlot1=" ++ ("A" ** 1400) ++ "\x07" ++
         "\x1b]1337;SetUserVar=StatusBarSlot1=" ++ ("A" ** 2100) ++ "\x07";
-    var out: Output = .{ .bar = 1, .rows = 10, .max_slot = 2 };
+    var slots: Slots = .{};
+    var out: Output = .{ .bar = 1, .rows = 10, .max_slot = 2, .update_handler = slots.handler() };
     const got = try translate(&out, input, 1);
     defer std.testing.allocator.free(got);
     try std.testing.expectEqualStrings("", got);
-    try std.testing.expect(out.takeValue(0) == null);
-    try std.testing.expect(out.takeValue(1) == null);
+    try std.testing.expect(slots.take(0) == null);
+    try std.testing.expect(slots.take(1) == null);
 }
 
 test "numbered slot updates are delivered in order from one read" {

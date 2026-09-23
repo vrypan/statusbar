@@ -86,10 +86,6 @@ fn contrast(a: Rgb, b: Rgb) f64 {
 fn smooth(t: f64) f64 {
     return t * t * (3 - 2 * t);
 }
-pub fn amount(step: usize) f64 {
-    return repeatedAmount(step, 1);
-}
-
 fn repeatedAmount(step: usize, pulses: u8) f64 {
     if (step >= @as(usize, steps) * pulses) return 0;
     const pulse = step / steps;
@@ -409,8 +405,8 @@ test "black white and colored backgrounds pulse toward text lightness" {
         try std.testing.expect(if (i % 2 == 0) movement > 0.04 else movement < -0.04);
         try std.testing.expectEqualDeep(base, apply(base, &palette, steps));
     }
-    try std.testing.expectEqual(@as(f64, 0), amount(0));
-    try std.testing.expectEqual(@as(f64, 0), amount(steps));
-    for (1..17) |step| try std.testing.expect(amount(step) >= amount(step - 1));
-    for (17..steps + 1) |step| try std.testing.expect(amount(step) <= amount(step - 1));
+    try std.testing.expectEqual(@as(f64, 0), repeatedAmount(0, 1));
+    try std.testing.expectEqual(@as(f64, 0), repeatedAmount(steps, 1));
+    for (1..17) |step| try std.testing.expect(repeatedAmount(step, 1) >= repeatedAmount(step - 1, 1));
+    for (17..steps + 1) |step| try std.testing.expect(repeatedAmount(step, 1) <= repeatedAmount(step - 1, 1));
 }

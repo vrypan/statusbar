@@ -12,14 +12,12 @@ pub const Budget = struct {
     live: usize = 0,
     peak: usize = 0,
     allocations: usize = 0,
-    allocated: usize = 0,
 
     pub fn allocator(self: *Budget) std.mem.Allocator {
         return .{ .ptr = self, .vtable = &.{ .alloc = alloc, .resize = resize, .remap = remap, .free = free } };
     }
     fn record(self: *Budget, n: usize) void {
         self.live += n;
-        self.allocated += n;
         self.peak = @max(self.peak, self.live);
     }
     fn alloc(ctx: *anyopaque, n: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {

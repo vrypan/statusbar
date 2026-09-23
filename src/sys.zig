@@ -13,12 +13,8 @@ const posix = std.posix;
 const environment = @import("environment.zig");
 
 pub const Exec = @import("child.zig").Exec;
-pub const initEnvironment = environment.init;
 pub const environMap = environment.map;
 pub const env = environment.get;
-pub const envPresent = environment.contains;
-pub const setEnv = environment.setForTest;
-pub const unsetEnv = environment.unsetForTest;
 
 pub const Fd = c.fd_t;
 
@@ -148,16 +144,6 @@ pub fn setNonBlocking(fd: Fd, enabled: bool) Error!void {
 /// standard descriptor clears the flag, so redirections still work.
 pub fn setCloexec(fd: Fd) Error!void {
     if (c.fcntl(fd, posix.F.SETFD, FD_CLOEXEC) < 0) return error.Syscall;
-}
-
-/// A bidirectional private control channel inherited by the shell. It is used
-/// only to acknowledge an OSC handoff after the proxy has switched stores.
-pub fn socketPair() Error![2]Fd {
-    var fds: [2]c_int = undefined;
-    // AF_UNIX and SOCK_STREAM are both 1 on TJ's supported macOS and Linux
-    // targets; Zig 0.16 does not expose these libc constants uniformly.
-    if (c.socketpair(1, 1, 0, &fds) != 0) return error.Syscall;
-    return .{ fds[0], fds[1] };
 }
 
 const O_NONBLOCK: c_int = @bitCast(@as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
