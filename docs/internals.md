@@ -48,12 +48,9 @@ shell
 - On a resize the child's pty follows the terminal. The visible row count is
   the smaller of the configured count and the terminal height minus two.
   Hidden rows retain their content and numbered-slot overrides.
-- Ctrl-X Ctrl-R is intercepted only on the terminal-input path. It opens a
-  statusbar-owned path editor composed through the same cell renderer; child
-  output cannot invoke it. The running proxy reads and parses the selected
-  file, prepares a complete runtime generation, then swaps it after the old
-  poll snapshot has been consumed. Failed preparation leaves the old source,
-  renderer, commands, and geometry intact.
+- A config replacement request is parsed into a complete runtime generation,
+  which is swapped in after the old poll snapshot has been consumed. Failed
+  preparation leaves the old source, renderer, commands, and geometry intact.
 - A successful config replacement updates the child pty size and every input/
   output row bound together. The previous command runners are stopped after
   the swap. The streaming terminal parsers, palette probe, OSC 7 observer, and

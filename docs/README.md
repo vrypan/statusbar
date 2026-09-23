@@ -89,18 +89,8 @@ commands, markup, colors, rules, and all layout details.
 
 ## Load another config
 
-Press **Ctrl-X Ctrl-R** inside a running statusbar session. The bar becomes an
-`Enter config path:` field. Enter a path and press Enter to replace the whole
-configuration; press Escape or Ctrl-C to leave the current bar unchanged.
-Ctrl-U clears the field, and the arrow, Home, End, Backspace, and Delete keys
-edit it.
-
-The active config path is filled in automatically. A relative path is resolved
-from the directory where statusbar started, not the shell's current directory;
-`~/` expands from `HOME`. Paths are literal—there is no shell expansion.
-
-Programs and scripts can load the same complete config without opening the
-editor:
+Inside a running statusbar session, pipe a config into `statusbar config` to
+replace the whole configuration:
 
 ```sh
 cat ./themes/dark.config | statusbar config
@@ -112,8 +102,8 @@ session. See [configuration](config.md#replace-the-running-config) for the
 transactional behavior and [OSC config replacement](osc-3110.md) for the wire
 format and size limit.
 
-The running statusbar reads and validates the file before replacing anything.
-An error remains in the input field so it can be corrected. A successful load
+The running statusbar validates the config before replacing anything; an
+invalid one leaves the current bar unchanged. A successful load
 can add or remove rows and change every configuration setting without restarting
 the shell or foreground program. Overrides in numbered slots that still exist
 are retained. Config files run shell commands, so load only files you trust.

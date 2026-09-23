@@ -44,12 +44,10 @@ Logging is capped at 32 records per second; excess records are dropped. A write
 failure disables logging for the rest of that session without interrupting the
 shell. Without `--log`, no diagnostic log is created.
 
-During a session, **Ctrl-X Ctrl-R** opens `Enter config path:` in the bar.
-Submitting a valid file replaces the complete layout—including its row count—
-without restarting the command. Escape or Ctrl-C cancels. See
-[configuration](config.md#replace-the-running-config) for path and replacement
-semantics. A program can also request replacement with `cat FILE | statusbar config`
-or `statusbar config < FILE`.
+During a session, `cat FILE | statusbar config` or `statusbar config < FILE`
+replaces the complete layout—including its row count—without restarting the
+command. See [configuration](config.md#replace-the-running-config) for
+replacement semantics.
 
 ## `set`
 

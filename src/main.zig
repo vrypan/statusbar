@@ -80,12 +80,6 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
         return if (err == error.ReportedConfigError) 2 else err;
     };
     const cfg = loaded.config;
-    const config_path = if (loaded.path) |path| blk: {
-        if (std.fs.path.isAbsolute(path)) break :blk path;
-        var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const cwd_ptr = std.c.getcwd(&cwd_buf, cwd_buf.len) orelse break :blk path;
-        break :blk try std.fs.path.resolve(arena, &.{ std.mem.sliceTo(cwd_ptr, 0), path });
-    } else null;
 
     // Precedence: command-line flags, then the config file (or the built-in
     // one), then defaults.
@@ -110,7 +104,6 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
         .command = if (templates) null else exec orelse "date",
         .interval_ms = interval_ms orelse 1000,
         .cfg = cfg,
-        .config_path = config_path,
         // Reverse video marks a plain command's bar; a config draws its own.
         .style = style orelse cfg.style orelse (if (templates) "" else "7"),
     };
@@ -500,7 +493,6 @@ fn usageError(stderr: *Io.Writer, command: *const zecli.Command, message: []cons
 test {
     _ = @import("output.zig");
     _ = @import("input.zig");
-    _ = @import("config_dialog.zig");
     _ = @import("session_state.zig");
     _ = @import("bar.zig");
     _ = @import("markup.zig");

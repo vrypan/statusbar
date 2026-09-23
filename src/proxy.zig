@@ -27,7 +27,6 @@ const config = @import("config.zig");
 const Source = @import("source.zig").Source;
 const Runtime = @import("runtime_config.zig").Runtime;
 const config_protocol = @import("config_protocol.zig");
-const Dialog = @import("config_dialog.zig").Dialog;
 const SessionState = @import("session_state.zig").State;
 const PaletteProbe = @import("terminal_palette.zig").Probe;
 
@@ -44,7 +43,6 @@ const paint_max_delay_ms = 500;
 /// How much of the child's output one pass through the loop may forward,
 /// before going back to the terminal's input and the bar's own timers.
 const drain_limit = 1024 * 1024;
-const max_config_bytes = 64 * 1024;
 
 /// An incomplete report from the terminal is released after this long.
 const input_hold_ms = 25;
@@ -87,8 +85,6 @@ pub const Options = struct {
     command: ?[]const u8,
     interval_ms: i64,
     cfg: ?*const config.Config = null,
-    /// Config source shown when the interactive loader opens.
-    config_path: ?[]const u8 = null,
     /// Raw SGR parameters or markup attributes, for lines without their own.
     style: []const u8,
 };
@@ -121,7 +117,6 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
 
     var runtime = try Runtime.initInitial(gpa, io, .{
         .cfg = opts.cfg.?,
-        .path = opts.config_path,
         .lines = opts.lines,
         .command = opts.command,
         .interval_ms = opts.interval_ms,
@@ -375,7 +370,6 @@ const Proxy = struct {
     renderer: *bar.Renderer,
     session_state: *SessionState,
     session_token: [config_protocol.token_len]u8,
-    dialog: Dialog = .{},
 
     terminal: TerminalSink = undefined,
     pending_input: PendingInput = .{},
@@ -463,7 +457,7 @@ const Proxy = struct {
         return null;
     }
 
-    fn feedTerminalInput(self: *Proxy, bytes: []const u8, now_ms: i64) !void {
+    fn feedTerminalInput(self: *Proxy, bytes: []const u8) void {
         var translated: [4096 + input_headroom]u8 = undefined;
         var translated_writer = std.Io.Writer.fixed(&translated);
         if (self.palette_probe.bypassable()) {
@@ -477,8 +471,9 @@ const Proxy = struct {
             self.input.feed(writer.buffered(), &WriterSink{ .w = &translated_writer });
             if (self.palette_probe.bypassable()) self.palette_deadline_ms = null;
         }
-        try self.routeKeyboard(translated_writer.buffered(), now_ms);
+        self.pending_input.write(translated_writer.buffered());
     }
+
     fn flushPalette(self: *Proxy, stop: bool) void {
         if (!stop and !self.palette_probe.holding()) return;
         var buf: [128]u8 = undefined;
@@ -488,128 +483,19 @@ const Proxy = struct {
         var translated: [128 + input_headroom]u8 = undefined;
         var translated_writer = std.Io.Writer.fixed(&translated);
         self.input.feed(writer.buffered(), &WriterSink{ .w = &translated_writer });
-        self.routeKeyboard(translated_writer.buffered(), self.now()) catch {};
+        self.pending_input.write(translated_writer.buffered());
     }
 
-    fn flushInput(self: *Proxy, now_ms: i64) !void {
+    fn flushInput(self: *Proxy) void {
         var buf: [64]u8 = undefined;
         var writer = std.Io.Writer.fixed(&buf);
         self.input.flush(&WriterSink{ .w = &writer });
-        try self.routeKeyboard(writer.buffered(), now_ms);
+        self.pending_input.write(writer.buffered());
     }
 
-    fn routeKeyboard(self: *Proxy, bytes: []const u8, now_ms: i64) !void {
-        const was_active = self.dialog.active;
-        const action = self.dialog.feed(bytes, now_ms, &self.pending_input);
-        switch (action) {
-            .none => {},
-            .opened => {
-                self.dialog.open(if (self.runtime.path) |path| path else "");
-                self.terminal.write("\x1b[?2004h");
-                self.requestPaint(now_ms);
-            },
-            .changed => self.requestPaint(now_ms),
-            .cancelled => {
-                self.restorePasteMode();
-                if (was_active and self.runtime.renderer.rows.len > 0) self.runtime.renderer.clearOverlay();
-                self.requestPaint(now_ms);
-            },
-            .submit => try self.loadConfig(now_ms),
-        }
-    }
-
-    fn renderDialog(self: *Proxy) !void {
-        if (!self.dialog.active or self.layout.bar == 0) return;
-        var buf: [bar.max_line_bytes]u8 = undefined;
-        const value = self.dialog.value();
-        const message = self.dialog.message();
-        const suffix = if (message.len > 0) message else "Enter: load  Esc: cancel";
-        var writer = std.Io.Writer.fixed(&buf);
-        writer.writeAll(" Enter config path: ") catch {};
-        const remaining = writer.buffer.len - writer.end;
-        const reserve = @min(suffix.len + 5, remaining);
-        const capacity = remaining - reserve;
-        const half = capacity / 2;
-        var start = self.dialog.cursor -| half;
-        while (start < self.dialog.cursor and value[start] & 0xc0 == 0x80) start += 1;
-        var end = @min(value.len, start + capacity);
-        while (end > self.dialog.cursor and end < value.len and value[end] & 0xc0 == 0x80) end -= 1;
-        writer.writeAll(value[start..self.dialog.cursor]) catch {};
-        writer.writeAll("▏") catch {};
-        writer.writeAll(value[self.dialog.cursor..end]) catch {};
-        writer.writeAll("  ") catch {};
-        writer.writeAll(suffix) catch {};
-        writer.writeByte(' ') catch {};
-        try self.runtime.renderer.overlayLiteral(writer.buffered());
-    }
-
-    fn restorePasteMode(self: *Proxy) void {
-        self.terminal.write(if (self.output.bracketed_paste) "\x1b[?2004h" else "\x1b[?2004l");
-    }
-
-    fn loadConfig(self: *Proxy, now_ms: i64) !void {
-        var applied = false;
-        var stage: []const u8 = "path validation";
-        defer if (!applied) {
-            if (self.log) |log| log.write("config replacement failed: {s}", .{stage});
-        };
-        const raw = self.dialog.value();
-        if (!std.unicode.utf8ValidateSlice(raw)) {
-            self.dialog.setError("path is not valid UTF-8", .{});
-            return self.requestPaint(now_ms);
-        }
-        stage = "path resolution";
-        var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const cwd_ptr = c.getcwd(&cwd_buf, cwd_buf.len) orelse {
-            self.dialog.setError("cannot resolve startup directory", .{});
-            return self.requestPaint(now_ms);
-        };
-        const cwd = std.mem.sliceTo(cwd_ptr, 0);
-        const expanded = if (std.mem.startsWith(u8, raw, "~/")) blk: {
-            const home = sys.env("HOME") orelse {
-                self.dialog.setError("HOME is not set", .{});
-                return self.requestPaint(now_ms);
-            };
-            break :blk try std.fs.path.resolve(self.gpa, &.{ home, raw[2..] });
-        } else try std.fs.path.resolve(self.gpa, &.{ cwd, raw });
-        defer self.gpa.free(expanded);
-        stage = "file inspection";
-        const stat = std.Io.Dir.cwd().statFile(self.io, expanded, .{}) catch |err| {
-            self.dialog.setError("cannot inspect config: {t}", .{err});
-            return self.requestPaint(now_ms);
-        };
-        if (stat.kind != .file) {
-            stage = "not a regular file";
-            self.dialog.setError("config path is not a regular file", .{});
-            return self.requestPaint(now_ms);
-        }
-        stage = "file read";
-        const text = std.Io.Dir.cwd().readFileAlloc(self.io, expanded, self.gpa, .limited(max_config_bytes)) catch |err| {
-            self.dialog.setError("cannot read config: {t}", .{err});
-            return self.requestPaint(now_ms);
-        };
-        defer self.gpa.free(text);
-        stage = "terminal size";
-        var diag: config.Diagnostic = .{};
-        stage = "config preparation";
-        self.replaceConfig(text, expanded, now_ms, &diag) catch |err| {
-            if (self.log) |log| log.write("config preparation failed: {t}, line={d}", .{ err, diag.line });
-            if (err == error.InvalidConfig) {
-                if (diag.line > 0) self.dialog.setError("line {d}: {s}", .{ diag.line, diag.message }) else self.dialog.setError("{s}", .{diag.message});
-            } else if (err == error.TerminalSizeUnavailable) {
-                self.dialog.setError("cannot read terminal size", .{});
-            } else if (err == error.ChildResizeFailed) {
-                self.dialog.setError("cannot resize child terminal", .{});
-            } else self.dialog.setError("cannot prepare config: {t}", .{err});
-            return self.requestPaint(now_ms);
-        };
-        applied = true;
-        if (self.log) |log| log.write("config replaced: rows={d}", .{self.runtime.lines});
-    }
-
-    fn replaceConfig(self: *Proxy, text: []const u8, path: ?[]const u8, now_ms: i64, diag: *config.Diagnostic) !void {
+    fn replaceConfig(self: *Proxy, text: []const u8, now_ms: i64, diag: *config.Diagnostic) !void {
         const outer = sys.getWinsize(stdin_fd) catch return error.TerminalSizeUnavailable;
-        var candidate = try Runtime.initText(self.gpa, self.io, text, path, outer.row, outer.col, diag);
+        var candidate = try Runtime.initText(self.gpa, self.io, text, outer.row, outer.col, diag);
         errdefer candidate.deinit();
         candidate.renderer.palette = self.runtime.renderer.palette;
         candidate.renderer.palette_revision = self.runtime.renderer.palette_revision;
@@ -641,8 +527,6 @@ const Proxy = struct {
         self.output.update_handler.?.context = &self.runtime.source;
         self.input.bar = new_layout.bar;
         self.input.rows = new_layout.child.row;
-        self.dialog.close();
-        self.restorePasteMode();
         self.runtime.source.refreshNow(now_ms);
         self.output.damaged = true;
         self.requestPaint(now_ms);
@@ -680,7 +564,7 @@ const Proxy = struct {
             return false;
         };
         var diag: config.Diagnostic = .{};
-        self.replaceConfig(text, null, now_ms, &diag) catch |err| {
+        self.replaceConfig(text, now_ms, &diag) catch |err| {
             if (self.log) |log| log.write("OSC config rejected: {t}, line={d}", .{ err, diag.line });
             return false;
         };
@@ -752,7 +636,6 @@ const Proxy = struct {
             var now_ms = self.now();
             var timeout = minTimeout(self.paintTimeout(now_ms), self.runtime.source.timeout(now_ms));
             timeout = minTimeout(timeout, self.runtime.renderer.nextFrameTimeout(now_ms));
-            timeout = minTimeout(timeout, self.dialog.timeout(now_ms));
             if (self.palette_deadline_ms) |deadline| timeout = minTimeout(timeout, @max(deadline - now_ms, 0));
             if (self.palette_probe.holding()) timeout = minTimeout(timeout, @max(self.last_input_ms + input_hold_ms - now_ms, 0));
             if (self.input.holding()) timeout = minTimeout(timeout, @max(self.last_input_ms + input_hold_ms - now_ms, 0));
@@ -790,7 +673,6 @@ const Proxy = struct {
                                     runtime_replaced = self.applyConfigRequest(payload, now_ms) or runtime_replaced;
                                 }
                             }
-                            if (self.dialog.active and !self.output.bracketed_paste) self.terminal.write("\x1b[?2004h");
                             if (self.palette_probe.remaining > 0) {
                                 self.palette_probe.observeChild(out_buf[0..n]);
                                 if (self.palette_probe.remaining == 0) {
@@ -811,7 +693,6 @@ const Proxy = struct {
                                     // it must never consume source events or
                                     // activate a new effect.
                                     _ = try self.runtime.renderer.compose(now_ms);
-                                    try self.renderDialog();
                                     try self.paint();
                                 } else {
                                     self.requestPaint(now_ms);
@@ -846,7 +727,6 @@ const Proxy = struct {
                 };
             }
             if (try self.runtime.renderer.compose(now_ms)) self.requestPaint(now_ms);
-            try self.renderDialog();
 
             try self.paintIfDue(now_ms);
             self.terminal.flush();
@@ -866,18 +746,12 @@ const Proxy = struct {
                 if (n == 0) {
                     stdin_open = false;
                 } else {
-                    try self.feedTerminalInput(in_buf[0..n], now_ms);
+                    self.feedTerminalInput(in_buf[0..n]);
                     self.last_input_ms = now_ms;
                 }
             } else if (now_ms - self.last_input_ms >= input_hold_ms) {
                 if (self.palette_probe.holding()) self.flushPalette(false);
-                if (self.input.holding()) try self.flushInput(now_ms);
-                if (self.dialog.flushPrefix(now_ms, &self.pending_input)) self.last_input_ms = now_ms;
-                if (self.dialog.flushEscape(now_ms, &self.pending_input)) {
-                    self.restorePasteMode();
-                    if (self.renderer.rows.len > 0) self.renderer.clearOverlay();
-                    self.requestPaint(now_ms);
-                }
+                if (self.input.holding()) self.flushInput();
             }
 
             if (in.fd >= 0 and in.revents & (posix.POLL.ERR | posix.POLL.NVAL) != 0) stdin_open = false;
@@ -965,14 +839,13 @@ test "palette filtering preserves CSI translation across fragmented input" {
     proxy.renderer = &renderer;
     proxy.palette_probe = .{};
     proxy.pending_input = .{};
-    proxy.dialog = .{};
     proxy.input = .{ .bar = 2, .rows = 22 };
     var buf: [4096]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
     try proxy.palette_probe.begin(&writer);
-    try proxy.feedTerminalInput("\x1b", 0);
-    try proxy.feedTerminalInput("[8;24;80t\x1b]11;rgb:1111/2222/3333\x1b", 0);
-    try proxy.feedTerminalInput("\\keys\x1b[<0;3;24M", 0);
+    proxy.feedTerminalInput("\x1b");
+    proxy.feedTerminalInput("[8;24;80t\x1b]11;rgb:1111/2222/3333\x1b");
+    proxy.feedTerminalInput("\\keys\x1b[<0;3;24M");
     try std.testing.expectEqualStrings("\x1b[8;22;80tkeys", proxy.pending_input.pending());
     try std.testing.expectEqualDeep(@import("terminal_palette.zig").Rgb{ 17, 34, 51 }, renderer.palette.background.?);
 }
@@ -984,9 +857,8 @@ test "completed palette discovery bypasses its copy stage" {
     proxy.renderer = &renderer;
     proxy.palette_probe = .{};
     proxy.pending_input = .{};
-    proxy.dialog = .{};
     proxy.input = .{ .bar = 0, .rows = 24 };
-    try proxy.feedTerminalInput("keys\x1b[A", 0);
+    proxy.feedTerminalInput("keys\x1b[A");
     try std.testing.expectEqual(@as(usize, 0), proxy.palette_probe.filter_calls);
     try std.testing.expectEqualStrings("keys\x1b[A", proxy.pending_input.pending());
 }

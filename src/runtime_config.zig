@@ -12,7 +12,6 @@ pub const Runtime = struct {
     cfg: *const config.Config,
     owned_cfg: ?*config.Config = null,
     owned_text: ?[]u8 = null,
-    path: ?[]u8 = null,
     lines: u16,
     source: Source,
     styles: [][]const u8,
@@ -25,7 +24,6 @@ pub const Runtime = struct {
 
     pub const Initial = struct {
         cfg: *const config.Config,
-        path: ?[]const u8,
         lines: u16,
         command: ?[]const u8,
         interval_ms: i64,
@@ -33,10 +31,10 @@ pub const Runtime = struct {
     };
 
     pub fn initInitial(gpa: std.mem.Allocator, io: std.Io, opts: Initial, visible: u16, cols: u16) !Runtime {
-        return init(gpa, io, opts.cfg, null, null, opts.path, opts.lines, opts.command, opts.interval_ms, opts.style, visible, cols);
+        return init(gpa, io, opts.cfg, null, null, opts.lines, opts.command, opts.interval_ms, opts.style, visible, cols);
     }
 
-    pub fn initText(gpa: std.mem.Allocator, io: std.Io, text: []const u8, path: ?[]const u8, outer_rows: u16, cols: u16, diag: *config.Diagnostic) !Runtime {
+    pub fn initText(gpa: std.mem.Allocator, io: std.Io, text: []const u8, outer_rows: u16, cols: u16, diag: *config.Diagnostic) !Runtime {
         const owned_text = try gpa.dupe(u8, text);
         errdefer gpa.free(owned_text);
         const cfg = try gpa.create(config.Config);
@@ -47,7 +45,7 @@ pub const Runtime = struct {
         const visible = @min(lines, outer_rows -| 2);
         const command: ?[]const u8 = if (cfg.line.len > 0) null else "date";
         const style = cfg.style orelse if (command == null) "" else "7";
-        return init(gpa, io, cfg, cfg, owned_text, path, lines, command, 1000, style, visible, cols);
+        return init(gpa, io, cfg, cfg, owned_text, lines, command, 1000, style, visible, cols);
     }
 
     fn init(
@@ -56,7 +54,6 @@ pub const Runtime = struct {
         cfg: *const config.Config,
         owned_cfg: ?*config.Config,
         owned_text: ?[]u8,
-        path_value: ?[]const u8,
         lines: u16,
         command: ?[]const u8,
         interval_ms: i64,
@@ -64,8 +61,6 @@ pub const Runtime = struct {
         visible: u16,
         cols: u16,
     ) !Runtime {
-        const path = if (path_value) |value| try gpa.dupe(u8, value) else null;
-        errdefer if (path) |value| gpa.free(value);
         var source = if (command) |value|
             try Source.initExec(gpa, io, value, interval_ms, lines, cols)
         else
@@ -100,7 +95,6 @@ pub const Runtime = struct {
             .cfg = cfg,
             .owned_cfg = owned_cfg,
             .owned_text = owned_text,
-            .path = path,
             .lines = lines,
             .source = source,
             .styles = styles,
@@ -122,7 +116,6 @@ pub const Runtime = struct {
             self.gpa.destroy(cfg);
         }
         if (self.owned_text) |text| self.gpa.free(text);
-        if (self.path) |path| self.gpa.free(path);
         self.* = undefined;
     }
 };

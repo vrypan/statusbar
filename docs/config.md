@@ -27,31 +27,23 @@ it parses, and `statusbar config --path` shows which file that is; see
 
 ## Replace the running config
 
-Press **Ctrl-X Ctrl-R** in a statusbar session to open its config-path editor.
-Enter loads the selected file; Escape or Ctrl-C cancels. The current file path
-is prefilled, Ctrl-U clears it, and ordinary navigation and deletion keys edit
-it. Relative paths use statusbar's startup directory, while `~/` uses `HOME`.
-The path is literal and is not evaluated by a shell.
-
-Loading is transactional: unreadable or invalid files leave the active bar in
-place and show an error in the editor. A successful replacement applies every
-setting, including its number of `[line.N]` sections. Existing numbered-slot
-overrides survive only where the same slot number exists in the new layout.
-Configured commands restart and establish their first values without a change
-highlight. Because those commands are executable code, load trusted configs.
-
-A program can perform the same complete replacement from inside the session:
+A program inside the session can replace the complete running config:
 
 ```sh
 cat ./themes/dark.config | statusbar config
 statusbar config < ./themes/dark.config
 ```
 
+Loading is transactional: an invalid config leaves the active bar in place.
+A successful replacement applies every
+setting, including its number of `[line.N]` sections. Existing numbered-slot
+overrides survive only where the same slot number exists in the new layout.
+Configured commands restart and establish their first values without a change
+highlight. Because those commands are executable code, load trusted configs.
+
 The command reads the file in its own process and sends its contents to the
 running proxy. The receiver does not resolve the filename. OSC transport limits
-these configs to 24,523 bytes; the interactive path editor retains its 64 KiB
-file limit. A config loaded over OSC has no receiver-side source path, so the
-path editor opens empty afterward. See [the protocol](osc-3110.md).
+these configs to 24,523 bytes. See [the protocol](osc-3110.md).
 
 ## Example
 

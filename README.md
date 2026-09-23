@@ -12,9 +12,9 @@ working.
 - Wrap values in `#[track]...#[notrack]` to pulse just those regions when
   their displayed content changes, using their own colors and terminal palette.
 - Update it from your scripts with `statusbar set`.
-- Press Ctrl-X Ctrl-R to load another complete config without restarting the
-  shell, including configs with a different number of rows.
-- Let scripts replace the complete running config with `cat FILE | statusbar config`.
+- Replace the complete running config with `cat FILE | statusbar config`,
+  without restarting the shell, including configs with a different number of
+  rows.
 - Optionally move Starship's prompt details into it while keeping the prompt
   character in the terminal.
 

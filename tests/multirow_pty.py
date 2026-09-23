@@ -832,76 +832,6 @@ IFS= read -r command
     print("two-row to five-row theme growth preserves terminal geometry")
 
 
-def check_config_dialog(binary):
-    config = """\
-[line.1]
-left = RELOADED_ONE
-[line.2]
-left = RELOADED_TWO
-[line.3]
-left = RELOADED_THREE
-"""
-    with tempfile.NamedTemporaryFile("w", delete=False) as cfg:
-        cfg.write(config)
-        config_path = cfg.name
-    log_path = config_path + ".log"
-    pid = master = None
-    try:
-        script = r'''
-printf RELOAD_READY
-while IFS= read -r command; do
-  case "$command" in
-    SET) "$1" set 6 LIVE_SLOT; printf '__SET__\n' ;;
-    EXIT) exit 0 ;;
-  esac
-done
-'''
-        pid, master = spawn([
-            binary, "--log", log_path, "-e", "printf RELOAD_READY", "--",
-            "/bin/sh", "-c", script, "sh", binary,
-        ], rows=12)
-        data = read_until(master, b"", b"RELOAD_READY", timeout=5)
-        os.write(master, b"\x18\x12")
-        data = read_until(master, data, b"Enter config path:", timeout=3)
-        os.write(master, b"\x15" + os.fsencode(config_path + ".missing") + b"\r")
-        deadline = time.monotonic() + 3
-        while True:
-            with open(log_path) as log:
-                if "config replacement failed: file inspection" in log.read():
-                    break
-            assert time.monotonic() < deadline, "config rejection was not logged"
-            ready, _, _ = select.select([master], [], [], 0.05)
-            if ready:
-                data += os.read(master, 65536)
-        with open(log_path) as log:
-            assert "config replacement failed: file inspection" in log.read()
-        os.write(master, b"\x15" + os.fsencode(config_path) + b"\r")
-        data = read_until(master, data, b"RELOADED_THREE", timeout=5)
-        assert b"\x1b[1;9r" in data, data[-1000:]
-        os.write(master, b"SET\n")
-        data = read_until(master, data, b"__SET__", timeout=3)
-        data = read_until(master, data, b"LIVE_SLOT", timeout=3)
-        with open(config_path, "w", encoding="utf-8") as replacement:
-            replacement.write("[line.1]\nleft = SHRUNK\n")
-        before_shrink = len(data)
-        os.write(master, b"\x18\x12")
-        data += read_until(master, b"", b"Enter config path:", timeout=3)
-        os.write(master, b"\r")
-        data += read_until(master, b"", b"SHRUNK", timeout=5)
-        assert b"\x1b[1;11r" in data[before_shrink:], data[-1000:]
-        with open(log_path) as log:
-            logged = log.read()
-        assert "config replaced: rows=3" in logged and "config replaced: rows=1" in logged, logged
-        assert "RELOADED_THREE" not in logged
-        os.write(master, b"EXIT\n")
-    finally:
-        if pid is not None:
-            stop(pid, master)
-        os.unlink(config_path)
-        os.unlink(log_path)
-    print("interactive config replacement and row growth passed")
-
-
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: multirow_pty.py STATUSBAR")
@@ -934,7 +864,6 @@ def main():
     check_logging(binary)
     check_osc_config(binary)
     check_theme_growth(binary)
-    check_config_dialog(binary)
     config = """\
 [line.1]
 left = one

@@ -204,10 +204,7 @@ responsible for scheduling or painting another.
 | Config generation replacement | Replace and re-layout | No | Repaint the visible bar |
 | Row becomes hidden or visible | Re-layout | No | Paint visible rows as needed |
 
-The interactive config-path editor is a final UI overlay on the desired frame.
-Content and effects continue updating underneath it. Opening, editing, closing,
-or replacing the config cannot trigger a highlight; closing exposes the newest
-underlying frame rather than restoring a captured image.
+Replacing the config cannot trigger a highlight.
 
 Several events handled in one event-loop iteration still produce one composed
 frame. A content update can restart one effect while unrelated effects retain
