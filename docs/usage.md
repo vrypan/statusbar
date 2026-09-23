@@ -2,7 +2,7 @@
 
 ```
 statusbar [run] [options] [-- COMMAND...]
-statusbar set <N> [TEXT...]
+statusbar set <SLOT> [TEXT...]
 statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
 statusbar config [--print] [--path] [--default]
 statusbar completion <bash|zsh|fish>
@@ -13,14 +13,14 @@ each one's options.
 
 ## `run`
 
-Runs a command, by default `$SHELL`, in a pty shortened by the configured
-rows that fit, and keeps a status bar in the rows it gave up. The session
+Starts a shell or command with a status bar at the bottom of the terminal.
+With no command, starts your usual shell (`$SHELL`). The session
 ends when the command exits, with the command's exit status. Background jobs
 that still hold the terminal do not keep it open: output still arriving is
 forwarded until it pauses, for at most half a second.
 
 `run` is the default command, so it can be left out:
-`statusbar -n 1 -- vim` is `statusbar run -n 1 -- vim`. The command to run
+`statusbar -- vim` is `statusbar run -- vim`. The command to run
 always follows `--`.
 
 | Option                  | Meaning                                                                 |
@@ -53,8 +53,16 @@ replacement semantics.
 
 ## `set`
 
-`statusbar set N [TEXT...]` replaces a numbered slot of the bar from inside a
-session. See [set.md](set.md).
+`statusbar set SLOT [TEXT...]` sets the text of a slot. Each row has a left
+and right slot: row 1 uses slots 1 and 2, row 2 uses slots 3 and 4, and so on.
+Omit the text to restore the value from your config or `--exec` command:
+
+```sh
+statusbar set 1 'Build passed'
+statusbar set 1
+```
+
+See [set.md](set.md) for formatting and more examples.
 
 ## `init`
 
@@ -85,9 +93,9 @@ it: a broken file reports its error and exits with status 2.
 
 | Option                | Meaning                                              |
 |-----------------------|------------------------------------------------------|
-| `--print`             | print the config, ignoring stdin                     |
-| `--path`              | print only where the config comes from, or `built-in` |
-| `--default`           | use the built-in config, ignoring any config file    |
+| `--print`             | show the configuration a new session would load     |
+| `--path`              | show the config file path, or `built-in`              |
+| `--default`           | show the built-in default configuration              |
 
 With no flags and terminal stdin, shows help. With piped or redirected stdin,
 reads and validates the complete config until EOF, then sends its contents to

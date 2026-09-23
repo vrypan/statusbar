@@ -1,4 +1,4 @@
-# Update slots from inside a session
+# Set the text of a slot
 
 Each configured row has two numbered slots:
 
@@ -10,7 +10,7 @@ Each configured row has two numbered slots:
 
 The pattern continues: row *N* uses slots *2N − 1* and *2N*.
 
-`statusbar set N [TEXT...]` replaces a slot. With no text, or a value made
+`statusbar set SLOT [TEXT...]` sets the text of a slot. With no text, or a value made
 only of CR/LF line breaks, it restores the config or `--exec` value:
 
 ```sh
