@@ -4,7 +4,7 @@
 //!     statusbar [run] [options] [-- COMMAND...]
 //!     statusbar set <SLOT> [TEXT...]
 //!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
-//!     statusbar config [--print [default|startup|current]] [--default] [--path]
+//!     statusbar config [--print [default|startup|current] | --default | --path]
 //!     statusbar completion <bash|zsh|fish>
 
 const std = @import("std");
@@ -20,9 +20,9 @@ const config_flag = zecli.FlagSpec{
 };
 
 const config_flags = [_]zecli.FlagSpec{
-    .{ .name = "print", .description = "Print a config (default: current)" },
-    .{ .name = "default", .description = "Show the built-in config (alias for --print default)" },
-    .{ .name = "path", .description = "Show the config path a new session would use" },
+    .{ .name = "print", .description = "Print a config (current if omitted)" },
+    .{ .name = "default", .description = "Same as --print default" },
+    .{ .name = "path", .description = "Print the config path for a new session" },
 };
 
 const run_flags = [_]zecli.FlagSpec{
@@ -118,7 +118,7 @@ const commands = [_]zecli.CommandSpec{
     .{
         .name = "config",
         .description = "View configuration or load a new layout",
-        .usage = "statusbar config [--print [default|startup|current]] [--default] [--path]",
+        .usage = "statusbar config [--print [default|startup|current] | --default | --path]",
         .flags = &config_flags,
         .arguments = &.{.{ .name = "SOURCE", .description = "Config to show with --print: default, startup, or current", .completion = .{ .values = &.{ "default", "startup", "current" } } }},
         .double_dash = .positionals,
@@ -126,10 +126,8 @@ const commands = [_]zecli.CommandSpec{
         \\To change the running bar, pass a complete config file as input. The
         \\new layout can change the number of rows without restarting your shell.
         \\
-        \\--print defaults to current. Use startup for the exact config originally
-        \\loaded by this session, or default for the built-in config. Startup and
-        \\current require a running session and exclude temporary slot overrides.
-        \\They preserve config text, including comments and commands.
+        \\Printing startup or current requires a running session. Both preserve
+        \\the config text and exclude temporary overrides made with `statusbar set`.
         \\
         \\--path shows the file a new session would use: $STATUSBAR_CONFIG, then
         \\$XDG_CONFIG_HOME/statusbar/config (or ~/.config/statusbar/config when
@@ -138,6 +136,14 @@ const commands = [_]zecli.CommandSpec{
         \\
         \\With no flags, shows this help when run directly in a terminal.
         ++ "\n",
+        .help_sections = &.{.{
+            .title = "PRINT CHOICES",
+            .entries = &.{
+                .{ .name = "default", .description = "Built-in default config; works outside a session" },
+                .{ .name = "startup", .description = "Exact config originally loaded by this session" },
+                .{ .name = "current", .description = "Active config, including live replacements" },
+            },
+        }},
         .examples = &.{
             "statusbar config --print",
             "statusbar config --print startup > original.config",
@@ -196,6 +202,18 @@ pub const application = application: {
 };
 
 pub const CommandName = zecli.CommandEnum(application);
+
+/// zecli 0.4.3 parses the optional --print choice as a positional. Present it
+/// as part of --print in help, without changing parsing or completion metadata.
+pub fn printCommandHelp(allocator: std.mem.Allocator, writer: anytype, spec: zecli.CommandSpec) !void {
+    if (!std.mem.eql(u8, spec.name, "config")) return zecli.printCommandHelp(allocator, writer, spec);
+    var help = spec;
+    help.arguments = &.{};
+    var flags = config_flags;
+    flags[0].name = "print [default|startup|current]";
+    help.flags = &flags;
+    try zecli.printCommandHelp(allocator, writer, help);
+}
 
 pub fn findCommand(name: []const u8) ?zecli.CommandSpec {
     return zecli.findCommand(application, name);

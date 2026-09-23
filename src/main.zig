@@ -37,6 +37,11 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     };
 
+    if (invocation.help_target == .command) {
+        try cli.printCommandHelp(arena, help_output, invocation.getCommand().?.spec);
+        try stdout.flush();
+        return 0;
+    }
     if (try invocation.printHelpIfRequested(arena, help_output)) {
         try stdout.flush();
         return 0;
@@ -135,7 +140,7 @@ fn printConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, 
     if (args.len > 0 and !print) return usageError(stderr, command, "a config selection requires --print");
     if (!print and !path and !defaults) {
         if (!(try Io.File.stdin().isTty(io))) return sendConfig(arena, io, command, stderr);
-        try zecli.printCommandHelp(arena, help_output, command.spec);
+        try cli.printCommandHelp(arena, help_output, command.spec);
         try stdout.flush();
         return 0;
     }
