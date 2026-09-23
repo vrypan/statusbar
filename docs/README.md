@@ -26,21 +26,17 @@ This guide calls the visible parts of the bar *rows*. In a config file, each
 
 ## Start with one command
 
-For a lightweight bar, no config is needed. `--exec` reruns a shell command;
-each output line becomes one row. A tab separates left and right content.
+For a lightweight bar, pass a small config directly:
 
 ```sh
-# A clock at the bottom-right of one row.
-statusbar --exec 'printf "\t%s\n" "$(date +%H:%M)"'
-
-# Two rows: host, then date/time.
-statusbar --lines 2 --exec 'printf " %s\n\t%s\n" \
-  "$(hostname -s)" "$(date "+%a %d %H:%M")"'
+statusbar --config - <<'EOF'
+[line.1]
+right = %H:%M
+EOF
 ```
 
-Use `--interval SECONDS` to control refreshes. `--lines` is only for this
-mode; configured layouts derive their row count from the `[line.N]` sections.
-See [the command reference](usage.md#without-a-config---exec) for all options.
+Scripts can generate one too: `generate-config | statusbar --config -`.
+See [the command reference](usage.md#generate-a-config-on-the-fly) for details.
 
 ## Make a config
 
@@ -274,7 +270,7 @@ before comparing timings; a single warm frame does not predict first-use cost.
 
 ## Reference and behavior
 
-- [Usage](usage.md) — commands, options, completions, `--exec`, and environment.
+- [Usage](usage.md) — commands, options, completions, generated configs, and environment.
 - [Configuration](config.md) — rows, commands, change highlights, colors, markup, and rules.
 - [Updating slots](set.md) — runtime updates from scripts and the terminal protocol.
 - [Starship](starship.md) — prompt integration and customization.

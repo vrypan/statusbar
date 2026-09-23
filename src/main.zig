@@ -63,28 +63,12 @@ pub fn main(init: std.process.Init) !u8 {
 
 /// `statusbar [run]`: the session itself.
 fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
-    const lines: ?u16 = if (command.getValue(usize, "lines")) |n| lines: {
-        if (n < 1 or n > config.max_lines) return usageError(stderr, command, "--lines must be between 1 and 65533");
-        break :lines @intCast(n);
-    } else null;
-    const interval_ms: ?i64 = if (command.getValue(f64, "interval")) |secs| interval: {
-        if (!(secs >= 0.1 and secs <= 86400)) return usageError(stderr, command, "--interval must be between 0.1 and 86400 seconds");
-        break :interval @intFromFloat(secs * 1000);
-    } else null;
-    const exec = command.getValue([]const u8, "exec");
-    if (lines != null and exec == null) return usageError(stderr, command, "--lines requires --exec");
-    const style = command.getValue([]const u8, "style");
-
     const loaded = loadConfig(arena, io, command.getValue([]const u8, "config"), stderr) catch |err| {
         try stderr.flush();
         return if (err == error.ReportedConfigError) 2 else err;
     };
     const cfg = loaded.config;
 
-    // Precedence: command-line flags, then the config file (or the built-in
-    // one), then defaults.
-    const templates = exec == null and cfg.line.len > 0;
-    if (interval_ms) |ms| cfg.interval_ms = ms;
     const child = command.passthrough() orelse &.{};
     const argv = try arena.alloc([]const u8, child.len);
     for (child, argv) |arg, *slot| slot.* = arg;
@@ -100,17 +84,32 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
     const opts: proxy.Options = .{
         .log = &log,
         .argv = argv,
-        .lines = lines orelse (if (templates) cfg.definedLines() else 1),
-        .command = if (templates) null else exec orelse "date",
-        .interval_ms = interval_ms orelse 1000,
         .cfg = cfg,
-        // Reverse video marks a plain command's bar; a config draws its own.
-        .style = style orelse cfg.style orelse (if (templates) "" else "7"),
     };
 
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
     defer _ = debug_allocator.deinit();
     const gpa = if (@import("builtin").mode == .Debug) debug_allocator.allocator() else std.heap.smp_allocator;
+
+    // The config pipe is consumed before terminal setup. Reconnect stdin only
+    // for this explicit mode so ordinary redirected input remains an error.
+    if (loaded.from_stdin) {
+        const tty = @import("sys.zig").openInputTty(io) catch |err| {
+            if (err == error.NotATerminal) {
+                try stderr.writeAll("statusbar: stdin and stdout must be a terminal\n");
+            } else {
+                try stderr.print("statusbar: cannot open /dev/tty for keyboard input: {t}\n", .{err});
+            }
+            try stderr.flush();
+            return 1;
+        };
+        defer tty.close(io);
+        if (std.c.dup2(tty.handle, 0) < 0) {
+            try stderr.writeAll("statusbar: cannot connect keyboard input to /dev/tty\n");
+            try stderr.flush();
+            return 1;
+        }
+    }
 
     return proxy.run(gpa, io, opts) catch |err| {
         log.write("session failed: {t}", .{err});
@@ -437,6 +436,7 @@ const default_config = @embedFile("default_config");
 const LoadedConfig = struct {
     /// The file it came from; null for the built-in config.
     path: ?[]const u8,
+    from_stdin: bool = false,
     text: []const u8,
     config: *config.Config,
 };
@@ -460,8 +460,10 @@ fn loadConfig(arena: std.mem.Allocator, io: Io, flag: ?[]const u8, stderr: *Io.W
         const home = env.get("HOME") orelse break :blk "";
         break :blk try std.fmt.allocPrint(arena, "{s}/.config/statusbar/config", .{home});
     };
+    const from_stdin = if (flag) |value| std.mem.eql(u8, value, "-") else false;
+    const label = if (from_stdin) "stdin" else path;
     var source: ?[]const u8 = path;
-    const text = if (path.len == 0) default_config else Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_config_bytes)) catch |err| text: {
+    const text = if (from_stdin) try readConfigStdin(arena, io, stderr) else if (path.len == 0) default_config else Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_config_bytes)) catch |err| text: {
         if (!explicit and err == error.FileNotFound) break :text default_config;
         try stderr.print("statusbar: cannot read {s}: {t}\n", .{ path, err });
         return error.ReportedConfigError;
@@ -472,13 +474,27 @@ fn loadConfig(arena: std.mem.Allocator, io: Io, flag: ?[]const u8, stderr: *Io.W
     cfg.* = config.parse(arena, text, &diag) catch |err| {
         if (err == error.OutOfMemory) return err;
         if (diag.line > 0) {
-            try stderr.print("statusbar: {s}:{d}: {s}\n", .{ path, diag.line, diag.message });
+            try stderr.print("statusbar: {s}:{d}: {s}\n", .{ label, diag.line, diag.message });
         } else {
-            try stderr.print("statusbar: {s}: {s}\n", .{ path, diag.message });
+            try stderr.print("statusbar: {s}: {s}\n", .{ label, diag.message });
         }
         return error.ReportedConfigError;
     };
-    return .{ .path = source, .text = text, .config = cfg };
+    return .{ .path = source, .from_stdin = from_stdin, .text = text, .config = cfg };
+}
+
+fn readConfigStdin(arena: std.mem.Allocator, io: Io, stderr: *Io.Writer) ![]const u8 {
+    var buffer: [4096]u8 = undefined;
+    var reader = Io.File.stdin().reader(io, &buffer);
+    const text = reader.interface.allocRemaining(arena, .limited(max_config_bytes)) catch |err| {
+        try stderr.print("statusbar: cannot read config from stdin (limit 65536 bytes): {t}\n", .{err});
+        return error.ReportedConfigError;
+    };
+    if (text.len == 0) {
+        try stderr.writeAll("statusbar: stdin contains no config\n");
+        return error.ReportedConfigError;
+    }
+    return text;
 }
 
 const max_config_bytes = 64 * 1024;

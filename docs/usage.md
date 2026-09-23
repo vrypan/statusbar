@@ -25,16 +25,12 @@ always follows `--`.
 
 | Option                  | Meaning                                                                 |
 |-------------------------|-------------------------------------------------------------------------|
-| `-c`, `--config PATH`   | config file; see [config.md](config.md) for where it is looked for, and the built-in default |
-| `-n`, `--lines N`       | row count for `--exec` only (default 1; maximum 65533)                  |
-| `-e`, `--exec COMMAND`  | fill the bar from one shell command instead of the config's lines       |
-| `-i`, `--interval SECS` | how often commands rerun (default 1 with `--exec`, else the config's)   |
-| `-s`, `--style STYLE`   | bar style, as SGR parameters (`7`) or markup attributes (`fg=blue,bold`); `''` for none |
+| `-c`, `--config PATH`   | config file, or `-` for stdin; see [config.md](config.md) for where it is looked for, and the built-in default |
 | `--log PATH`           | append runtime diagnostics to a regular file |
 
-Options take their value as the next argument (`-n 3`), and long options
-also after `=` (`--lines=3`). `--lines` requires `--exec`; config height
-comes from its `[line.N]` sections.
+Options take their value as the next argument (`--config my.config`) or
+with `=` (`--config=my.config`). Use `--config -` to read from stdin.
+The config defines the rows, commands, refresh intervals, and styles.
 
 For session diagnostics, use `statusbar run --log /tmp/statusbar.log` (or omit
 `run`). The file is opened before terminal mode starts; an invalid destination
@@ -55,7 +51,7 @@ replacement semantics.
 
 `statusbar set SLOT [TEXT...]` sets the text of a slot. Each row has a left
 and right slot: row 1 uses slots 1 and 2, row 2 uses slots 3 and 4, and so on.
-Omit the text to restore the value from your config or `--exec` command:
+Omit the text to restore the value from your config:
 
 ```sh
 statusbar set 1 'Build passed'
@@ -151,25 +147,28 @@ mkdir -p ~/.config/fish/completions
 statusbar completion fish > ~/.config/fish/completions/statusbar.fish
 ```
 
-## Without a config: `--exec`
+## Generate a config on the fly
 
-A single shell command can fill the bar instead of a config's `[line.N]`
-sections. It runs under `/bin/sh -c` every `--interval` seconds, and each
-output line fills one bar row, so `-n 3` shows the first three lines.
-
-A line holds up to two slots, separated by a tab: `left` or
-`left<TAB>right`. [Markup](config.md#markup), raw SGR colors and OSC 8
-hyperlinks are kept; cursor movement and other control characters are
-stripped.
+Use `--config -` to read a complete config from stdin:
 
 ```sh
-statusbar -i 5 -s '' -e 'printf " #[bold]%s#[default]\t%s \n" "$(hostname -s)" "$(date +%H:%M)"'
+generate-config | statusbar --config -
+
+statusbar --config - <<'EOF'
+interval = 5
+style = fg=blue,bold
+
+[line.1]
+left = #(uptime)
+right = %H:%M
+EOF
 ```
 
-`--exec` uses reverse video unless `--style` or the config sets another
-style. The config's colors and other options still apply, and without a
-config file that is the built-in one. A config file with no `[line.N]`
-sections shows `date` the same way.
+statusbar reads up to 64 KiB and validates the config before starting the
+session. The input must end (EOF); it is not a stream of ongoing updates.
+After reading it, statusbar takes keyboard input from `/dev/tty`. A controlling
+terminal is required, and stdout must still be a terminal. Empty or invalid
+input is an error. To open a file literally named `-`, use `--config ./-`.
 
 ## Terminal title
 

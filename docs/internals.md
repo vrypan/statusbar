@@ -81,7 +81,7 @@ cannot split them.
 Compiled templates record per-side command and clock dependencies. Accepted
 command output is normalized before comparison and dirties only dependent rows
 whose slots are not overridden; clock ticks likewise dirty only live clock
-templates. Overrides dirty their own row. Identical configured and `--exec`
+templates. Overrides dirty their own row. Identical command
 updates format no rows. Dirty rows compare their cells, and only rows whose
 appearance changed are repainted. Startup, resize and screen damage repaint all visible rows. Damage
 repair uses existing cells without parsing content again. Paints still use the

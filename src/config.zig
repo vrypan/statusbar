@@ -330,6 +330,10 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
         diag.line = source.right_at;
         line.right = try compile(&config, source.right, diag);
     }
+    if (config.line.len == 0) {
+        diag.line = 0;
+        return fail(diag, "config needs at least a [line.1] section");
+    }
     diag.* = .{};
     return config;
 }
@@ -599,6 +603,7 @@ test "quoted values may span physical lines" {
         \\run = "first command ||
         \\  second command"
         \\interval = 10
+        \\[line.1]
     , &diag);
     defer config.deinit();
     try std.testing.expectEqualStrings("first command ||\n  second command", config.commands[0].run);
@@ -713,7 +718,7 @@ test "old command tracking reports migration guidance" {
 
 test "adaptive highlight defaults to two pulses" {
     var diag: Diagnostic = .{};
-    var cfg = try parse(std.testing.allocator, "", &diag);
+    var cfg = try parse(std.testing.allocator, "[line.1]", &diag);
     defer cfg.deinit();
     try std.testing.expectEqual(@as(u8, 2), cfg.highlight.pulses);
     try std.testing.expectEqual(@as(i64, 30), cfg.highlight.frameMs());
@@ -723,7 +728,7 @@ test "adaptive highlight defaults to two pulses" {
 test "highlight pulse counts are bounded" {
     var diag: Diagnostic = .{};
     for (1..4) |count| {
-        const text = try std.fmt.allocPrint(std.testing.allocator, "[highlight]\npulses = {d}\n", .{count});
+        const text = try std.fmt.allocPrint(std.testing.allocator, "[highlight]\npulses = {d}\n[line.1]\n", .{count});
         defer std.testing.allocator.free(text);
         var cfg = try parse(std.testing.allocator, text, &diag);
         defer cfg.deinit();
@@ -780,4 +785,15 @@ test "many rows allocate to the actual configured count" {
     defer config.deinit();
     try std.testing.expectEqual(@as(usize, 100), config.line.len);
     try std.testing.expectEqualStrings("row 100", config.line[99].left.items()[0].text);
+}
+
+test "configs require an explicit row" {
+    var diag: Diagnostic = .{};
+    for ([_][]const u8{ "", "# no rows\n", "interval = 5\n" }) |text| {
+        try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, text, &diag));
+        try std.testing.expectEqualStrings("config needs at least a [line.1] section", diag.message);
+    }
+    var cfg = try parse(std.testing.allocator, "[line.1]\n", &diag);
+    defer cfg.deinit();
+    try std.testing.expectEqual(@as(u16, 1), cfg.definedLines());
 }

@@ -84,14 +84,7 @@ pub fn restoreOnPanic() void {
 pub const Options = struct {
     log: ?*@import("log.zig").Log = null,
     argv: []const []const u8 = &.{},
-    lines: u16 = 1,
-    /// `--exec`: this command's output lines are the bar. Without it the
-    /// config's [line.N] sections are.
-    command: ?[]const u8,
-    interval_ms: i64,
-    cfg: ?*const config.Config = null,
-    /// Raw SGR parameters or markup attributes, for lines without their own.
-    style: []const u8,
+    cfg: *const config.Config,
 };
 
 pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
@@ -99,7 +92,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
 
     const outer_term = try posix.tcgetattr(stdin_fd);
     const outer_ws = try sys.getWinsize(stdin_fd);
-    const layout = Layout.of(outer_ws, opts.lines);
+    const layout = Layout.of(outer_ws, opts.cfg.definedLines());
 
     const pty = try sys.openPty(io, &outer_term, &layout.child);
     var master_open = true;
@@ -120,13 +113,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     sig_pipe_w.store(sig_fds[1], .monotonic);
     installSignalHandlers();
 
-    var runtime = try Runtime.initInitial(gpa, io, .{
-        .cfg = opts.cfg.?,
-        .lines = opts.lines,
-        .command = opts.command,
-        .interval_ms = opts.interval_ms,
-        .style = opts.style,
-    }, layout.bar, layout.cols);
+    var runtime = try Runtime.initInitial(gpa, io, opts.cfg, layout.bar, layout.cols);
     defer runtime.deinit();
     var session_state = try SessionState.init(io, runtime.lines);
     defer session_state.deinit();

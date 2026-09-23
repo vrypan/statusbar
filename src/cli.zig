@@ -15,7 +15,7 @@ const config_flag = zecli.FlagSpec{
     .short = 'c',
     .value = .string,
     .value_name = "PATH",
-    .description = "Load the bar layout and settings from PATH",
+    .description = "Load a config file, or use - to read it from stdin",
     .completion = .files,
 };
 
@@ -28,34 +28,6 @@ const config_flags = [_]zecli.FlagSpec{
 const run_flags = [_]zecli.FlagSpec{
     config_flag,
     .{ .name = "log", .value = .string, .value_name = "PATH", .description = "Append runtime diagnostics to a file" },
-    .{
-        .name = "lines",
-        .short = 'n',
-        .value = .int,
-        .value_name = "N",
-        .description = "Number of bar rows (requires --exec; default: 1)",
-    },
-    .{
-        .name = "exec",
-        .short = 'e',
-        .value = .string,
-        .value_name = "COMMAND",
-        .description = "Use a shell command's output as the bar text",
-    },
-    .{
-        .name = "interval",
-        .short = 'i',
-        .value = .float,
-        .value_name = "SECS",
-        .description = "Default seconds between bar command runs (1 with --exec)",
-    },
-    .{
-        .name = "style",
-        .short = 's',
-        .value = .string,
-        .value_name = "STYLE",
-        .description = "Set the base bar style, e.g. 'fg=blue,bold'; '' for none",
-    },
 };
 
 const commands = [_]zecli.CommandSpec{
@@ -68,21 +40,17 @@ const commands = [_]zecli.CommandSpec{
         \\Run `statusbar` to start your usual shell ($SHELL). To run a specific
         \\program, put its name and arguments after `--`. Exit it to end the session.
         \\
-        \\Use --exec to fill the bar from a shell command, with one output line
-        \\per row. That command runs repeatedly; the program after `--` runs once.
-        \\
         \\Config lookup: --config, then $STATUSBAR_CONFIG, then the default path:
         \\$XDG_CONFIG_HOME/statusbar/config, or ~/.config/statusbar/config if
         \\$XDG_CONFIG_HOME is unset. A missing default file uses built-in defaults.
-        \\Without --exec, the config sets the row count and default interval.
-        \\Per-command intervals in the config take precedence over --interval.
-        \\Styles also accept numeric terminal style codes, such as '7' for reverse video.
+        \\Use --config - to read a complete config from stdin. After EOF, keyboard
+        \\input comes from /dev/tty; stdout must still be a terminal.
+        \\The config defines rows, commands, refresh intervals, and styles.
         ++ "\n",
         .examples = &.{
             "statusbar",
             "statusbar --config my.config",
-            "statusbar --exec 'uptime' --interval 5",
-            "statusbar --exec 'printf \"first row\\nsecond row\\n\"' --lines 2",
+            "generate-config | statusbar --config -",
             "statusbar -- vim notes.txt",
         },
     },
@@ -99,7 +67,7 @@ const commands = [_]zecli.CommandSpec{
         \\Each row has a left and right slot, numbered from 1. The row must
         \\already exist in your layout.
         \\
-        \\Omit TEXT to restore the value from your config or --exec command.
+        \\Omit TEXT to restore the value from your config.
         \\Words are joined with spaces; quote text to keep leading or trailing
         \\spaces. Use `--` before text that starts with a dash.
         \\Text can include markup such as #[bold] and is limited to 1024 bytes.
@@ -250,10 +218,10 @@ test "run is the default command" {
 
     const cases = [_]struct { []const [:0]const u8, []const u8 }{
         .{ &.{}, "run" },
-        .{ &.{ "-n", "1" }, "run" },
+        .{ &.{ "-c", "my.config" }, "run" },
         .{ &.{ "--", "set" }, "run" },
         .{ &.{ "set", "1" }, "set" },
-        .{ &.{ "run", "-n", "1" }, "run" },
+        .{ &.{ "run", "-c", "my.config" }, "run" },
         .{ &.{"--help"}, "--help" },
         .{ &.{"-V"}, "-V" },
     };

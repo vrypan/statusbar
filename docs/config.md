@@ -2,7 +2,7 @@
 
 statusbar chooses its config path in this order:
 
-1. `--config PATH`
+1. `--config PATH` (use `-` to read from stdin)
 2. `$STATUSBAR_CONFIG`
 3. `$XDG_CONFIG_HOME/statusbar/config` if `XDG_CONFIG_HOME` is set; otherwise,
    `~/.config/statusbar/config`
@@ -24,6 +24,9 @@ statusbar config --default > ~/.config/statusbar/config
 `statusbar config --print` prints the config statusbar would use after checking that
 it parses, and `statusbar config --path` shows which file that is; see
 [usage.md](usage.md#config).
+
+For generated configs and here-documents, see
+[reading a config from stdin](usage.md#generate-a-config-on-the-fly).
 
 ## Replace the running config
 
@@ -83,6 +86,7 @@ accepts, but not another name.
 
 ## `[line.N]`
 
+At least `[line.1]` is required, even if it is empty.
 Line sections define the bar's desired height and must be consecutive from
 `[line.1]`. They may appear in any order in the file and render in numeric
 order. An empty section still reserves its row. The maximum is 65533 rows.
@@ -149,9 +153,9 @@ write `##[track]` to display the opening marker literally.
 
 Markers are compiled only from static left/right templates. Regions may include
 text, clocks, named commands, and inline shell commands. Command output, rules,
-`statusbar set` values, and `--exec` output cannot define regions. A whole
-grapheme belongs to the region containing its first code point, even if a marker
-falls inside a combining sequence.
+and `statusbar set` values cannot define regions. A whole grapheme belongs to
+the region containing its first code point, even if a marker falls inside a
+combining sequence.
 
 All commands used by a slot must produce a first result before its regions can
 highlight. Partial results appear silently; an empty first result also counts.

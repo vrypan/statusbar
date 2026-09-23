@@ -12,8 +12,7 @@ of the overloaded word *refresh*.
 change, or a numbered-slot update. A semantic change to that data changes the
 statusbar's base content. An effect may start only when that source is eligible
 to trigger one. Currently, configured `#[track]...#[notrack]` regions can
-highlight changes from command output and template clocks. Manual slot values
-and `--exec` output cannot define tracking regions.
+highlight changes from command output and template clocks. Manual slot values cannot define tracking regions.
 
 **Animation tick** samples all active effects at one monotonic timestamp.
 Effects never paint independently.

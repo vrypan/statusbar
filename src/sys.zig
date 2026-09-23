@@ -26,6 +26,8 @@ extern "c" fn posix_openpt(oflag: c_int) c_int;
 extern "c" fn grantpt(fd: c_int) c_int;
 extern "c" fn unlockpt(fd: c_int) c_int;
 extern "c" fn ptsname(fd: c_int) ?[*:0]const u8;
+extern "c" fn ttyname_r(fd: c_int, buf: [*]u8, len: usize) c_int;
+extern "c" fn tcgetpgrp(fd: c_int) c.pid_t;
 extern "c" fn gethostname(name: [*]u8, len: usize) c_int;
 
 /// std.posix.T only carries the terminal ioctl numbers on some targets, so the
@@ -98,6 +100,27 @@ pub fn setControllingTty(fd: Fd) Error!void {
 /// an unexpected error and dumps a stack trace for it in debug builds.
 pub fn isTty(io: std.Io, fd: Fd) bool {
     return (std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } }).isTty(io) catch false;
+}
+
+/// Opens keyboard input after a config pipe has been consumed. Darwin's
+/// /dev/tty alias returns POLLNVAL from poll, so reopen stdout's concrete
+/// terminal there, checking that it belongs to the controlling foreground group.
+pub fn openInputTty(io: std.Io) !std.Io.File {
+    const tty = try std.Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .read_write });
+    if (builtin.os.tag != .macos) return tty;
+    defer tty.close(io);
+    if (!isTty(io, 1)) return error.NotATerminal;
+    var name: [1024]u8 = undefined;
+    if (ttyname_r(1, &name, name.len) != 0) return error.TerminalNameUnavailable;
+    const end = std.mem.indexOfScalar(u8, &name, 0) orelse return error.TerminalNameUnavailable;
+    const input = try std.Io.Dir.openFileAbsolute(io, name[0..end], .{ .mode = .read_write });
+    errdefer input.close(io);
+    const group = tcgetpgrp(tty.handle);
+    if (group < 0 or tcgetpgrp(input.handle) != group) return error.NotControllingTerminal;
+    var fds = [_]posix.pollfd{.{ .fd = input.handle, .events = posix.POLL.IN, .revents = 0 }};
+    _ = try posix.poll(&fds, 0);
+    if (fds[0].revents & posix.POLL.NVAL != 0) return error.TerminalNotPollable;
+    return input;
 }
 
 /// Returns the local hostname in caller-owned storage. Failure is harmless for

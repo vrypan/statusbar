@@ -41,8 +41,8 @@ mkdir -p ~/.config/statusbar
 statusbar config --default > ~/.config/statusbar/config
 statusbar
 
-# Or from a single command
-statusbar -e 'date "+%H:%M"'
+# Or generate a config on the fly
+printf '[line.1]\nright = %%H:%%M\n' | statusbar --config -
 ```
 
 Run `statusbar --help` for the commands. The [user guide](docs/README.md)

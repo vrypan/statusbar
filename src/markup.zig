@@ -9,7 +9,7 @@
 //!                         or a name from the config's palette
 //!     bold dim italics underscore blink reverse strikethrough
 //!     nobold nodim noitalics nounderscore noblink noreverse nostrikethrough
-//!     default | none      back to the bar's own --style
+//!     default | none      back to the bar's base style
 //!
 //! `##` is a literal `#`. Raw ANSI escapes pass through untouched, and an
 //! attribute that is not understood is ignored rather than printed.

@@ -11,7 +11,7 @@ Each configured row has two numbered slots:
 The pattern continues: row *N* uses slots *2N − 1* and *2N*.
 
 `statusbar set SLOT [TEXT...]` sets the text of a slot. With no text, or a value made
-only of CR/LF line breaks, it restores the config or `--exec` value:
+only of CR/LF line breaks, it restores the configured value:
 
 ```sh
 statusbar set 3 "$(git branch --show-current)"

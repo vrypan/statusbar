@@ -147,6 +147,86 @@ def check_init_invocation(binary):
     print("shell init preserves upgrade-safe invocation paths")
 
 
+def check_stdin_config(binary):
+    config = "interval = 0.1\nstyle = fg=blue\n[line.1]\nleft = PIPE_ONE\n[line.2]\nleft = #(printf PIPE_TWO)\n"
+    q = shlex.quote
+    child = r'''printf '__READY__:%s:%s\n' "$(stty size)" "$STATUSBAR_LINES"
+while IFS= read -r value; do
+    case "$value" in
+        SIZE) printf '__SIZE__:%s\n' "$(stty size)" ;;
+        RELOAD) printf '[line.1]\nleft = RELOADED\n' | "$1" config ;;
+        EXIT) exit 7 ;;
+        *) printf '__INPUT__:%s\n' "$value" ;;
+    esac
+done
+'''
+    command = shlex.join([binary, "--config=-", "--", "/bin/sh", "-c", child, "sh", binary])
+    env = os.environ.copy()
+    env["STATUSBAR_CONFIG"] = "/does/not/exist/statusbar-config"
+    script = f"printf %s {q(config)} | {command}"
+    pid, master = spawn(["/bin/sh", "-c", script], env=env)
+    reaped = False
+    try:
+        data = read_until(master, b"", b"__READY__:22 80:2")
+        data = read_until(master, data, b"PIPE_TWO")
+        assert b"PIPE_ONE" in data, data
+        os.write(master, b"keyboard works\n")
+        data = read_until(master, data, b"__INPUT__:keyboard works")
+        resize(master, 30)
+        time.sleep(0.15)
+        os.write(master, b"SIZE\n")
+        data = read_until(master, data, b"__SIZE__:28 80")
+        os.write(master, b"RELOAD\n")
+        data = read_until(master, data, b"RELOADED")
+        os.write(master, b"EXIT\n")
+        status = reap_while_draining(pid, master)
+        reaped = True
+        assert os.waitstatus_to_exitcode(status) == 7, data
+        flags = termios.tcgetattr(master)[3]
+        assert flags & termios.ICANON and flags & termios.ECHO, flags
+    finally:
+        if reaped:
+            os.close(master)
+        else:
+            stop(pid, master)
+
+    # Here-documents use the same input path and leave the child on a terminal.
+    script = shlex.join([binary, "-c", "-", "--", "/bin/sh", "-c", "test -t 0 && printf HEREDOC_OK"]) + " <<'CONFIG'\n" + config + "CONFIG\n"
+    code, data = capture_pty(["/bin/sh", "-c", script])
+    assert code == 0 and b"HEREDOC_OK" in data, data
+
+    # Validate before entering raw mode, launching the child, or querying the terminal.
+    for text, message in [
+        ("", b"stdin contains no config"),
+        ("# no rows\n", b"config needs at least a [line.1] section"),
+        ("[line.1]\nunknown = value\n", b"stdin:2:"),
+    ]:
+        script = f"printf %s {q(text)} | " + shlex.join([binary, "--config", "-", "--", "/bin/sh", "-c", "printf CHILD_STARTED"])
+        code, data = capture_pty(["/bin/sh", "-c", script])
+        assert code == 2 and message in data, data
+        assert b"CHILD_STARTED" not in data and b"\x1b[" not in data, data
+
+    for text, message in [
+        (b"[line.1]\n#" + b"x" * 65536, b"limit 65536 bytes"),
+        (config.encode(), b"cannot open /dev/tty for keyboard input"),
+    ]:
+        result = subprocess.run([binary, "--config", "-"], input=text, capture_output=True, start_new_session=True, timeout=5)
+        assert result.returncode != 0 and message in result.stderr, result
+
+    # --config - does not make redirected stdout an interactive terminal.
+    with tempfile.TemporaryDirectory() as folder:
+        output = os.path.join(folder, "output")
+        script = f"printf %s {q(config)} | {q(binary)} --config - > {q(output)}"
+        code, data = capture_pty(["/bin/sh", "-c", script])
+        assert code == 1 and b"stdin and stdout must be a terminal" in data, data
+        assert os.path.getsize(output) == 0
+
+    for flag in ["--exec", "--lines", "--interval", "--style", "-e", "-n", "-i", "-s"]:
+        result = subprocess.run([binary, flag, "1"], capture_output=True, timeout=5)
+        assert result.returncode == 2, (flag, result)
+    print("stdin configs, keyboard input, resize, reload, and terminal restoration passed")
+
+
 def check_osc7_titles(binary):
     local = b"\x1b]7;file:///tmp/a%20project\x07"
     local_title = b"\x1b]2;/tmp/a project\x1b\\"
@@ -160,12 +240,11 @@ def check_osc7_titles(binary):
     payload = local + child_title + remote + malformed + oversized + deep
     expected = local + local_title + child_title + remote + remote_title + malformed + oversized + deep + deep_title
 
-    argv = [
-        binary,
-        "--config", "/dev/null",
-        "--exec", "printf bar",
+    script = "printf '[line.1]\\nleft = bar\\n' | " + shlex.join([
+        binary, "--config", "-",
         "--", "/bin/sh", "-c", 'printf %s "$1"', "sh", payload.decode("ascii"),
-    ]
+    ])
+    argv = ["/bin/sh", "-c", script]
     code, data = capture_pty(argv)
     assert code == 0, data
     assert expected in data, data[-6000:]
@@ -707,9 +786,12 @@ time.sleep(10)
 def check_logging(binary):
     with tempfile.TemporaryDirectory() as folder:
         path = os.path.join(folder, "session.log")
+        config_path = os.path.join(folder, "bar.config")
+        with open(config_path, "w") as config_file:
+            config_file.write("[line.1]\nleft = LOG_BAR\n")
         for command in (["run", "--log", path], ["--log", path]):
             code, data = capture_pty([
-                binary, *command, "-e", "printf LOG_BAR", "--",
+                binary, *command, "-c", config_path, "--",
                 "/bin/sh", "-c", "printf LOG_CHILD; exit 7",
             ])
             assert code == 7, (code, data)
@@ -811,7 +893,7 @@ binary, replacement, direct, nested_token_path, rejected_command_path = sys.argv
 help_result = subprocess.run([binary, "config"], capture_output=True)
 explicit_help = subprocess.run([binary, "config", "--help"], capture_output=True)
 assert help_result.returncode == 0 and help_result.stdout == explicit_help.stdout, help_result
-assert b"EXAMPLES" in help_result.stdout and b"cat my.config | statusbar config" in help_result.stdout
+assert b"EXAMPLES" in help_result.stdout and b"statusbar config < my.config" in help_result.stdout
 def frame(config, token=None):
     token = token or os.environ["STATUSBAR_SESSION_ID"]
     envelope = b"1;" + token.encode() + b";" + config.encode()
@@ -861,7 +943,7 @@ for command in sys.stdin:
         print("__HELD__", flush=True)
     elif command == "NESTED":
         code = 'import os,sys; open(sys.argv[1], "w").write(os.environ["STATUSBAR_SESSION_ID"])'
-        result = subprocess.run([binary, "-e", "printf NESTED_BAR", "--", sys.executable, "-c", code, nested_token_path])
+        result = subprocess.run([binary, "-c", replacement, "--", sys.executable, "-c", code, nested_token_path])
         nested = open(nested_token_path).read()
         print(f"__NESTED__:{result.returncode}:{nested != os.environ['STATUSBAR_SESSION_ID']}", flush=True)
     elif command == "EXIT":
@@ -929,7 +1011,9 @@ frame = b'\x1b]3110;STATUSBAR;CONFIG;' + base64.b64encode(envelope) + b'\x1b\\'
 os.write(1, frame + b'\nAFTER_CONFIG\n')
 time.sleep(.3)
 '''
-    pid, master = spawn([binary, "-n", "2", "-e", "printf BEFORE_BAR", "--", sys.executable, "-c", child], rows=24)
+    config = "[line.1]\nleft = BEFORE_BAR\n[line.2]\n"
+    script = f"printf %s {shlex.quote(config)} | " + shlex.join([binary, "-c", "-", "--", sys.executable, "-c", child])
+    pid, master = spawn(["/bin/sh", "-c", script], rows=24)
     try:
         data = read_until(master, b"", b"AFTER_CONFIG", timeout=5)
         assert data.index(b"\x1b7\x1b[1;19r\x1b8") < data.index(b"AFTER_CONFIG"), data
@@ -966,7 +1050,8 @@ def check_background_job_exit(binary):
     # The job ignores SIGHUP and keeps the pty open after the shell exits.
     script = "(trap '' HUP; exec sleep 10) & printf LAST_WORDS; exit 3"
     started = time.monotonic()
-    code, data = capture_pty([binary, "-e", "printf BAR", "--", "/bin/sh", "-c", script], timeout=4)
+    command = "printf '[line.1]\\nleft = BAR\\n' | " + shlex.join([binary, "-c", "-", "--", "/bin/sh", "-c", script])
+    code, data = capture_pty(["/bin/sh", "-c", command], timeout=4)
     assert code == 3, (code, data[-500:])
     assert b"LAST_WORDS" in data, data[-500:]
     assert time.monotonic() - started < 3
@@ -994,6 +1079,7 @@ def main():
     assert b"STATUSBAR_LINES is malformed" in invalid.stderr
 
     check_init_invocation(binary)
+    check_stdin_config(binary)
     check_osc7_titles(binary)
     check_zsh(binary)
     check_fish(binary)
@@ -1096,21 +1182,6 @@ done
         if pid is not None:
             stop(pid, master)
         os.unlink(config_path)
-
-    exec_argv = [
-        binary,
-        "--config", "/dev/null",
-        "--lines", "3",
-        "--exec", "printf 'exec-one\\nexec-two\\nexec-three\\n'",
-        "--", "/bin/sh", "-c", "sleep 0.4",
-    ]
-    pid, master = spawn(exec_argv)
-    try:
-        data = read_until(master, b"", b"exec-three", 5)
-        for value in (b"exec-one", b"exec-two", b"exec-three"):
-            assert value in data
-    finally:
-        stop(pid, master)
 
     print("multirow PTY checks passed")
 

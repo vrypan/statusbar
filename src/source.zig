@@ -1,13 +1,12 @@
 //! Where the bar's text comes from.
 //!
-//! With `--exec`, one command's output lines are the bar lines, as they are.
 //! With a config file, each line is built from its templates: text through
 //! strftime(3), and the latest first line of each command it refers to. Every
 //! command runs on its own interval, so a slow one never holds up the rest,
 //! and the clock is re-read at the start of each second.
 //!
 //! Programs inside the session can replace any numbered slot. Clearing a
-//! value brings back what the config or exec command put there.
+//! value brings back what the config put there.
 
 const std = @import("std");
 const posix = std.posix;
@@ -26,14 +25,8 @@ pub const Source = struct {
     outputs: [config.max_commands][max_output_line]u8 = undefined,
     output_lens: [config.max_commands]usize = @splat(0),
     output_seen: [config.max_commands]bool = @splat(false),
-    /// Null in `--exec` mode.
-    cfg: ?*const config.Config,
-    /// Desired bar lines.
-    lines: u16,
+    cfg: *const config.Config,
     content: bar.Content,
-    /// The `--exec` command's latest output.
-    exec_output: []u8,
-    exec_output_len: usize = 0,
     overrides: [][output.max_value]u8,
     override_lens: []?usize,
     clock_next_ms: ?i64 = null,
@@ -58,27 +51,8 @@ pub const Source = struct {
         override_events: u32 = 0,
     };
 
-    pub fn initExec(gpa: std.mem.Allocator, io: std.Io, command: []const u8, interval_ms: i64, lines: u16, cols: u16) !Source {
-        const commands = try gpa.alloc(status.Command, 1);
-        errdefer gpa.free(commands);
-        commands[0] = try status.Command.init(gpa, io, command, interval_ms, lines, cols);
-        errdefer commands[0].deinit(io);
-        const capacity = try std.math.mul(usize, lines, bar.max_line_bytes + 1);
-        const exec_output = try gpa.alloc(u8, capacity);
-        errdefer gpa.free(exec_output);
-        var content = try bar.Content.init(gpa, lines);
-        errdefer content.deinit();
-        const overrides = try gpa.alloc([output.max_value]u8, @as(usize, lines) * 2);
-        errdefer gpa.free(overrides);
-        const override_lens = try gpa.alloc(?usize, @as(usize, lines) * 2);
-        errdefer gpa.free(override_lens);
-        @memset(override_lens, null);
-        const dirty_rows = try gpa.alloc(bool, lines);
-        @memset(dirty_rows, false);
-        return .{ .gpa = gpa, .io = io, .commands = commands, .cfg = null, .lines = lines, .content = content, .exec_output = exec_output, .overrides = overrides, .override_lens = override_lens, .dirty_rows = dirty_rows };
-    }
-
-    pub fn initConfig(gpa: std.mem.Allocator, io: std.Io, cfg: *const config.Config, lines: u16, cols: u16) !Source {
+    pub fn initConfig(gpa: std.mem.Allocator, io: std.Io, cfg: *const config.Config, cols: u16) !Source {
+        const lines = cfg.definedLines();
         const specs = cfg.commandList();
         const commands = try gpa.alloc(status.Command, specs.len);
         errdefer gpa.free(commands);
@@ -110,7 +84,7 @@ pub const Source = struct {
                 };
             }
         }
-        var self: Source = .{ .gpa = gpa, .io = io, .commands = commands, .cfg = cfg, .lines = lines, .content = content, .exec_output = @constCast(&.{}), .overrides = overrides, .override_lens = override_lens, .stale = true, .dependencies = dependencies, .dirty_rows = dirty_rows };
+        var self: Source = .{ .gpa = gpa, .io = io, .commands = commands, .cfg = cfg, .content = content, .overrides = overrides, .override_lens = override_lens, .stale = true, .dependencies = dependencies, .dirty_rows = dirty_rows };
         self.updateClockActivation();
         return self;
     }
@@ -118,7 +92,6 @@ pub const Source = struct {
     pub fn deinit(self: *Source) void {
         for (self.commands) |*command| command.deinit(self.io);
         self.gpa.free(self.commands);
-        if (self.exec_output.len > 0) self.gpa.free(self.exec_output);
         self.content.deinit();
         self.gpa.free(self.overrides);
         self.gpa.free(self.override_lens);
@@ -171,14 +144,12 @@ pub const Source = struct {
     /// Overridden clocks need no timer. Clearing an override formats current
     /// time immediately and re-arms the usual one-second cadence.
     fn updateClockActivation(self: *Source) void {
-        if (self.cfg) |cfg| {
-            for (cfg.line, 0..) |line, row| {
-                if ((self.override_lens[row * 2] == null and line.left.usesClock()) or
-                    (self.override_lens[row * 2 + 1] == null and line.right.usesClock()))
-                {
-                    if (self.clock_next_ms == null) self.clock_next_ms = 0;
-                    return;
-                }
+        for (self.cfg.line, 0..) |line, row| {
+            if ((self.override_lens[row * 2] == null and line.left.usesClock()) or
+                (self.override_lens[row * 2 + 1] == null and line.right.usesClock()))
+            {
+                if (self.clock_next_ms == null) self.clock_next_ms = 0;
+                return;
             }
         }
         self.clock_next_ms = null;
@@ -214,19 +185,12 @@ pub const Source = struct {
         for (self.commands, fds, 0..) |*command, fd, n| {
             if (fd.fd < 0 or fd.revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR) == 0) continue;
             const command_result = command.onReadable(self.io) orelse continue;
-            if (self.cfg == null) {
-                if (self.keepExec(command_result.bytes)) {
-                    @memset(self.dirty_rows, true);
-                    self.stale = true;
-                }
-            } else {
-                const accepted = self.keepFirstLine(n, command_result.bytes);
-                if (command_result.origin.baselineOnly() or !accepted.previously_seen) {
-                    result.baseline |= @as(u16, 1) << @intCast(n);
-                }
-                if (accepted.changed) self.dirtyCommand(n);
+            const accepted = self.keepFirstLine(n, command_result.bytes);
+            if (command_result.origin.baselineOnly() or !accepted.previously_seen) {
+                result.baseline |= @as(u16, 1) << @intCast(n);
             }
-            if (self.cfg != null and self.dirtyAny()) self.stale = true;
+            if (accepted.changed) self.dirtyCommand(n);
+            if (self.dirtyAny()) self.stale = true;
         }
         for (self.commands) |*command| command.tick(self.io, now_ms);
 
@@ -234,10 +198,8 @@ pub const Source = struct {
             const real = self.realMs();
             if (real >= next) {
                 self.clock_next_ms = @divFloor(real, 1000) * 1000 + 1000;
-                if (self.cfg != null) {
-                    self.dirtyClockRows();
-                    self.stale = self.stale or self.dirtyAny();
-                } else self.stale = true;
+                self.dirtyClockRows();
+                self.stale = self.stale or self.dirtyAny();
             }
         }
         if (self.stale) {
@@ -267,29 +229,6 @@ pub const Source = struct {
         return .{ .previously_seen = seen, .changed = changed };
     }
 
-    /// Canonicalize the effective multiline exec value so CR/trailing-newline
-    /// differences that cannot reach the bar do not trigger row formatting.
-    fn keepExec(self: *Source, text: []const u8) bool {
-        var it = std.mem.splitScalar(u8, std.mem.trimEnd(u8, text, "\n"), '\n');
-        var offset: usize = 0;
-        var equal = true;
-        for (0..self.lines) |row| {
-            const raw = std.mem.trimEnd(u8, it.next() orelse "", "\r");
-            const line = raw[0..@min(raw.len, bar.max_line_bytes)];
-            if (row > 0) {
-                equal = equal and offset < self.exec_output_len and self.exec_output[offset] == '\n';
-                self.exec_output[offset] = '\n';
-                offset += 1;
-            }
-            equal = equal and offset + line.len <= self.exec_output_len and std.mem.eql(u8, self.exec_output[offset..][0..line.len], line);
-            @memcpy(self.exec_output[offset..][0..line.len], line);
-            offset += line.len;
-        }
-        equal = equal and self.exec_output_len == offset;
-        self.exec_output_len = offset;
-        return !equal;
-    }
-
     fn markDirty(self: *Source, row: usize) void {
         if (row < self.dirty_rows.len) self.dirty_rows[row] = true;
     }
@@ -313,7 +252,7 @@ pub const Source = struct {
     }
 
     pub fn slotContentEligible(self: *const Source, slot: usize, baseline: u16, override_events: u32) bool {
-        const cfg = self.cfg orelse return false;
+        const cfg = self.cfg;
         if (self.override_lens[slot] != null) return false;
         if (slot < 32 and override_events & (@as(u32, 1) << @intCast(slot)) != 0) return false;
         const line = &cfg.line[slot / 2];
@@ -331,48 +270,26 @@ pub const Source = struct {
     }
 
     fn rebuild(self: *Source) bool {
-        if (self.cfg) |cfg| {
-            const now = currentTime();
-            var changed = false;
-            for (cfg.line, 0..) |*line, n| {
-                if (self.dirty_rows.len > 0 and !self.dirty_rows[n]) continue;
-                if (self.dirty_rows.len > 0) self.dirty_rows[n] = false;
-                self.rows_formatted += 1;
-                var buf: [4096]u8 = undefined;
-                var tracks: bar.Tracks = .{ .override_epoch = self.content.tracks[n].override_epoch };
-                var w: std.Io.Writer = .fixed(&buf);
-                if (self.override(n * 2)) |value| {
-                    w.writeAll(value) catch {};
-                } else self.writeTemplate(&w, &line.left, &now, &tracks, .left);
-                w.writeByte('\t') catch {};
-                if (self.override(n * 2 + 1)) |value| {
-                    w.writeAll(value) catch {};
-                } else self.writeTemplate(&w, &line.right, &now, &tracks, .right);
-                changed = self.content.setTrackedLine(n, w.buffered(), tracks) or changed;
-            }
-            return changed;
-        } else {
-            var buf: [bar.max_line_bytes * 2 + 1]u8 = undefined;
-            var it = std.mem.splitScalar(u8, std.mem.trimEnd(u8, self.exec_output[0..self.exec_output_len], "\n"), '\n');
-            var changed = false;
-            for (0..self.lines) |n| {
-                const line = std.mem.trimEnd(u8, it.next() orelse "", "\r");
-                if (self.dirty_rows.len > 0 and !self.dirty_rows[n]) continue;
-                if (self.dirty_rows.len > 0) self.dirty_rows[n] = false;
-                self.rows_formatted += 1;
-                if (self.override(n * 2) == null and self.override(n * 2 + 1) == null) {
-                    changed = self.content.setLine(n, line) or changed;
-                    continue;
-                }
-                var w: std.Io.Writer = .fixed(&buf);
-                const slots = bar.splitSlots(line);
-                w.writeAll(self.override(n * 2) orelse slots[0]) catch {};
-                w.writeByte('\t') catch {};
-                w.writeAll(self.override(n * 2 + 1) orelse slots[1]) catch {};
-                changed = self.content.setLine(n, w.buffered()) or changed;
-            }
-            return changed;
+        const cfg = self.cfg;
+        const now = currentTime();
+        var changed = false;
+        for (cfg.line, 0..) |*line, n| {
+            if (self.dirty_rows.len > 0 and !self.dirty_rows[n]) continue;
+            if (self.dirty_rows.len > 0) self.dirty_rows[n] = false;
+            self.rows_formatted += 1;
+            var buf: [4096]u8 = undefined;
+            var tracks: bar.Tracks = .{ .override_epoch = self.content.tracks[n].override_epoch };
+            var w: std.Io.Writer = .fixed(&buf);
+            if (self.override(n * 2)) |value| {
+                w.writeAll(value) catch {};
+            } else self.writeTemplate(&w, &line.left, &now, &tracks, .left);
+            w.writeByte('\t') catch {};
+            if (self.override(n * 2 + 1)) |value| {
+                w.writeAll(value) catch {};
+            } else self.writeTemplate(&w, &line.right, &now, &tracks, .right);
+            changed = self.content.setTrackedLine(n, w.buffered(), tracks) or changed;
         }
+        return changed;
     }
 
     fn writeTemplate(self: *const Source, w: *std.Io.Writer, template: *const config.Template, now: *const Tm, tracks: *bar.Tracks, owner: bar.cells.Owner) void {
@@ -450,7 +367,7 @@ test "clock scheduling ignores escaped percents and pauses under overrides" {
     var diag: config.Diagnostic = .{};
     var cfg = try config.parse(gpa, "[line.1]\nleft = %S\nright = %M\n[line.2]\nleft = 100%%\n", &diag);
     defer cfg.deinit();
-    var source = try Source.initConfig(gpa, std.testing.io, &cfg, 2, 80);
+    var source = try Source.initConfig(gpa, std.testing.io, &cfg, 80);
     defer source.deinit();
     _ = source.update(&.{}, 0);
     try std.testing.expectEqualStrings("100%\t", source.content.line(1));
@@ -488,15 +405,11 @@ test "strftime conversions and literal percent signs" {
 }
 
 test "values stay on one line in their slot" {
-    var content = try bar.Content.init(std.testing.allocator, 1);
-    defer content.deinit();
-    var exec_output: [bar.max_line_bytes + 1]u8 = undefined;
-    var overrides: [2][output.max_value]u8 = undefined;
-    var override_lens: [2]?usize = .{ null, null };
-    var source: Source = .{ .gpa = std.testing.allocator, .io = undefined, .commands = &.{}, .cfg = null, .lines = 1, .content = content, .exec_output = &exec_output, .overrides = &overrides, .override_lens = &override_lens };
-    const text = "left\tright\n";
-    @memcpy(source.exec_output[0..text.len], text);
-    source.exec_output_len = text.len;
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(std.testing.allocator, "[line.1]\nleft = left\nright = right\n", &diag);
+    defer cfg.deinit();
+    var source = try Source.initConfig(std.testing.allocator, std.testing.io, &cfg, 80);
+    defer source.deinit();
     source.setOverride(0, "\nfirst\nsecond\tthird\n");
     try std.testing.expect(source.rebuild());
     try std.testing.expectEqualStrings("first second third\tright", source.content.line(0));
@@ -509,16 +422,11 @@ test "values stay on one line in their slot" {
 }
 
 test "override events are delivered once with their content update" {
-    var content = try bar.Content.init(std.testing.allocator, 1);
-    defer content.deinit();
-    var exec_output: [bar.max_line_bytes + 1]u8 = undefined;
-    var overrides: [2][output.max_value]u8 = undefined;
-    var override_lens: [2]?usize = .{ null, null };
-    var source: Source = .{ .gpa = std.testing.allocator, .io = undefined, .commands = &.{}, .cfg = null, .lines = 1, .content = content, .exec_output = &exec_output, .overrides = &overrides, .override_lens = &override_lens };
-    const text = "left\tright\n";
-    @memcpy(source.exec_output[0..text.len], text);
-    source.exec_output_len = text.len;
-
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(std.testing.allocator, "[line.1]\nleft = left\nright = right\n", &diag);
+    defer cfg.deinit();
+    var source = try Source.initConfig(std.testing.allocator, std.testing.io, &cfg, 80);
+    defer source.deinit();
     source.setOverride(0, "left");
     const first = source.update(&.{}, 0);
     try std.testing.expect(first.override_events & 1 != 0);
@@ -541,7 +449,7 @@ test "tracked slots need ready commands and suppress baseline-only results" {
     defer content.deinit();
     var overrides: [4][output.max_value]u8 = undefined;
     var override_lens: [4]?usize = @splat(null);
-    var source: Source = .{ .gpa = std.testing.allocator, .io = undefined, .commands = &.{}, .cfg = &cfg, .lines = 2, .content = content, .exec_output = &.{}, .overrides = &overrides, .override_lens = &override_lens };
+    var source: Source = .{ .gpa = std.testing.allocator, .io = undefined, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &override_lens };
     _ = source.keepFirstLine(0, "");
     try std.testing.expect(!source.slotContentEligible(0, 0, 0));
     _ = source.keepFirstLine(1, "first");
@@ -568,7 +476,7 @@ test "source sidecars retain empty and truncated regions and exclude dynamic mar
     defer content.deinit();
     var overrides: [2][output.max_value]u8 = undefined;
     var lens: [2]?usize = @splat(null);
-    var source: Source = .{ .gpa = std.testing.allocator, .io = std.testing.io, .commands = &.{}, .cfg = &cfg, .lines = 1, .content = content, .exec_output = &.{}, .overrides = &overrides, .override_lens = &lens };
+    var source: Source = .{ .gpa = std.testing.allocator, .io = std.testing.io, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &lens };
     _ = source.rebuild();
     try std.testing.expectEqual(@as(usize, 3), source.content.tracks[0].len);
     try std.testing.expectEqual(@as(u16, 1), source.content.tracks[0].spans[0].start);
@@ -608,7 +516,7 @@ test "partial startup geometry and same-text overrides establish silent region b
     defer content.deinit();
     var overrides: [2][output.max_value]u8 = undefined;
     var lens: [2]?usize = @splat(null);
-    var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = &cfg, .lines = 1, .content = content, .exec_output = &.{}, .overrides = &overrides, .override_lens = &lens };
+    var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &lens };
     var r = try bar.Renderer.init(gpa);
     defer r.deinit();
     var styles = [_][]const u8{""};
@@ -672,7 +580,7 @@ test "override epochs cover high-numbered slots and coalesced same-text transiti
     defer content.deinit();
     var overrides: [34][output.max_value]u8 = undefined;
     var lens: [34]?usize = @splat(null);
-    var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = &cfg, .lines = 17, .content = content, .exec_output = &.{}, .overrides = &overrides, .override_lens = &lens };
+    var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &lens };
     _ = source.rebuild();
     source.setOverride(33, "x");
     source.setOverride(33, "");
@@ -706,7 +614,7 @@ test "dirty dependencies format only affected command and clock rows" {
         .{ .commands = .{ 0, 2 }, .clock = .{ false, true } },
     };
     var dirty = [_]bool{ true, true };
-    var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = &cfg, .lines = 2, .content = content, .exec_output = &.{}, .overrides = &overrides, .override_lens = &lens, .dependencies = &dependencies, .dirty_rows = &dirty };
+    var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &lens, .dependencies = &dependencies, .dirty_rows = &dirty };
     _ = source.rebuild();
     try std.testing.expectEqual(@as(usize, 2), source.rows_formatted);
 
@@ -731,33 +639,8 @@ test "dirty dependencies format only affected command and clock rows" {
     try std.testing.expectEqual(@as(usize, 5), source.rows_formatted);
 }
 
-test "exec canonical equality avoids formatting unchanged effective rows" {
-    const gpa = std.testing.allocator;
-    var content = try bar.Content.init(gpa, 2);
-    defer content.deinit();
-    var exec_output: [2 * (bar.max_line_bytes + 1)]u8 = undefined;
-    var overrides: [4][output.max_value]u8 = undefined;
-    var lens: [4]?usize = @splat(null);
-    var dirty = [_]bool{ false, false };
-    var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = null, .lines = 2, .content = content, .exec_output = &exec_output, .overrides = &overrides, .override_lens = &lens, .dirty_rows = &dirty };
-    try std.testing.expect(source.keepExec("one\r\ntwo\n"));
-    @memset(source.dirty_rows, true);
-    _ = source.rebuild();
-    try std.testing.expectEqual(@as(usize, 2), source.rows_formatted);
-    try std.testing.expect(!source.keepExec("one\ntwo\n\n"));
-    _ = source.rebuild();
-    try std.testing.expectEqual(@as(usize, 2), source.rows_formatted);
-    source.setOverride(2, "manual");
-    _ = source.rebuild();
-    try std.testing.expectEqualStrings("one", source.content.line(0));
-    try std.testing.expectEqualStrings("manual\t", source.content.line(1));
-    source.setOverride(2, "");
-    _ = source.rebuild();
-    try std.testing.expectEqualStrings("two", source.content.line(1));
-}
-
 fn configAllocationScenario(gpa: std.mem.Allocator, cfg: *const config.Config) !void {
-    var source = try Source.initConfig(gpa, undefined, cfg, cfg.definedLines(), 80);
+    var source = try Source.initConfig(gpa, undefined, cfg, 80);
     defer source.deinit();
 }
 

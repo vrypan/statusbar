@@ -22,16 +22,8 @@ pub const Runtime = struct {
     /// The first accepted frame establishes tracking baselines silently.
     silent_baseline: bool = true,
 
-    pub const Initial = struct {
-        cfg: *const config.Config,
-        lines: u16,
-        command: ?[]const u8,
-        interval_ms: i64,
-        style: []const u8,
-    };
-
-    pub fn initInitial(gpa: std.mem.Allocator, io: std.Io, opts: Initial, visible: u16, cols: u16) !Runtime {
-        return init(gpa, io, opts.cfg, null, null, opts.lines, opts.command, opts.interval_ms, opts.style, visible, cols);
+    pub fn initInitial(gpa: std.mem.Allocator, io: std.Io, cfg: *const config.Config, visible: u16, cols: u16) !Runtime {
+        return init(gpa, io, cfg, null, null, visible, cols);
     }
 
     pub fn initText(gpa: std.mem.Allocator, io: std.Io, text: []const u8, outer_rows: u16, cols: u16, diag: *config.Diagnostic) !Runtime {
@@ -41,11 +33,8 @@ pub const Runtime = struct {
         errdefer gpa.destroy(cfg);
         cfg.* = try config.parse(gpa, owned_text, diag);
         errdefer cfg.deinit();
-        const lines: u16 = if (cfg.line.len > 0) cfg.definedLines() else 1;
-        const visible = @min(lines, outer_rows -| 2);
-        const command: ?[]const u8 = if (cfg.line.len > 0) null else "date";
-        const style = cfg.style orelse if (command == null) "" else "7";
-        return init(gpa, io, cfg, cfg, owned_text, lines, command, 1000, style, visible, cols);
+        const visible = @min(cfg.definedLines(), outer_rows -| 2);
+        return init(gpa, io, cfg, cfg, owned_text, visible, cols);
     }
 
     fn init(
@@ -54,17 +43,11 @@ pub const Runtime = struct {
         cfg: *const config.Config,
         owned_cfg: ?*config.Config,
         owned_text: ?[]u8,
-        lines: u16,
-        command: ?[]const u8,
-        interval_ms: i64,
-        style: []const u8,
         visible: u16,
         cols: u16,
     ) !Runtime {
-        var source = if (command) |value|
-            try Source.initExec(gpa, io, value, interval_ms, lines, cols)
-        else
-            try Source.initConfig(gpa, io, cfg, lines, cols);
+        const lines = cfg.definedLines();
+        var source = try Source.initConfig(gpa, io, cfg, cols);
         errdefer source.deinit();
         const styles = try gpa.alloc([]const u8, lines);
         errdefer gpa.free(styles);
@@ -73,16 +56,10 @@ pub const Runtime = struct {
         @memset(rules, null);
         const style_bufs = try gpa.alloc([256]u8, lines);
         errdefer gpa.free(style_bufs);
-        var look: bar.Look = .{ .styles = styles, .rules = rules };
-        if (command == null) look.palette = cfg.palette();
-        for (0..lines) |n| {
-            var spec = style;
-            if (command == null) {
-                const line = &cfg.line[n];
-                if (line.style) |own| spec = own;
-                rules[n] = line.rule;
-            }
-            styles[n] = markup.barStyle(spec, look.palette, &style_bufs[n]);
+        const look: bar.Look = .{ .styles = styles, .rules = rules, .palette = cfg.palette() };
+        for (cfg.line, 0..) |line, n| {
+            rules[n] = line.rule;
+            styles[n] = markup.barStyle(line.style orelse cfg.style orelse "", look.palette, &style_bufs[n]);
         }
         var renderer = try bar.Renderer.init(gpa);
         errdefer renderer.deinit();
