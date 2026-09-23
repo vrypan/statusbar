@@ -85,6 +85,7 @@ pub const Options = struct {
     log: ?*@import("log.zig").Log = null,
     argv: []const []const u8 = &.{},
     cfg: *const config.Config,
+    config_text: []const u8,
 };
 
 pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
@@ -115,7 +116,8 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
 
     var runtime = try Runtime.initInitial(gpa, io, opts.cfg, layout.bar, layout.cols);
     defer runtime.deinit();
-    var session_state = try SessionState.init(io, runtime.lines);
+    const session_token = config_protocol.makeToken(io);
+    var session_state = try SessionState.init(io, runtime.lines, opts.config_text, session_token);
     defer session_state.deinit();
 
     var child_environment = try sys.environMap().clone(gpa);
@@ -123,7 +125,6 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     var number: [8]u8 = undefined;
     try child_environment.put("STATUSBAR_LINES", try std.fmt.bufPrint(&number, "{d}", .{runtime.lines}));
     try child_environment.put("STATUSBAR_STATE", session_state.path());
-    const session_token = config_protocol.makeToken(io);
     try child_environment.put("STATUSBAR_SESSION_ID", &session_token);
     const default_argv = [_][]const u8{sys.env("SHELL") orelse "/bin/sh"};
     var executable = try sys.Exec.init(gpa, if (opts.argv.len == 0) &default_argv else opts.argv, &child_environment);
@@ -517,6 +518,8 @@ const Proxy = struct {
             if (self.runtime.source.override_lens[slot]) |len| candidate.source.setOverride(slot, self.runtime.source.overrides[slot][0..len]);
         }
 
+        var pending_state = try self.session_state.prepare(candidate.lines, text);
+        defer pending_state.deinit(self.io);
         const old_layout = self.layout;
         const new_layout = Layout.of(outer, candidate.lines);
         self.makeRoomForGrowth(old_layout, new_layout);
@@ -528,9 +531,15 @@ const Proxy = struct {
             self.requestPaint(now_ms);
             return error.ChildResizeFailed;
         };
+        pending_state.replace(self.io) catch |err| {
+            self.layout = old_layout;
+            try sys.setWinsize(self.master, &old_layout.child);
+            self.output.damaged = true;
+            self.requestPaint(now_ms);
+            return err;
+        };
         std.mem.swap(Runtime, self.runtime, &candidate);
         self.renderer = &self.runtime.renderer;
-        self.session_state.write(self.runtime.lines) catch {};
         self.output.resize(new_layout.bar, new_layout.child.row);
         // DECSTBM homes the cursor. Install the new margins immediately,
         // preserving the corrected cursor before any following child bytes.

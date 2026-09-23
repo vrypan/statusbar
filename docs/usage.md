@@ -4,7 +4,7 @@
 statusbar [run] [options] [-- COMMAND...]
 statusbar set <SLOT> [TEXT...]
 statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
-statusbar config [--print] [--path] [--default]
+statusbar config [--print [default|startup|current]] [--default] [--path]
 statusbar completion <bash|zsh|fish>
 ```
 
@@ -83,29 +83,41 @@ before each prompt. Repeating initialization does not duplicate these hooks.
 
 ## `config`
 
-With `--print`, prints the configuration `run` would use: the config file, or the built-in
-config when there is none. The config is parsed first, so this also checks
-it: a broken file reports its error and exits with status 2.
+Choose which configuration to print:
 
-| Option                | Meaning                                              |
-|-----------------------|------------------------------------------------------|
-| `--print`             | show the configuration a new session would load     |
-| `--path`              | show the config file path, or `built-in`              |
-| `--default`           | show the built-in default configuration              |
+| Option | Meaning |
+|--------|---------|
+| `--print default` | Built-in default config |
+| `--print startup` | Exact config originally loaded by this session |
+| `--print current` | Active config, including live replacements |
+| `--print` | Same as `--print current` |
+| `--default` | Alias for `--print default` |
+| `--path` | File a new session would load, or `built-in` |
+
+`startup` and `current` require a running session. They preserve the original
+text, including comments, whitespace, and commands, without running those
+commands. Temporary `statusbar set` overrides are excluded. The startup
+snapshot also works for `--config -` and remains unchanged when its source
+file is edited or removed. Nested sessions have separate snapshots.
+
+`--path` uses `$STATUSBAR_CONFIG`, then `$XDG_CONFIG_HOME/statusbar/config`
+(or `~/.config/statusbar/config` when `XDG_CONFIG_HOME` is unset). Use one
+display option at a time; `--path` cannot be combined with `--print` or `--default`.
 
 With no flags and terminal stdin, shows help. With piped or redirected stdin,
 reads and validates the complete config until EOF, then sends its contents to
 the current statusbar session. Empty input is an error. Printing flags ignore
-stdin. No positional operands are accepted. Replacement prints nothing on
-success. The request is one-way: success means it was written to the terminal,
-while the running session still rejects invalid or unauthenticated requests
+stdin. Replacement prints nothing on success. The request is one-way: success
+means it was written to the terminal, while the running session still rejects
+invalid or unauthenticated requests
 transactionally. Files transported this way are limited to 24,523 bytes. Large
 concurrent writers should serialize requests because terminal writes are not an
 interprocess message queue. The same validation and size limit apply to stdin.
 See [OSC config replacement](osc-3110.md).
 
 ```sh
-statusbar config --print > saved.config
+statusbar config --print current > saved.config
+statusbar config --print startup | statusbar config
 cat my.config | statusbar config
 statusbar config < my.config
 statusbar config --default | statusbar config
@@ -118,8 +130,7 @@ mkdir -p ~/.config/statusbar
 statusbar config --default > ~/.config/statusbar/config
 ```
 
-Use `--default` here: the shell empties the target file before statusbar
-reads it, so `statusbar config --print` would find an empty config.
+`--default` works outside a session and ignores existing config files.
 
 ## `completion`
 
@@ -195,4 +206,4 @@ working directory or environment of statusbar commands.
 | `STATUSBAR_LINES`   | the child and bar commands | desired rows at process start           |
 | `STATUSBAR_COLUMNS` | bar commands              | the bar's width                          |
 | `STATUSBAR_CONFIG`  | read by statusbar         | config file, when `--config` isn't given |
-| `STATUSBAR_STATE`   | the child                  | private live row-count metadata used by `set` |
+| `STATUSBAR_STATE`   | the child                  | private row-count and config snapshots used by `set` and `config` |

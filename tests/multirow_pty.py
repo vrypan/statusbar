@@ -3,6 +3,7 @@
 
 import base64
 import fcntl
+import json
 import os
 import pty
 import re
@@ -815,6 +816,97 @@ def check_logging(binary):
     print("logging append, permissions, exit status, and startup failures passed")
 
 
+def check_config_snapshots(binary):
+    original = b'# original comment\n[line.1]\nleft = "initial text"'  # No final newline.
+    replacement = b'# live replacement\n[line.1]\nleft = next\n[line.2]\nright = %H:%M\n'
+    clean_env = os.environ.copy()
+    clean_env.pop("STATUSBAR_STATE", None)
+    clean_env.pop("STATUSBAR_SESSION_ID", None)
+    clean_env["STATUSBAR_CONFIG"] = "/does/not/exist/statusbar-config"
+    builtin = subprocess.run([binary, "config", "--default"], env=clean_env, capture_output=True, check=True).stdout
+    result = subprocess.run([binary, "config", "--print", "default"], input=b"invalid", env=clean_env, capture_output=True)
+    assert result.returncode == 0 and result.stdout == builtin, result
+    for args in (["--print"], ["--print", "current"], ["--print", "startup"]):
+        result = subprocess.run([binary, "config", *args], env=clean_env, capture_output=True)
+        assert result.returncode == 2 and not result.stdout and b"requires a running" in result.stderr, result
+    for args in (["--print", "unknown"], ["startup"], ["--default", "current"], ["--print", "current", "--path"], ["--print", "--default"]):
+        result = subprocess.run([binary, "config", *args], env=clean_env, capture_output=True)
+        assert result.returncode == 2 and not result.stdout, result
+
+    child = r'''
+import base64, json, os, stat, subprocess, sys, time
+binary, config_path, original_hex, replacement_hex, metadata_path = sys.argv[1:]
+original = bytes.fromhex(original_hex)
+replacement = bytes.fromhex(replacement_hex)
+def show(*args):
+    r = subprocess.run([binary, 'config', *args], input=b'invalid stdin', capture_output=True)
+    assert r.returncode == 0, r
+    return r.stdout
+def current_is(expected):
+    deadline = time.monotonic() + 3
+    while show('--print') != expected:
+        assert time.monotonic() < deadline
+        time.sleep(.01)
+assert show('--print', 'startup') == original
+assert show('--print') == original
+assert show('--print', 'current') == original
+if config_path != '-':
+    open(config_path, 'wb').write(b'invalid modified file')
+    os.unlink(config_path)
+assert show('--print', 'startup') == original
+assert show('--print') == original
+assert show('--default') == show('--print', 'default')
+assert stat.S_IMODE(os.stat(os.environ['STATUSBAR_STATE']).st_mode) == 0o600
+subprocess.run([binary, 'set', '1', 'MANUAL_OVERRIDE'], check=True)
+assert show('--print') == original
+subprocess.run([binary, 'config'], input=replacement, check=True)
+current_is(replacement)
+assert show('--print', 'startup') == original
+assert show('--print', 'current') == replacement
+assert stat.S_IMODE(os.stat(os.environ['STATUSBAR_STATE']).st_mode) == 0o600
+# A correctly authenticated but malformed replacement must retain the snapshot.
+envelope = b'1;' + os.environ['STATUSBAR_SESSION_ID'].encode() + b';[broken\n'
+os.write(1, b'\x1b]3110;STATUSBAR;CONFIG;' + base64.b64encode(envelope) + b'\x1b\\')
+time.sleep(.1)
+assert show('--print') == replacement
+assert show('--print', 'startup') == original
+# Restoring startup is a normal config replacement.
+subprocess.run([binary, 'config'], input=show('--print', 'startup'), check=True)
+current_is(original)
+# Nested sessions have their own snapshots; the outer session is unaffected.
+nested_text = b'[line.1]\nleft = nested\n'
+code = "import subprocess,sys; r=subprocess.run([sys.argv[1],'config','--print','startup'],capture_output=True); assert r.returncode == 0 and r.stdout == bytes.fromhex(sys.argv[2])"
+r = subprocess.run([binary, '--config', '-', '--', sys.executable, '-c', code, binary, nested_text.hex()], input=nested_text)
+assert r.returncode == 0
+assert show('--print') == original
+wrong = os.environ.copy()
+wrong['STATUSBAR_SESSION_ID'] = '0' * 32
+r = subprocess.run([binary, 'config', '--print'], env=wrong, capture_output=True)
+assert r.returncode != 0 and not r.stdout
+json.dump({k: os.environ[k] for k in ('STATUSBAR_STATE', 'STATUSBAR_SESSION_ID')}, open(metadata_path, 'w'))
+print('SNAPSHOTS_OK', flush=True)
+'''
+    with tempfile.TemporaryDirectory() as folder:
+        for mode in ("file", "stdin"):
+            config_path = os.path.join(folder, "initial.config")
+            metadata_path = os.path.join(folder, mode + ".json")
+            with open(config_path, "wb") as config_file:
+                config_file.write(original)
+            selected = config_path if mode == "file" else "-"
+            argv = [binary, "--config", selected, "--", sys.executable, "-c", child,
+                    binary, selected, original.hex(), replacement.hex(), metadata_path]
+            if mode == "stdin":
+                argv = ["/bin/sh", "-c", f"cat {shlex.quote(config_path)} | " + shlex.join(argv)]
+            code, data = capture_pty(argv, env=clean_env, timeout=12)
+            assert code == 0 and b"SNAPSHOTS_OK" in data, data[-3000:]
+            with open(metadata_path) as metadata:
+                stale = json.load(metadata)
+            assert not os.path.exists(stale["STATUSBAR_STATE"])
+            result = subprocess.run([binary, "config", "--print"], env={**clean_env, **stale}, capture_output=True)
+            assert result.returncode != 0 and not result.stdout, result
+    print("startup/current config snapshots preserve bytes, isolate sessions, and clean up")
+
+
 def check_osc_config(binary):
     initial = "[line.1]\nleft = ORIGINAL\n"
     replacement = "[line.1]\nleft = REPLACED_ONE\n[line.2]\nleft = REPLACED_TWO\n"
@@ -829,11 +921,6 @@ def check_osc_config(binary):
             config_file.write(initial)
         with open(replacement_path, "w") as config_file:
             config_file.write(replacement)
-        for args, expected in [
-            (["--path", "--default"], b"built-in\n"),
-        ]:
-            result = subprocess.run([binary, "config", *args], capture_output=True)
-            assert result.returncode == 0 and result.stdout == expected, result
         for args in [
             ["--config", initial_path],
             ["-c", initial_path],
@@ -880,13 +967,6 @@ def check_osc_config(binary):
             [binary, "config", "--default"], input=b"[broken\n", capture_output=True,
         )
         assert ignored.returncode == 0 and ignored.stdout
-        print_env = os.environ.copy()
-        print_env["STATUSBAR_CONFIG"] = initial_path
-        printed = subprocess.run(
-            [binary, "config", "--print"], input=b"[broken\n",
-            env=print_env, capture_output=True,
-        )
-        assert printed.returncode == 0 and printed.stdout == initial.encode(), printed
         child = r'''
 import base64, os, subprocess, sys, time
 binary, replacement, direct, nested_token_path, rejected_command_path = sys.argv[1:]
@@ -1091,6 +1171,7 @@ def main():
     check_resize_command_runs(binary)
     check_adaptive_palette(binary)
     check_logging(binary)
+    check_config_snapshots(binary)
     check_osc_config(binary)
     check_theme_growth(binary)
     check_background_job_exit(binary)

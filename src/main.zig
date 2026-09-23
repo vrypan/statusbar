@@ -85,6 +85,7 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
         .log = &log,
         .argv = argv,
         .cfg = cfg,
+        .config_text = loaded.text,
     };
 
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -124,25 +125,44 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
     };
 }
 
-/// `statusbar config`: the config text statusbar would run with, checked.
+/// Print a config snapshot or submit a complete replacement from stdin.
 fn printConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer, help_output: anytype) !u8 {
-    if (!command.enabled("print") and !command.enabled("path") and !command.enabled("default")) {
+    const args = command.positionals();
+    const print = command.enabled("print");
+    const defaults = command.enabled("default");
+    const path = command.enabled("path");
+    if ((print and defaults) or (path and (print or defaults))) return usageError(stderr, command, "choose one of --print, --default, or --path");
+    if (args.len > 0 and !print) return usageError(stderr, command, "a config selection requires --print");
+    if (!print and !path and !defaults) {
         if (!(try Io.File.stdin().isTty(io))) return sendConfig(arena, io, command, stderr);
         try zecli.printCommandHelp(arena, help_output, command.spec);
         try stdout.flush();
         return 0;
     }
-    // Reading nothing for --default matters when stdout is redirected to the
-    // config file: the shell has already emptied it.
-    const loaded = if (command.enabled("default")) try builtInConfig(arena) else loadConfig(arena, io, null, stderr) catch |err| {
-        try stderr.flush();
-        return if (err == error.ReportedConfigError) 2 else err;
-    };
-    if (command.enabled("path")) {
+    if (path) {
+        const loaded = loadConfig(arena, io, null, stderr) catch |err| {
+            try stderr.flush();
+            return if (err == error.ReportedConfigError) 2 else err;
+        };
         try stdout.print("{s}\n", .{loaded.path orelse "built-in"});
     } else {
-        try stdout.writeAll(loaded.text);
-        if (loaded.text.len > 0 and loaded.text[loaded.text.len - 1] != '\n') try stdout.writeByte('\n');
+        const selection = if (defaults) "default" else if (args.len > 0) args[0] else "current";
+        if (std.mem.eql(u8, selection, "default")) {
+            try stdout.writeAll(default_config);
+        } else {
+            const state = @import("session_state.zig");
+            const selected = std.meta.stringToEnum(state.Selection, selection) orelse
+                return usageError(stderr, command, "--print expects default, startup, or current");
+            const env = @import("environment.zig");
+            const state_path = env.get("STATUSBAR_STATE") orelse return usageError(stderr, command, "--print startup/current requires a running statusbar session");
+            const token = env.get("STATUSBAR_SESSION_ID") orelse return usageError(stderr, command, "--print startup/current requires a running statusbar session");
+            const text = state.readConfig(arena, io, state_path, token, selected) catch |err| {
+                try stderr.print("statusbar: cannot read session config: {t}\n", .{err});
+                try stderr.flush();
+                return 1;
+            };
+            try stdout.writeAll(text);
+        }
     }
     try stdout.flush();
     return 0;

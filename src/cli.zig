@@ -4,7 +4,7 @@
 //!     statusbar [run] [options] [-- COMMAND...]
 //!     statusbar set <SLOT> [TEXT...]
 //!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
-//!     statusbar config [--print] [--path] [--default]
+//!     statusbar config [--print [default|startup|current]] [--default] [--path]
 //!     statusbar completion <bash|zsh|fish>
 
 const std = @import("std");
@@ -20,9 +20,9 @@ const config_flag = zecli.FlagSpec{
 };
 
 const config_flags = [_]zecli.FlagSpec{
-    .{ .name = "print", .description = "Show the configuration a new session would load" },
-    .{ .name = "default", .description = "Show the built-in default configuration" },
-    .{ .name = "path", .description = "Show the config file path, or 'built-in'" },
+    .{ .name = "print", .description = "Print a config (default: current)" },
+    .{ .name = "default", .description = "Show the built-in config (alias for --print default)" },
+    .{ .name = "path", .description = "Show the config path a new session would use" },
 };
 
 const run_flags = [_]zecli.FlagSpec{
@@ -118,23 +118,30 @@ const commands = [_]zecli.CommandSpec{
     .{
         .name = "config",
         .description = "View configuration or load a new layout",
-        .usage = "statusbar config [--print] [--path] [--default]",
+        .usage = "statusbar config [--print [default|startup|current]] [--default] [--path]",
         .flags = &config_flags,
+        .arguments = &.{.{ .name = "SOURCE", .description = "Config to show with --print: default, startup, or current", .completion = .{ .values = &.{ "default", "startup", "current" } } }},
         .double_dash = .positionals,
         .extra_help =
         \\To change the running bar, pass a complete config file as input. The
         \\new layout can change the number of rows without restarting your shell.
         \\
-        \\--print and --path use $STATUSBAR_CONFIG if set. Otherwise, they use
-        \\$XDG_CONFIG_HOME/statusbar/config, or ~/.config/statusbar/config if
-        \\$XDG_CONFIG_HOME is unset. A missing default file uses built-in defaults.
-        \\--default always uses the built-in configuration.
-        \\These display options ignore input and do not change the running bar.
+        \\--print defaults to current. Use startup for the exact config originally
+        \\loaded by this session, or default for the built-in config. Startup and
+        \\current require a running session and exclude temporary slot overrides.
+        \\They preserve config text, including comments and commands.
+        \\
+        \\--path shows the file a new session would use: $STATUSBAR_CONFIG, then
+        \\$XDG_CONFIG_HOME/statusbar/config (or ~/.config/statusbar/config when
+        \\$XDG_CONFIG_HOME is unset). A missing default file shows 'built-in'.
+        \\Display options ignore stdin and do not change the running bar.
         \\
         \\With no flags, shows this help when run directly in a terminal.
         ++ "\n",
         .examples = &.{
             "statusbar config --print",
+            "statusbar config --print startup > original.config",
+            "statusbar config --print current > active.config",
             "statusbar config --default > my.config",
             "statusbar config --path",
             "statusbar config < my.config",

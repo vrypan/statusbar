@@ -21,8 +21,9 @@ mkdir -p ~/.config/statusbar
 statusbar config --default > ~/.config/statusbar/config
 ```
 
-`statusbar config --print` prints the config statusbar would use after checking that
-it parses, and `statusbar config --path` shows which file that is; see
+`statusbar config --print` prints the running session's active config. Use
+`--print startup` for its original config, or `--print default` (also `--default`)
+for the built-in config. `--path` shows the file a new session would load; see
 [usage.md](usage.md#config).
 
 For generated configs and here-documents, see
