@@ -61,7 +61,13 @@ pub const Template = struct {
 
     pub fn usesClock(self: *const Template) bool {
         for (self.items()) |part| switch (part) {
-            .text => |text| if (std.mem.indexOfScalar(u8, text, '%') != null) return true,
+            .text => |text| {
+                var i: usize = 0;
+                while (std.mem.indexOfScalarPos(u8, text, i, '%')) |percent| {
+                    if (percent + 1 >= text.len or text[percent + 1] != '%') return true;
+                    i = percent + 2;
+                }
+            },
             .command, .track_start, .track_end => {},
         };
         return false;
@@ -76,6 +82,22 @@ pub const Line = struct {
     /// Markup attributes for the whole line, e.g. `fg=rule`.
     style: ?[]const u8 = null,
 };
+
+test "clock dependencies distinguish escaped percents from conversions" {
+    for ([_]struct { text: []const u8, dynamic: bool }{
+        .{ .text = "100%%", .dynamic = false },
+        .{ .text = "%%%%", .dynamic = false },
+        .{ .text = "%% %H:%M", .dynamic = true },
+        .{ .text = "%%%S", .dynamic = true },
+        .{ .text = "text", .dynamic = false },
+        .{ .text = "%", .dynamic = true },
+    }) |case| {
+        var template: Template = .{};
+        template.parts[0] = .{ .text = case.text };
+        template.len = 1;
+        try std.testing.expectEqual(case.dynamic, template.usesClock());
+    }
+}
 
 pub const Command = struct {
     /// Empty for an inline `#(...)` command.

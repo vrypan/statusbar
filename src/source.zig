@@ -111,7 +111,7 @@ pub const Source = struct {
             }
         }
         var self: Source = .{ .gpa = gpa, .io = io, .commands = commands, .cfg = cfg, .lines = lines, .content = content, .exec_output = @constCast(&.{}), .overrides = overrides, .override_lens = override_lens, .stale = true, .dependencies = dependencies, .dirty_rows = dirty_rows };
-        if (cfg.usesClock()) self.clock_next_ms = 0;
+        self.updateClockActivation();
         return self;
     }
 
@@ -165,6 +165,23 @@ pub const Source = struct {
         self.metadata_stale = true;
         self.markDirty(n / 2);
         self.stale = true;
+        self.updateClockActivation();
+    }
+
+    /// Overridden clocks need no timer. Clearing an override formats current
+    /// time immediately and re-arms the usual one-second cadence.
+    fn updateClockActivation(self: *Source) void {
+        if (self.cfg) |cfg| {
+            for (cfg.line, 0..) |line, row| {
+                if ((self.override_lens[row * 2] == null and line.left.usesClock()) or
+                    (self.override_lens[row * 2 + 1] == null and line.right.usesClock()))
+                {
+                    if (self.clock_next_ms == null) self.clock_next_ms = 0;
+                    return;
+                }
+            }
+        }
+        self.clock_next_ms = null;
     }
 
     fn override(self: *const Source, n: usize) ?[]const u8 {
@@ -428,6 +445,31 @@ fn writeOneLine(w: *std.Io.Writer, text: []const u8) void {
     };
 }
 
+test "clock scheduling ignores escaped percents and pauses under overrides" {
+    const gpa = std.testing.allocator;
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(gpa, "[line.1]\nleft = %S\nright = %M\n[line.2]\nleft = 100%%\n", &diag);
+    defer cfg.deinit();
+    var source = try Source.initConfig(gpa, std.testing.io, &cfg, 2, 80);
+    defer source.deinit();
+    _ = source.update(&.{}, 0);
+    try std.testing.expectEqualStrings("100%\t", source.content.line(1));
+    source.setOverride(0, "left");
+    _ = source.update(&.{}, 0);
+    try std.testing.expect(source.clock_next_ms != null);
+    source.setOverride(1, "right");
+    _ = source.update(&.{}, 0);
+    try std.testing.expectEqual(@as(i64, -1), source.timeout(0));
+    const formatted = source.rows_formatted;
+    _ = source.update(&.{}, 10000);
+    try std.testing.expectEqual(formatted, source.rows_formatted);
+    source.setOverride(0, "");
+    try std.testing.expectEqual(@as(?i64, 0), source.clock_next_ms);
+    _ = source.update(&.{}, 10000);
+    try std.testing.expect(source.clock_next_ms.? > 0);
+    try std.testing.expect(!std.mem.startsWith(u8, source.content.line(0), "left"));
+}
+
 test "strftime conversions and literal percent signs" {
     var tm = std.mem.zeroes(Tm);
     const t: c.time_t = 0;
@@ -526,7 +568,7 @@ test "source sidecars retain empty and truncated regions and exclude dynamic mar
     defer content.deinit();
     var overrides: [2][output.max_value]u8 = undefined;
     var lens: [2]?usize = @splat(null);
-    var source: Source = .{ .gpa = std.testing.allocator, .io = undefined, .commands = &.{}, .cfg = &cfg, .lines = 1, .content = content, .exec_output = &.{}, .overrides = &overrides, .override_lens = &lens };
+    var source: Source = .{ .gpa = std.testing.allocator, .io = std.testing.io, .commands = &.{}, .cfg = &cfg, .lines = 1, .content = content, .exec_output = &.{}, .overrides = &overrides, .override_lens = &lens };
     _ = source.rebuild();
     try std.testing.expectEqual(@as(usize, 3), source.content.tracks[0].len);
     try std.testing.expectEqual(@as(u16, 1), source.content.tracks[0].spans[0].start);
