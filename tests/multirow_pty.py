@@ -52,6 +52,25 @@ def spawn(argv, rows=24, env=None):
     return pid, master
 
 
+def reap_while_draining(pid, fd, timeout=5):
+    """Keep the PTY readable while a killed session leader exits."""
+    deadline = time.monotonic() + timeout
+    while True:
+        got, status = os.waitpid(pid, os.WNOHANG)
+        if got:
+            return status
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AssertionError(f"timed out reaping pid {pid} after SIGKILL")
+        ready, _, _ = select.select([fd], [], [], min(0.05, remaining))
+        if ready:
+            try:
+                if not os.read(fd, 65536):
+                    time.sleep(min(0.01, remaining))
+            except OSError:
+                time.sleep(min(0.01, remaining))
+
+
 def capture_pty(argv, env=None, rows=24, timeout=5):
     pid, master = spawn(argv, rows, env)
     data = b""
@@ -80,9 +99,14 @@ def capture_pty(argv, env=None, rows=24, timeout=5):
                     break
             os.close(master)
             return os.waitstatus_to_exitcode(status), data
-    os.kill(pid, signal.SIGKILL)
-    os.waitpid(pid, 0)
-    os.close(master)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        reap_while_draining(pid, master)
+    finally:
+        os.close(master)
     raise AssertionError(f"timed out running {argv!r}; tail={data[-500:]!r}")
 
 
@@ -351,9 +375,14 @@ def stop(pid, fd):
             os.close(fd)
             return
         time.sleep(0.02)
-    os.kill(pid, signal.SIGKILL)
-    os.waitpid(pid, 0)
-    os.close(fd)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        reap_while_draining(pid, fd)
+    finally:
+        os.close(fd)
 
 
 def painted_styles(data):
@@ -401,7 +430,8 @@ run = cat {shlex.quote(second_path)}
 interval = 0.1
 """)
             cfg.write("[highlight]\npulses = 1\n")
-        pid, master = spawn([binary, "-c", config_path, "--", "/bin/sh", "-c", "sleep 10"])
+        exit_on_request = 'while IFS= read -r command; do [ "$command" = EXIT ] && exit 0; done'
+        pid, master = spawn([binary, "-c", config_path, "--", "/bin/sh", "-c", exit_on_request])
         try:
             suffix = b"\x1b[0m\x1b8\x1b[?7h"
             initial = b""
@@ -473,7 +503,8 @@ left = VALUE #[track]#(value)#[notrack]
 run = printf 'cols:%s:' \"$STATUSBAR_COLUMNS\"; cat {shlex.quote(value_path)}
 interval = 0.2
 """)
-        pid, master = spawn([binary, "-c", config_path, "--", "/bin/sh", "-c", "sleep 10"])
+        exit_on_request = 'while IFS= read -r command; do [ "$command" = EXIT ] && exit 0; done'
+        pid, master = spawn([binary, "-c", config_path, "--", "/bin/sh", "-c", exit_on_request])
         try:
             suffix = b"\x1b[0m\x1b8\x1b[?7h"
             initial = read_until(master, b"", b"cols:80:one")
