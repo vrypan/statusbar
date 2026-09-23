@@ -681,7 +681,7 @@ def check_osc_config(binary):
         )
         assert printed.returncode == 0 and printed.stdout == initial.encode(), printed
         child = r'''
-import base64, os, subprocess, sys
+import base64, os, subprocess, sys, time
 binary, replacement, direct, nested_token_path, rejected_command_path = sys.argv[1:]
 help_result = subprocess.run([binary, "config"], capture_output=True)
 explicit_help = subprocess.run([binary, "config", "--help"], capture_output=True)
@@ -726,9 +726,14 @@ for command in sys.stdin:
         print("__ORDER__", flush=True)
     elif command == "SAVED":
         os.write(1, b"\x1b7")
-        emit('[line.1]\nleft = SHOULD_NOT_APPLY\n')
+        emit('[line.1]\nleft = AFTER_RESTORE\n')
+        time.sleep(.01)
         os.write(1, b"\x1b8")
         print("__SAVED__", flush=True)
+    elif command == "HELD":
+        os.write(1, b"\x1b7")
+        emit('[line.1]\nleft = AFTER_PAUSE\n')
+        print("__HELD__", flush=True)
     elif command == "NESTED":
         code = 'import os,sys; open(sys.argv[1], "w").write(os.environ["STATUSBAR_SESSION_ID"])'
         result = subprocess.run([binary, "-e", "printf NESTED_BAR", "--", sys.executable, "-c", code, nested_token_path])
@@ -767,18 +772,18 @@ for command in sys.stdin:
             data = read_until(master, data, b"__ORDER__", timeout=3)
             os.write(master, b"NESTED\n")
             data = read_until(master, data, b"__NESTED__:0:True", timeout=5)
+            # A request is held while the child owns the saved cursor, and
+            # applies once it is restored or the output pauses.
             os.write(master, b"SAVED\n")
             data = read_until(master, data, b"__SAVED__", timeout=3)
-            assert b"SHOULD_NOT_APPLY" not in data
+            data = read_until(master, data, b"AFTER_RESTORE", timeout=3)
+            os.write(master, b"HELD\n")
+            data = read_until(master, data, b"__HELD__", timeout=3)
+            data = read_until(master, data, b"AFTER_PAUSE", timeout=3)
             assert b"3110;STATUSBAR" not in data
-            deadline = time.monotonic() + 3
-            while True:
-                with open(log_path) as log_file:
-                    logged = log_file.read()
-                if "OSC config rejected: child cursor is saved" in logged:
-                    break
-                assert time.monotonic() < deadline, logged
-                time.sleep(0.05)
+            with open(log_path) as log_file:
+                logged = log_file.read()
+            assert logged.count("OSC config held: child cursor is saved") == 2, logged
             assert "OSC config applied: rows=2" in logged
             assert "OSC config applied: rows=1" in logged
             assert "AuthenticationFailed" in logged

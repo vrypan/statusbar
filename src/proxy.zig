@@ -392,6 +392,11 @@ const Proxy = struct {
     last_input_ms: i64 = 0,
     palette_probe: PaletteProbe = .{},
     palette_deadline_ms: ?i64 = null,
+    /// An authenticated config request that arrived while the child held a
+    /// saved cursor, waiting for the same pause a paint waits for. Only the
+    /// newest one is kept.
+    held_config: [config_protocol.max_config]u8 = undefined,
+    held_config_len: ?usize = null,
 
     fn now(self: *const Proxy) i64 {
         return std.Io.Clock.now(.awake, self.io).toMilliseconds();
@@ -567,15 +572,36 @@ const Proxy = struct {
     }
 
     fn applyConfigRequest(self: *Proxy, payload: []const u8, now_ms: i64) bool {
-        if (self.output.cursor_saved) {
-            if (self.log) |log| log.write("OSC config rejected: child cursor is saved", .{});
-            return false;
-        }
         var decoded: [config_protocol.max_config + config_protocol.envelope_overhead]u8 = undefined;
         const text = config_protocol.decode(&decoded, payload, &self.session_token) catch |err| {
             if (self.log) |log| log.write("OSC config rejected: {t}", .{err});
             return false;
         };
+        // Replacement borrows the terminal's cursor save slot, like a paint.
+        if (self.output.cursor_saved) {
+            @memcpy(self.held_config[0..text.len], text);
+            self.held_config_len = text.len;
+            if (self.log) |log| log.write("OSC config held: child cursor is saved", .{});
+            return false;
+        }
+        self.held_config_len = null;
+        return self.applyConfig(text, now_ms);
+    }
+
+    /// A held request applies once the child restores its cursor, or its
+    /// output pauses as long as a paint waits.
+    fn heldConfigDue(self: *const Proxy, now_ms: i64) bool {
+        if (self.held_config_len == null or !self.output.atBoundary()) return false;
+        return !self.output.cursor_saved or now_ms - self.last_output_ms >= paint_quiet_ms;
+    }
+
+    fn applyHeldConfig(self: *Proxy, now_ms: i64) bool {
+        const len = self.held_config_len orelse return false;
+        self.held_config_len = null;
+        return self.applyConfig(self.held_config[0..len], now_ms);
+    }
+
+    fn applyConfig(self: *Proxy, text: []const u8, now_ms: i64) bool {
         var diag: config.Diagnostic = .{};
         self.replaceConfig(text, now_ms, &diag) catch |err| {
             if (self.log) |log| log.write("OSC config rejected: {t}, line={d}", .{ err, diag.line });
@@ -650,6 +676,7 @@ const Proxy = struct {
             var timeout = minTimeout(self.paintTimeout(now_ms), self.runtime.source.timeout(now_ms));
             timeout = minTimeout(timeout, self.runtime.renderer.nextFrameTimeout(now_ms));
             if (self.palette_deadline_ms) |deadline| timeout = minTimeout(timeout, @max(deadline - now_ms, 0));
+            if (self.held_config_len != null and self.output.atBoundary()) timeout = minTimeout(timeout, @max(self.last_output_ms + paint_quiet_ms - now_ms, 0));
             if (self.palette_probe.holding()) timeout = minTimeout(timeout, @max(self.last_input_ms + input_hold_ms - now_ms, 0));
             if (self.input.holding()) timeout = minTimeout(timeout, @max(self.last_input_ms + input_hold_ms - now_ms, 0));
             _ = posix.poll(fds[0 .. 3 + command_fds.len], @intCast(@min(timeout, std.math.maxInt(c_int)))) catch return;
@@ -720,6 +747,8 @@ const Proxy = struct {
                     }
                 }
             }
+
+            if (self.heldConfigDue(now_ms)) runtime_replaced = self.applyHeldConfig(now_ms) or runtime_replaced;
 
             if (!runtime_replaced) {
                 const source_update = self.runtime.source.update(command_fds, now_ms);
@@ -1054,6 +1083,38 @@ test "a completed scalar makes an overdue paint eligible" {
     output.feed("\x98\x80", &sink);
     proxy.output = output;
     try std.testing.expectEqual(@as(i64, 0), proxy.paintTimeout(paint_max_delay_ms + 2));
+}
+
+test "a config request waits while the child holds a saved cursor" {
+    var proxy = schedulerProxy();
+    proxy.log = null;
+    proxy.session_token = "0123456789abcdef0123456789abcdef".*;
+    proxy.held_config_len = null;
+    const frame = try config_protocol.encode(std.testing.allocator, &proxy.session_token, "[line.1]\nleft = HELD\n");
+    defer std.testing.allocator.free(frame);
+    const payload = frame[2 + config_protocol.namespace.len .. frame.len - 2];
+
+    proxy.output.cursor_saved = true;
+    proxy.last_output_ms = 100;
+    try std.testing.expect(!proxy.applyConfigRequest(payload, 100));
+    try std.testing.expectEqualStrings("[line.1]\nleft = HELD\n", proxy.held_config[0..proxy.held_config_len.?]);
+
+    // Due after the paint pause, or as soon as the cursor is restored, but
+    // never in the middle of a sequence.
+    try std.testing.expect(!proxy.heldConfigDue(120));
+    try std.testing.expect(proxy.heldConfigDue(130));
+    proxy.output.cursor_saved = false;
+    try std.testing.expect(proxy.heldConfigDue(101));
+    proxy.output.state = .csi;
+    try std.testing.expect(!proxy.heldConfigDue(1000));
+
+    // A request that cannot be authenticated is never held.
+    proxy.output.state = .ground;
+    proxy.output.cursor_saved = true;
+    proxy.held_config_len = null;
+    proxy.session_token = "fedcba9876543210fedcba9876543210".*;
+    try std.testing.expect(!proxy.applyConfigRequest(payload, 100));
+    try std.testing.expect(proxy.held_config_len == null);
 }
 
 test "min timeout ignores absent timers" {
