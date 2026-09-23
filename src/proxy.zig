@@ -104,7 +104,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     try sys.setNonBlocking(pty.master, true);
     try sys.setCloexec(pty.master);
 
-    const sig_fds = try sys.selfPipe(io);
+    const sig_fds = try sys.selfPipe();
     defer {
         sig_pipe_w.store(-1, .monotonic);
         sys.close(io, sig_fds[0]);
@@ -777,7 +777,7 @@ const Proxy = struct {
             if (self.terminal.broken) return;
 
             if (self.pending_input.len > 0 and out.revents & posix.POLL.OUT != 0) {
-                switch (sys.writeNonBlocking(self.master, self.pending_input.pending()) catch return) {
+                switch (sys.writeNonBlocking(self.io, self.master, self.pending_input.pending()) catch return) {
                     .bytes => |n| self.pending_input.consume(n),
                     .would_block => {},
                 }
@@ -890,7 +890,7 @@ fn findCursorReport(bytes: []const u8) ?CursorReport {
 
 test "a status command that exits after closing stdout wakes the loop" {
     const io = std.testing.io;
-    const sig_fds = try sys.selfPipe(io);
+    const sig_fds = try sys.selfPipe();
     defer {
         sig_pipe_w.store(-1, .monotonic);
         resetSignal(.CHLD);

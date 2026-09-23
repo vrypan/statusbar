@@ -104,11 +104,11 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
             return 1;
         };
         defer tty.close(io);
-        if (std.c.dup2(tty.handle, 0) < 0) {
+        std.Io.Threaded.dup2(tty.handle, 0) catch {
             try stderr.writeAll("statusbar: cannot connect keyboard input to /dev/tty\n");
             try stderr.flush();
             return 1;
-        }
+        };
     }
 
     return proxy.run(gpa, io, opts) catch |err| {

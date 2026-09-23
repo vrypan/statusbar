@@ -163,11 +163,12 @@ pub const Command = struct {
     fn start(self: *Command, io: std.Io, now_ms: i64) void {
         self.next_ms = now_ms + self.interval_ms;
         const exec = &(self.exec orelse return);
-        var fds: [2]c_int = undefined;
-        if (c.pipe(&fds) != 0) return;
-        sys.setCloexec(fds[0]) catch {};
-        sys.setCloexec(fds[1]) catch {};
-        sys.setNonBlocking(fds[0], true) catch {};
+        const fds = std.Io.Threaded.pipe2(.{ .CLOEXEC = true }) catch return;
+        sys.setNonBlocking(fds[0], true) catch {
+            sys.close(io, fds[0]);
+            sys.close(io, fds[1]);
+            return;
+        };
 
         const pid = c.fork();
         if (pid < 0) {

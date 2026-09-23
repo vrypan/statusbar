@@ -271,7 +271,7 @@ pub const Source = struct {
 
     fn rebuild(self: *Source) bool {
         const cfg = self.cfg;
-        const now = currentTime();
+        const now = currentTime(self.io);
         var changed = false;
         for (cfg.line, 0..) |*line, n| {
             if (self.dirty_rows.len > 0 and !self.dirty_rows[n]) continue;
@@ -326,13 +326,12 @@ fn minTimeout(a: i64, b: i64) i64 {
 /// supported platform.
 const Tm = extern struct { storage: [16]i64 };
 
-extern "c" fn time(t: ?*c.time_t) c.time_t;
 extern "c" fn localtime_r(t: *const c.time_t, result: *Tm) ?*Tm;
 extern "c" fn strftime(s: [*]u8, max: usize, format: [*:0]const u8, tm: *const Tm) usize;
 
-fn currentTime() Tm {
+fn currentTime(io: std.Io) Tm {
     var tm: Tm = std.mem.zeroes(Tm);
-    const now = time(null);
+    const now: c.time_t = @intCast(std.Io.Clock.now(.real, io).toSeconds());
     _ = localtime_r(&now, &tm);
     return tm;
 }
@@ -449,7 +448,7 @@ test "tracked slots need ready commands and suppress baseline-only results" {
     defer content.deinit();
     var overrides: [4][output.max_value]u8 = undefined;
     var override_lens: [4]?usize = @splat(null);
-    var source: Source = .{ .gpa = std.testing.allocator, .io = undefined, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &override_lens };
+    var source: Source = .{ .gpa = std.testing.allocator, .io = std.testing.io, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &override_lens };
     _ = source.keepFirstLine(0, "");
     try std.testing.expect(!source.slotContentEligible(0, 0, 0));
     _ = source.keepFirstLine(1, "first");
@@ -516,7 +515,7 @@ test "partial startup geometry and same-text overrides establish silent region b
     defer content.deinit();
     var overrides: [2][output.max_value]u8 = undefined;
     var lens: [2]?usize = @splat(null);
-    var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &lens };
+    var source: Source = .{ .gpa = gpa, .io = std.testing.io, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &lens };
     var r = try bar.Renderer.init(gpa);
     defer r.deinit();
     var styles = [_][]const u8{""};
@@ -580,7 +579,7 @@ test "override epochs cover high-numbered slots and coalesced same-text transiti
     defer content.deinit();
     var overrides: [34][output.max_value]u8 = undefined;
     var lens: [34]?usize = @splat(null);
-    var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &lens };
+    var source: Source = .{ .gpa = gpa, .io = std.testing.io, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &lens };
     _ = source.rebuild();
     source.setOverride(33, "x");
     source.setOverride(33, "");
@@ -614,7 +613,7 @@ test "dirty dependencies format only affected command and clock rows" {
         .{ .commands = .{ 0, 2 }, .clock = .{ false, true } },
     };
     var dirty = [_]bool{ true, true };
-    var source: Source = .{ .gpa = gpa, .io = undefined, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &lens, .dependencies = &dependencies, .dirty_rows = &dirty };
+    var source: Source = .{ .gpa = gpa, .io = std.testing.io, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &lens, .dependencies = &dependencies, .dirty_rows = &dirty };
     _ = source.rebuild();
     try std.testing.expectEqual(@as(usize, 2), source.rows_formatted);
 

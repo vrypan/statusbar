@@ -26,9 +26,9 @@ extern "c" fn posix_openpt(oflag: c_int) c_int;
 extern "c" fn grantpt(fd: c_int) c_int;
 extern "c" fn unlockpt(fd: c_int) c_int;
 extern "c" fn ptsname(fd: c_int) ?[*:0]const u8;
-extern "c" fn ttyname_r(fd: c_int, buf: [*]u8, len: usize) c_int;
+// Zig 0.16's std.posix.tcgetpgrp uses the Linux syscall signature and
+// has no std.c backend, so it cannot replace this libc call on macOS.
 extern "c" fn tcgetpgrp(fd: c_int) c.pid_t;
-extern "c" fn gethostname(name: [*]u8, len: usize) c_int;
 
 /// std.posix.T only carries the terminal ioctl numbers on some targets, so the
 /// ones statusbar needs are spelled out here.
@@ -110,9 +110,8 @@ pub fn openInputTty(io: std.Io) !std.Io.File {
     if (builtin.os.tag != .macos) return tty;
     defer tty.close(io);
     if (!isTty(io, 1)) return error.NotATerminal;
-    var name: [1024]u8 = undefined;
-    if (ttyname_r(1, &name, name.len) != 0) return error.TerminalNameUnavailable;
-    const end = std.mem.indexOfScalar(u8, &name, 0) orelse return error.TerminalNameUnavailable;
+    var name: [posix.PATH_MAX]u8 = undefined;
+    const end = try std.Io.File.stdout().realPath(io, &name);
     const input = try std.Io.Dir.openFileAbsolute(io, name[0..end], .{ .mode = .read_write });
     errdefer input.close(io);
     const group = tcgetpgrp(tty.handle);
@@ -126,9 +125,11 @@ pub fn openInputTty(io: std.Io) !std.Io.File {
 /// Returns the local hostname in caller-owned storage. Failure is harmless for
 /// display-only callers, which can conservatively treat named hosts as remote.
 pub fn hostName(buf: []u8) ?[]const u8 {
-    if (buf.len == 0 or gethostname(buf.ptr, buf.len) != 0) return null;
-    const end = std.mem.indexOfScalar(u8, buf, 0) orelse return null;
-    return buf[0..end];
+    var name_buffer: [posix.HOST_NAME_MAX]u8 = undefined;
+    const name = posix.gethostname(&name_buffer) catch return null;
+    if (name.len > buf.len) return null;
+    @memcpy(buf[0..name.len], name);
+    return buf[0..name.len];
 }
 
 // --- descriptors -----------------------------------------------------------
@@ -137,21 +138,8 @@ pub fn hostName(buf: []u8) ?[]const u8 {
 /// ends are non-blocking, because a handler that blocked on a full pipe would
 /// deadlock the process it is meant to be steering, and close-on-exec, so they
 /// never reach the shell.
-pub fn selfPipe(io: std.Io) Error![2]Fd {
-    var fds: [2]c_int = undefined;
-    if (c.pipe(&fds) != 0) return error.Syscall;
-    for (fds) |fd| {
-        const flags = c.fcntl(fd, posix.F.GETFL, @as(c_int, 0));
-        if (flags < 0 or
-            c.fcntl(fd, posix.F.SETFL, flags | O_NONBLOCK) < 0 or
-            c.fcntl(fd, posix.F.SETFD, FD_CLOEXEC) < 0)
-        {
-            close(io, fds[0]);
-            close(io, fds[1]);
-            return error.Syscall;
-        }
-    }
-    return .{ fds[0], fds[1] };
+pub fn selfPipe() Error![2]Fd {
+    return std.Io.Threaded.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true }) catch error.Syscall;
 }
 
 /// Changes only the descriptor's nonblocking flag, preserving every other
@@ -199,18 +187,13 @@ pub const NonBlockingRead = union(enum) {
 
 /// Performs one nonblocking read, distinguishing backpressure from EOF.
 pub fn readNonBlocking(fd: Fd, buf: []u8) Error!NonBlockingRead {
-    while (true) {
-        const result = c.read(fd, buf.ptr, buf.len);
-        if (result > 0) return .{ .bytes = @intCast(result) };
-        if (result == 0) return .eof;
-        switch (posix.errno(result)) {
-            .INTR => continue,
-            .AGAIN => return .would_block,
-            // A pty master reports EIO once its slave has disappeared.
-            .IO => return .eof,
-            else => return error.Syscall,
-        }
-    }
+    const n = posix.read(fd, buf) catch |err| switch (err) {
+        error.WouldBlock => return .would_block,
+        // A pty master reports EIO once its slave has disappeared.
+        error.InputOutput => return .eof,
+        else => return error.Syscall,
+    };
+    return if (n == 0) .eof else .{ .bytes = n };
 }
 
 pub const NonBlockingWrite = union(enum) {
@@ -219,17 +202,13 @@ pub const NonBlockingWrite = union(enum) {
 };
 
 /// Performs one nonblocking write, preserving short-write information.
-pub fn writeNonBlocking(fd: Fd, buf: []const u8) Error!NonBlockingWrite {
-    while (true) {
-        const result = c.write(fd, buf.ptr, buf.len);
-        if (result > 0) return .{ .bytes = @intCast(result) };
-        if (result == 0) return .would_block;
-        switch (posix.errno(result)) {
-            .INTR => continue,
-            .AGAIN => return .would_block,
-            else => return error.Syscall,
-        }
-    }
+pub fn writeNonBlocking(io: std.Io, fd: Fd, buf: []const u8) Error!NonBlockingWrite {
+    const stream: std.Io.File = .{ .handle = fd, .flags = .{ .nonblocking = true } };
+    const n = stream.writeStreaming(io, &.{}, &.{buf}, 1) catch |err| switch (err) {
+        error.WouldBlock => return .would_block,
+        else => return error.Syscall,
+    };
+    return if (n == 0) .would_block else .{ .bytes = n };
 }
 
 /// Writes the whole slice, retrying on interruption and short writes.
@@ -286,4 +265,44 @@ pub fn killGroup(pid: c.pid_t, sig: posix.SIG) void {
 pub fn sleepMs(io: std.Io, ms: u64) void {
     const duration = std.Io.Duration.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms);
     std.Io.sleep(io, duration, .awake) catch {};
+}
+
+test "nonblocking pipes preserve backpressure, bytes, and EOF" {
+    const io = std.testing.io;
+    const fds = try selfPipe();
+    defer close(io, fds[0]);
+    var writer_open = true;
+    defer if (writer_open) close(io, fds[1]);
+
+    var buffer: [4096]u8 = undefined;
+    try std.testing.expectEqual(NonBlockingRead.would_block, try readNonBlocking(fds[0], &buffer));
+    const payload = "x" ** 4096;
+    var written: usize = 0;
+    while (true) {
+        switch (try writeNonBlocking(io, fds[1], payload)) {
+            .would_block => break,
+            .bytes => |n| {
+                try std.testing.expect(n > 0 and n <= payload.len);
+                written += n;
+                // Bound the test if writes unexpectedly never report backpressure.
+                try std.testing.expect(written <= 16 * 1024 * 1024);
+            },
+        }
+    }
+    try std.testing.expect(written > 0);
+    var received: usize = 0;
+    while (true) {
+        switch (try readNonBlocking(fds[0], &buffer)) {
+            .would_block => break,
+            .eof => return error.TestUnexpectedResult,
+            .bytes => |n| {
+                try std.testing.expectEqualSlices(u8, payload[0..n], buffer[0..n]);
+                received += n;
+            },
+        }
+    }
+    try std.testing.expectEqual(written, received);
+    close(io, fds[1]);
+    writer_open = false;
+    try std.testing.expectEqual(NonBlockingRead.eof, try readNonBlocking(fds[0], &buffer));
 }
