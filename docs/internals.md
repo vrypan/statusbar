@@ -58,6 +58,12 @@ shell
 
 ## Rendering the bar
 
+Prepared highlight ranges retain their most recently sampled RGB pair and
+animation step. Neighboring cells sharing a range and step reuse the color
+calculation while keeping their own attributes and reverse-video handling.
+The benchmark includes 64- and 200-character tracked labels to measure this
+reuse as well as the existing distinct-color and multi-region workloads.
+
 The terminology and scheduling contract for content updates, effects, frames,
 and terminal writes is described in the [display and animation
 model](display-model.md).

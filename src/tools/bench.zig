@@ -7,9 +7,9 @@ const Output = @import("output").Output;
 const Input = @import("input").Input;
 const bar = @import("bar");
 
-fn measuredContent(content: *bar.Content, colors: usize, regions: usize) !void {
+fn measuredContent(content: *bar.Content, colors: usize, regions: usize, region_chars: usize) !void {
     if (regions > 0) {
-        var raw: [128]u8 = undefined;
+        var raw: [bar.max_line_bytes]u8 = undefined;
         var len: usize = 0;
         var tracks: bar.Tracks = .{};
         const left = (regions + 1) / 2;
@@ -18,10 +18,11 @@ fn measuredContent(content: *bar.Content, colors: usize, regions: usize) !void {
                 raw[len] = '\t';
                 len += 1;
             }
-            tracks.spans[n] = .{ .owner = if (n < left) .left else .right, .id = @intCast(if (n < left) n else n - left), .start = @intCast(len), .end = @intCast(len + 1) };
-            raw[len] = 'x';
-            raw[len + 1] = ' ';
-            len += 2;
+            tracks.spans[n] = .{ .owner = if (n < left) .left else .right, .id = @intCast(if (n < left) n else n - left), .start = @intCast(len), .end = @intCast(len + region_chars) };
+            @memset(raw[len..][0..region_chars], 'x');
+            len += region_chars;
+            raw[len] = ' ';
+            len += 1;
         }
         tracks.len = regions;
         _ = content.setTrackedLine(0, raw[0..len], tracks);
@@ -66,12 +67,12 @@ fn assertRestored(renderer: *bar.Renderer, now: i64) !void {
 
 /// One fixture per workload; allocation warm-up is separate from timed color
 /// preparation. "Warm" keeps the cache, not a guarantee that all pairs fit it.
-fn adaptiveBench(io: std.Io, out: *std.Io.Writer, colors: usize, regions: usize) !void {
+fn adaptiveBench(io: std.Io, out: *std.Io.Writer, colors: usize, regions: usize, region_chars: usize) !void {
     var counted = std.testing.FailingAllocator.init(std.heap.smp_allocator, .{});
     const row_count = if (regions > 0) 1 else (colors + 15) / 16;
     var content = try bar.Content.init(counted.allocator(), row_count);
     defer content.deinit();
-    try measuredContent(&content, colors, regions);
+    try measuredContent(&content, colors, regions, region_chars);
     var renderer = try bar.Renderer.init(counted.allocator());
     defer renderer.deinit();
     renderer.palette.foreground = .{ 190, 180, 210 };
@@ -117,7 +118,7 @@ fn adaptiveBench(io: std.Io, out: *std.Io.Writer, colors: usize, regions: usize)
     try assertRestored(&renderer, renderer.highlight.duration());
     const allocs = counted.allocations;
     const allocated = counted.allocated_bytes;
-    try out.print("adaptive {s} setup pairs={d} regions={d} cols={d}: warmup_allocs={d} warmup_bytes={d}\n", .{ if (regions > 0) "regions" else "colors", distinct, visible_regions, renderer.cols, allocs - before_warmup_allocs, allocated - before_warmup_bytes });
+    try out.print("adaptive {s} setup pairs={d} regions={d} chars={d} cols={d}: warmup_allocs={d} warmup_bytes={d}\n", .{ if (regions > 0) "regions" else "colors", distinct, visible_regions, region_chars, renderer.cols, allocs - before_warmup_allocs, allocated - before_warmup_bytes });
     const parsed = renderer.parsed_rows;
     inline for (.{ "cold", "warm" }) |mode| {
         renderer.pulse_cache.metrics = .{};
@@ -160,7 +161,7 @@ fn adaptiveBench(io: std.Io, out: *std.Io.Writer, colors: usize, regions: usize)
         if (renderer.parsed_rows != parsed) return error.UnexpectedParsing;
         if (counted.allocations != allocs or counted.allocated_bytes != allocated or renderer.budget.peak > 64 * 1024 * 1024) return error.RendererRegression;
         const metrics = renderer.pulse_cache.metrics;
-        try out.print("adaptive {s} {s} pairs={d} regions={d} cols={d}: prepare_mean={d} ns mean={d} ns/frame max={d} ns/frame frames={d} bytes/frame={d} preparations={d} hits={d} misses={d} safety_samples={d} cells_visited={d} prepare_allocs={d} frame_allocs=0 bytes=0 storage={d} peak={d}\n", .{ if (regions > 0) "regions" else "colors", mode, distinct, visible_regions, renderer.cols, @divTrunc(prepare_elapsed, repeats), @divTrunc(elapsed, samples), maximum, samples, bytes / samples, metrics.preparations, metrics.hits, metrics.misses, metrics.safety_samples, renderer.effect_cells_visited, metrics.prepare_allocations, counted.allocated_bytes - counted.freed_bytes, renderer.budget.peak });
+        try out.print("adaptive {s} {s} pairs={d} regions={d} chars={d} cols={d}: prepare_mean={d} ns mean={d} ns/frame max={d} ns/frame frames={d} bytes/frame={d} preparations={d} hits={d} misses={d} safety_samples={d} color_samples={d} cells_visited={d} prepare_allocs={d} frame_allocs=0 bytes=0 storage={d} peak={d}\n", .{ if (regions > 0) "regions" else "colors", mode, distinct, visible_regions, region_chars, renderer.cols, @divTrunc(prepare_elapsed, repeats), @divTrunc(elapsed, samples), maximum, samples, bytes / samples, metrics.preparations, metrics.hits, metrics.misses, metrics.safety_samples, metrics.samples, renderer.effect_cells_visited, metrics.prepare_allocations, counted.allocated_bytes - counted.freed_bytes, renderer.budget.peak });
     }
 }
 
@@ -365,8 +366,9 @@ pub fn main(init: std.process.Init) !u8 {
     }
     try renderBench(init.io, stdout);
     try regionBench(init.io, stdout);
-    for ([_]usize{ 1, 16, 17, 64 }) |colors| try adaptiveBench(init.io, stdout, colors, 0);
-    for ([_]usize{ 1, 8, 32 }) |regions| try adaptiveBench(init.io, stdout, 1, regions);
+    for ([_]usize{ 1, 16, 17, 64 }) |colors| try adaptiveBench(init.io, stdout, colors, 0, 1);
+    for ([_]usize{ 1, 8, 32 }) |regions| try adaptiveBench(init.io, stdout, 1, regions, 1);
+    for ([_]usize{ 64, 200 }) |chars| try adaptiveBench(init.io, stdout, 1, 1, chars);
     try stdout.flush();
     return 0;
 }

@@ -15,6 +15,7 @@ pub const Metrics = if (measuring) struct {
     misses: usize = 0,
     safety_samples: usize = 0,
     prepare_allocations: usize = 0,
+    samples: usize = 0,
 } else struct {};
 
 fn linear(value: u8) f64 {
@@ -172,7 +173,16 @@ const Range = struct {
 /// pulse count. The next generation reuses matching ranges and then replaces
 /// the previous generation, so no stale or unreferenced history accumulates.
 pub const Cache = struct {
-    const Entry = struct { text: Rgb, back: Rgb, pulses: u8, range: Range };
+    const Entry = struct {
+        text: Rgb,
+        back: Rgb,
+        pulses: u8,
+        range: Range,
+        // A row commonly repeats one color pair across many glyphs. Retain
+        // only its most recent sample, keeping storage independent of steps.
+        sample_step: ?u8 = null,
+        sample_pair: Pair = undefined,
+    };
     entries: std.ArrayList(Entry) = .empty,
     preparing: std.ArrayList(Entry) = .empty,
     metrics: Metrics = .{},
@@ -255,7 +265,14 @@ pub const Cache = struct {
         const entry = index orelse return fallback(base);
         if (step == 0) return base;
         if (measuring) self.metrics.hits += 1;
-        const pair = self.entries.items[entry].range.sample(repeatedAmount(step, pulses) / 0.13);
+        const prepared = &self.entries.items[entry];
+        std.debug.assert(prepared.pulses == pulses);
+        if (prepared.sample_step == null or prepared.sample_step.? != step) {
+            prepared.sample_pair = prepared.range.sample(repeatedAmount(step, pulses) / 0.13);
+            prepared.sample_step = @intCast(step);
+            if (measuring) self.metrics.samples += 1;
+        }
+        const pair = prepared.sample_pair;
         var result = base;
         result.fg = .{ .rgb = if (base.reverse) pair.back else pair.text };
         result.bg = .{ .rgb = if (base.reverse) pair.text else pair.back };
@@ -266,6 +283,32 @@ fn fallback(base: styled.Style) styled.Style {
     var result = base;
     result.bold = true;
     return result;
+}
+
+test "sample cache shares colors without sharing attributes or animation steps" {
+    var palette: terminal.Palette = .{ .foreground = .{ 190, 180, 210 }, .background = .{ 10, 10, 10 } };
+    var cache: Cache = .{};
+    defer cache.deinit(std.testing.allocator);
+    try cache.reserve(std.testing.allocator, 2);
+    const base: styled.Style = .{};
+    const reversed: styled.Style = .{ .fg = .{ .rgb = palette.background.? }, .bg = .{ .rgb = palette.foreground.? }, .reverse = true, .bold = true };
+    cache.beginPreparation();
+    const index = cache.prepare(base, &palette, 2);
+    try std.testing.expectEqual(index, cache.prepare(reversed, &palette, 2));
+    cache.finishPreparation();
+    for (0..100) |_| {
+        try std.testing.expectEqualDeep(cache.apply(base, &palette, 7, 2), cache.sample(index, base, 7, 2));
+        try std.testing.expectEqualDeep(cache.apply(reversed, &palette, 7, 2), cache.sample(index, reversed, 7, 2));
+    }
+    try std.testing.expectEqual(@as(usize, 1), cache.metrics.samples);
+    for ([_]usize{ 8, 7, 0, 79, 80 }) |step| {
+        try std.testing.expectEqualDeep(cache.apply(base, &palette, step, 2), cache.sample(index, base, step, 2));
+    }
+    palette.foreground = .{ 100, 200, 180 };
+    cache.beginPreparation();
+    const changed = cache.prepare(base, &palette, 1);
+    cache.finishPreparation();
+    try std.testing.expectEqualDeep(cache.apply(base, &palette, 7, 1), cache.sample(changed, base, 7, 1));
 }
 
 test "range cache reuses resolved colors and invalidates colors or pulses" {
