@@ -1,7 +1,32 @@
 # Changelog
 
-Changes are grouped by version tag, newest first. `dev` contains commits
-since the latest version tag. Entries preserve commit subjects verbatim.
+Changes are grouped by version, newest first. Unreleased versions contain
+commits since the latest version tag. Entries preserve commit subjects verbatim.
+
+## v0.3.1 (unreleased)
+
+- Bump version to 0.3.1
+- Upgrade zecli to 0.4.4
+- Clarify config help and present print choices consistently
+- Add startup and current config snapshots to config printing
+- Use Zig APIs for I/O, pipes, and system queries
+- Support stdin configs and remove exec-mode flags
+- Document XDG configuration path lookup accurately
+- Clarify command help and add practical examples
+- Preserve highlight preparation across untracked row updates
+- Reuse highlight color samples across matching glyphs
+- Stop idle clock work for overridden slots and literal percents
+- Avoid rerunning status commands on height-only resizes
+- Update README
+- Add Nushell integration sample
+- Drain PTY while reaping integration test sessions
+- Remove unused code
+- End the session when the child exits
+- Hold config requests while the child's cursor is saved
+- Clamp mouse motion and releases on the bar to the child
+- Wake the loop on SIGCHLD to reap finished commands
+- Remove the Ctrl-X Ctrl-R config path editor
+- Remove nbsp from config that broke formatting
 
 ## v0.3.0
 

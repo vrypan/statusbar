@@ -1,6 +1,6 @@
 .{
     .name = .statusbar,
-    .version = "0.3.0",
+    .version = "0.3.1",
     .fingerprint = 0x7b494927cd0cc4b4,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
