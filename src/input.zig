@@ -4,7 +4,9 @@
 //! rows sit at the top of the screen, where the terminal numbers them the
 //! same way. Two replies still need care. The text-area size (XTWINOPS 18)
 //! counts the bar's rows, which the child doesn't have, and mouse events on
-//! the bar itself are dropped: the child has no row to receive them on.
+//! the bar itself have no row in the child. Presses there are dropped;
+//! motion and releases are moved to the child's last row, as a terminal
+//! clamps them to its edge, so a drag that ends over the bar still ends.
 //!
 //! A report split across reads is held until it completes. The proxy calls
 //! `flush` if nothing follows promptly, so an Alt-[ typed by hand is never
@@ -15,6 +17,10 @@ const std = @import("std");
 const max_seq = 32;
 const max_params = 4;
 const esc = 0x1b;
+/// Mouse button bits shared by the X10 and SGR encodings.
+const mouse_motion = 32;
+const mouse_wheel = 64;
+const mouse_release = 3;
 
 pub const Input = struct {
     /// Bar rows below the child's `rows`.
@@ -102,12 +108,19 @@ pub const Input = struct {
                     // X10 reports are a fixed six bytes, below max_seq.
                     self.hold(b);
                     if (self.seq_len == 6) {
+                        const button = self.seq[3] -% 32;
                         const row = self.seq[5] -% 32;
-                        if (self.onBar(row)) {
+                        // X10 has no release code per button: button 3 is a release.
+                        const kept = button & mouse_motion != 0 or
+                            (button & mouse_wheel == 0 and button & 3 == mouse_release);
+                        if (!self.onBar(row)) {
+                            self.flush(sink);
+                        } else if (kept) {
+                            self.seq[5] = @intCast(@min(@as(u32, self.rows) + 32, 255));
+                            self.flush(sink);
+                        } else {
                             self.seq_len = 0;
                             self.state = .ground;
-                        } else {
-                            self.flush(sink);
                         }
                     }
                 },
@@ -147,8 +160,9 @@ pub const Input = struct {
 
         switch (final) {
             'M', 'm' => {
-                if (marker == '<' and count == 3 and self.onBar(params[2])) return;
-                return sink.write(seq);
+                if (marker != '<' or count != 3 or !self.onBar(params[2])) return sink.write(seq);
+                if (final == 'M' and params[0] & mouse_motion == 0) return;
+                params[2] = self.rows;
             },
             't' => {
                 if (marker != 0 or count != 3 or params[0] != 8 or self.bar == 0 or params[1] <= self.bar) return sink.write(seq);
@@ -248,11 +262,22 @@ test "text area size excludes the bar" {
     try expectTranslation("\x1b[8;24;80t", "\x1b[8;22;80t");
 }
 
-test "mouse events on the bar vanish" {
+test "mouse presses on the bar vanish" {
     try expectTranslation("\x1b[<0;5;22M\x1b[<0;5;22m", "\x1b[<0;5;22M\x1b[<0;5;22m");
     try expectTranslation("x\x1b[<0;5;23My", "xy");
+    try expectTranslation("\x1b[<64;5;23M", ""); // wheel
     try expectTranslation("\x1b[M !\x36", "\x1b[M !\x36"); // row 22: the child's last row
     try expectTranslation("\x1b[M !\x37z", "z"); // row 23: the bar
+    try expectTranslation("\x1b[M` \x37", ""); // wheel on the bar
+}
+
+test "a drag that ends on the bar ends on the child's last row" {
+    try expectTranslation(
+        "\x1b[<0;5;20M\x1b[<32;5;23M\x1b[<0;6;24m",
+        "\x1b[<0;5;20M\x1b[<32;5;22M\x1b[<0;6;22m",
+    );
+    // X10: motion with button 1 held, then a release.
+    try expectTranslation("\x1b[M@!\x37\x1b[M#\"\x38", "\x1b[M@!\x36\x1b[M#\"\x36");
 }
 
 test "a lone escape key is not held" {
