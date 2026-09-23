@@ -592,6 +592,38 @@ interval = 0.2
     print("geometry command results establish a silent baseline")
 
 
+def check_resize_command_runs(binary):
+    with tempfile.TemporaryDirectory(prefix="statusbar-resize-") as folder:
+        runs = os.path.join(folder, "runs")
+        config_path = os.path.join(folder, "config")
+        with open(config_path, "w") as cfg:
+            cfg.write(f'''[line.1]
+left = #(value)
+[command.value]
+run = echo "$STATUSBAR_COLUMNS" >> {shlex.quote(runs)}; printf 'cols:%s' "$STATUSBAR_COLUMNS"
+interval = 60
+''')
+        child = 'while IFS= read -r command; do [ "$command" = EXIT ] && exit 0; done'
+        pid, master = spawn([binary, "-c", config_path, "--", "/bin/sh", "-c", child])
+        try:
+            read_until(master, b"", b"cols:80")
+            for rows in (30, 30):
+                resize(master, rows)
+                os.kill(pid, signal.SIGWINCH)
+                read_until(master, b"", b"cols:80")
+                # Give an accidentally scheduled process time to record a run.
+                time.sleep(0.15)
+                with open(runs) as file:
+                    assert file.read().splitlines() == ["80"]
+            resize(master, 30, 60)
+            read_until(master, b"", b"cols:60")
+            with open(runs) as file:
+                assert file.read().splitlines() == ["80", "60"]
+        finally:
+            stop(pid, master)
+    print("commands rerun only for width changes")
+
+
 def check_adaptive_palette(binary):
     """Emulate terminal queries, including a subsequent child-owned query."""
     with tempfile.TemporaryDirectory(prefix="statusbar-palette-") as folder:
@@ -970,6 +1002,7 @@ def main():
     check_tracking(binary)
     check_tracking(binary, colors=True)
     check_geometry_results_do_not_highlight(binary)
+    check_resize_command_runs(binary)
     check_adaptive_palette(binary)
     check_logging(binary)
     check_osc_config(binary)

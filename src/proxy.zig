@@ -843,13 +843,16 @@ const Proxy = struct {
         }
         if (!resized) return;
         const ws = sys.getWinsize(stdin_fd) catch return;
+        const width_changed = ws.col != self.layout.cols;
         self.layout = Layout.of(ws, self.runtime.lines);
         sys.setWinsize(self.master, &self.layout.child) catch {};
         self.output.resize(self.layout.bar, self.layout.child.row);
         self.input.bar = self.layout.bar;
         self.input.rows = self.layout.child.row;
-        self.runtime.source.setColumns(ws.col);
-        self.runtime.source.refreshGeometry(now_ms);
+        if (width_changed) {
+            self.runtime.source.setColumns(ws.col);
+            self.runtime.source.refreshGeometry(now_ms);
+        }
         try self.runtime.renderer.resize(self.layout.bar, self.layout.cols);
         try self.runtime.renderer.relayout(&self.runtime.source.content, &self.runtime.look);
         // Terminals drop the margins on resize; put them back before the
