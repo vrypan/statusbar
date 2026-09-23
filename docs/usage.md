@@ -62,7 +62,8 @@ session. See [set.md](set.md).
 reports the working directory with OSC 7 and moves Starship's prompt into
 slot 3 when Starship is available. Both features default to `true`. Zsh
 uses `eval "$(statusbar init zsh)"`; Fish uses `statusbar init fish | source`
-after Starship's own initialization. See [starship.md](starship.md).
+after Starship's own initialization. Nushell can source
+[the sample integration](../samples/statusbar.nu); see [starship.md](starship.md).
 
 Use `--starship=false` for directory reporting alone, or `--report-cwd=false`
 if another integration already reports directories. `--starship-slot N`

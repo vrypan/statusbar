@@ -221,6 +221,13 @@ starship init fish | source
 statusbar init fish | source
 ```
 
+For Nushell, copy [the integration sample](../samples/statusbar.nu) to
+`~/.config/nushell/statusbar.nu`, then source it from `config.nu`:
+
+```nu
+source ~/.config/nushell/statusbar.nu
+```
+
 By default this uses slot 3, the left side of line 2. Choose a different slot
 when designing a larger layout:
 

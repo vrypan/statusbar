@@ -69,6 +69,10 @@ starship init fish | source
 statusbar init fish | source
 ```
 
+For Nushell, copy [samples/statusbar.nu](samples/statusbar.nu) to
+`~/.config/nushell/statusbar.nu`, then add
+`source ~/.config/nushell/statusbar.nu` to `config.nu`.
+
 ## Learn more
 
 Start with the [user guide](docs/README.md) for a practical setup: one-command

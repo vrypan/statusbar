@@ -305,6 +305,68 @@ def check_fish(binary):
     print("fish integration passed")
 
 
+def check_nu(binary):
+    nu = shutil.which("nu")
+    if nu is None:
+        print("Nushell integration skipped: nu unavailable")
+        return
+
+    env = os.environ.copy()
+    env["STATUSBAR_LINES"] = "3"
+    with tempfile.TemporaryDirectory() as directory:
+        os.symlink(binary, os.path.join(directory, "statusbar"))
+        starship = os.path.join(directory, "starship")
+        with open(starship, "w", encoding="utf-8") as file:
+            file.write("#!/bin/sh\ncase $STARSHIP_TEST_MODE in\n  multi) printf 'bar%%literal\\nprompt' ;;\n  one) printf 'one%%literal' ;;\nesac\n")
+        os.chmod(starship, 0o755)
+        nenv = env.copy()
+        nenv["PATH"] = directory + os.pathsep + nenv.get("PATH", "")
+
+        sample = os.path.join(os.path.dirname(__file__), "..", "samples", "statusbar.nu")
+        with open(sample, "rb") as file:
+            integration = file.read()
+        for slot in (3, 5):
+            script_path = os.path.join(directory, "statusbar.nu")
+            with open(script_path, "wb") as file:
+                file.write(integration.replace(b"set 3 --", f"set {slot} --".encode()))
+            nenv["STARSHIP_TEST_MODE"] = "multi"
+            script = (
+                '$env.CMD_DURATION_MS = "0823"; $env.LAST_EXIT_CODE = 0; '
+                f'source {script_path}; let prompt = (do $env.PROMPT_COMMAND); print $prompt'
+            )
+            code, data = capture_pty([nu, "-n", "-c", script], nenv)
+            assert code == 0, data
+            assert osc_value(data, slot) == b"bar%literal", data
+            assert b"prompt" in data, data
+
+        nenv["STARSHIP_TEST_MODE"] = "one"
+        code, data = capture_pty([nu, "-n", "-c", script], nenv)
+        assert code == 0 and b"SetUserVar=StatusBarSlot" not in data, data
+        assert b"one%literal" in data, data
+
+        nenv["STARSHIP_TEST_MODE"] = "multi"
+        one_row_env = nenv.copy()
+        one_row_env["STATUSBAR_LINES"] = "1"
+        code, data = capture_pty([nu, "-n", "-c", script], one_row_env)
+        assert code == 0 and b"SetUserVar=StatusBarSlot" not in data, data
+        assert b"bar%literal\r\nprompt" in data, data
+
+        target = os.path.join(directory, "space % café")
+        os.mkdir(target)
+        cwd_script = (
+            f'source {script_path}; source {script_path}; cd "{target}"; '
+            'print ($env.config.hooks.pre_prompt | length); '
+            'do ($env.config.hooks.pre_prompt | last)'
+        )
+        code, data = capture_pty([nu, "-n", "-c", cwd_script], nenv)
+        assert code == 0 and b"1\r\n" in data, data
+        report = re.search(rb"\x1b\]7;file://(/.*?)\x07", data)
+        assert report is not None, data
+        assert urllib.parse.unquote_to_bytes(report[1].decode()) == target.encode(), data
+
+    print("Nushell integration passed")
+
+
 def check_init_features(binary):
     env = os.environ.copy()
     env["STATUSBAR_LINES"] = "1"
@@ -903,6 +965,7 @@ def main():
     check_osc7_titles(binary)
     check_zsh(binary)
     check_fish(binary)
+    check_nu(binary)
     check_init_features(binary)
     check_tracking(binary)
     check_tracking(binary, colors=True)

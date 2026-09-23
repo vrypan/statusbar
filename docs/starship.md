@@ -74,6 +74,29 @@ to the bar. Starship's right prompt remains untouched. Bash is not supported
 for prompt relocation; see the [user guide](README.md#put-live-context-in-a-slot)
 for a simple Bash slot hook instead.
 
+## Nushell
+
+Copy [samples/statusbar.nu](../samples/statusbar.nu) to
+`~/.config/nushell/statusbar.nu`, then add this line to
+`~/.config/nushell/config.nu`:
+
+```nu
+source ~/.config/nushell/statusbar.nu
+```
+
+Start a new shell. The sourced file checks for a statusbar session, so it does
+nothing in ordinary Nushell sessions. To use another slot, edit the `set 3`
+command in the sample. If another integration already emits OSC 7, remove the
+`pre_prompt` hook block from the sample. To keep only directory reporting,
+remove the Starship block.
+
+Nushell's prompt closure sends every Starship line except the last to the
+selected slot, leaving the final line and Starship's optional leading blank
+line in the terminal. It also initializes Starship's right prompt and emits
+OSC 7 before each prompt. You do not need to source `starship init nu` separately.
+If you already source it, put the statusbar source line after it so statusbar's
+left prompt closure takes effect.
+
 ## Doing it by hand
 
 The sections below build the same thing from parts, for when you want a
