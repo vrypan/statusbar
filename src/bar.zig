@@ -142,9 +142,13 @@ pub const Renderer = struct {
     palette: terminal_palette.Palette = .{},
     palette_revision: usize = 0,
     pulse_cache: relative_highlight.Cache = .{},
+    pulse_ranges_dirty: bool = true,
+    prepared_palette_revision: usize = 0,
+    prepared_pulses: u8 = 0,
     /// Cells inspected by effect restore/patch traversals since last reset.
     /// Absent from production builds; excludes parsing and paint comparison.
     effect_cells_visited: if (relative_highlight.measuring) usize else void = if (relative_highlight.measuring) 0 else {},
+    pulse_preparation_generations: if (relative_highlight.measuring) usize else void = if (relative_highlight.measuring) 0 else {},
 
     pub fn init(parent: std.mem.Allocator) !Renderer {
         const budget = try parent.create(cells.Budget);
@@ -190,18 +194,23 @@ pub const Renderer = struct {
         gpa.free(self.rows);
         self.rows = rows;
         self.cols = cols;
+        self.pulse_ranges_dirty = true;
     }
     /// Rebuild only changed raw rows. Invalidation means presentation changes,
     /// never screen damage. Summaries describe this preparation only.
     pub fn prepare(self: *Renderer, content: *const Content, look: *const Look, invalidate: bool) !void {
         const gpa = self.budget.allocator();
         self.parsed_rows = 0;
+        if (invalidate) self.pulse_ranges_dirty = true;
         for (self.rows, 0..) |*row, n| {
             row.summary = .{};
             row.region_changed = @splat(@splat(false));
             const raw = content.line(n);
             const tracks = content.tracks[n];
             if (!invalidate and !row.layout_invalid and row.raw_len != null and std.mem.eql(u8, raw, row.raw[0..row.raw_len.?]) and Tracks.eql(tracks, row.tracks)) continue;
+            // Preserve range indices in untouched tracked rows when only an
+            // untracked row changes. Both sides matter when tracking is removed.
+            if (tracks.len > 0 or row.tracks.len > 0) self.pulse_ranges_dirty = true;
             self.parsed_rows += 1;
             try self.layout(&self.staging, raw, tracks, look.styles[n], look.rules[n], look.palette);
             if (!invalidate and row.raw_len != null) {
@@ -269,10 +278,15 @@ pub const Renderer = struct {
         var capacity: usize = 128;
         for (self.rows) |row| capacity = try std.math.add(usize, capacity, row.output_bound);
         try self.writer.ensureTotalCapacity(capacity);
-        try self.preparePulseRanges();
+        if (self.pulsePreparationStale()) try self.preparePulseRanges();
+    }
+
+    fn pulsePreparationStale(self: *const Renderer) bool {
+        return self.pulse_ranges_dirty or self.prepared_palette_revision != self.palette.revision or self.prepared_pulses != self.highlight.pulses;
     }
 
     fn preparePulseRanges(self: *Renderer) !void {
+        if (relative_highlight.measuring) self.pulse_preparation_generations += 1;
         var count: usize = 0;
         for (self.rows) |row| for (row.base.cells.items) |cell| {
             if (cell.kind == .lead and cell.region != null) count += 1;
@@ -286,6 +300,9 @@ pub const Renderer = struct {
             } else cell.highlight_range = null;
         };
         self.pulse_cache.finishPreparation();
+        self.pulse_ranges_dirty = false;
+        self.prepared_palette_revision = self.palette.revision;
+        self.prepared_pulses = self.highlight.pulses;
     }
 
     /// Benchmark/test hook for measuring preparation separately from frames.
@@ -393,9 +410,9 @@ pub const Renderer = struct {
     /// Apply/expire appearance independently of source polling and repair.
     pub fn advanceHighlights(self: *Renderer, now_ms: i64) !bool {
         var changed = false;
-        if (self.palette_revision != self.palette.revision) {
+        if (self.palette_revision != self.palette.revision or self.prepared_pulses != self.highlight.pulses) {
             self.palette_revision = self.palette.revision;
-            try self.preparePulseRanges();
+            if (self.pulsePreparationStale()) try self.preparePulseRanges();
             for (self.rows) |*row| {
                 for (0..2) |side| for (0..16) |id| {
                     if (row.highlight_until[side][id]) |deadline| {
@@ -621,6 +638,69 @@ pub fn paint(w: *std.Io.Writer, content: *const Content, look: *const Look, firs
     try renderer.resize(lines, cols);
     try renderer.prepare(content, look, true);
     try w.writeAll(try renderer.build(first_row, region, autowrap, true));
+}
+
+test "untracked row updates preserve pulse generations and active effects" {
+    const gpa = std.testing.allocator;
+    var content = try Content.init(gpa, 2);
+    defer content.deinit();
+    var tracks: Tracks = .{};
+    tracks.spans[0] = .{ .owner = .left, .id = 0, .start = 0, .end = 2 };
+    tracks.len = 1;
+    _ = content.setTrackedLine(1, "aa", tracks);
+    var styles = [_][]const u8{ "", "" };
+    var rules = [_]?[]const u8{ null, null };
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var r = try Renderer.init(gpa);
+    defer r.deinit();
+    r.palette.foreground = .{ 190, 180, 210 };
+    r.palette.background = .{ 10, 10, 10 };
+    try r.resize(2, 80);
+    try r.acceptContent(&content, &look);
+    _ = content.setTrackedLine(1, "bb", tracks);
+    try r.acceptContent(&content, &look);
+    r.highlightChange(1, 0, 0);
+    _ = try r.compose(30);
+    const deadline = r.rows[1].highlight_until[0][0];
+    const index = r.rows[1].base.cells.items[0].highlight_range;
+    var generations = r.pulse_preparation_generations;
+    for ([_][]const u8{ "clock A", "clock B" }) |value| {
+        _ = content.setLine(0, value);
+        try r.acceptContent(&content, &look);
+        try std.testing.expectEqual(generations, r.pulse_preparation_generations);
+        try std.testing.expectEqual(index, r.rows[1].base.cells.items[0].highlight_range);
+        try std.testing.expectEqual(deadline, r.rows[1].highlight_until[0][0]);
+    }
+    _ = try r.compose(60);
+    try std.testing.expect(!r.rows[1].base.visuallyEqual(r.rows[1].desired));
+    r.palette.foreground = .{ 120, 200, 180 };
+    r.palette.revision += 1;
+    try r.acceptContent(&content, &look);
+    generations += 1;
+    try std.testing.expectEqual(generations, r.pulse_preparation_generations);
+    _ = try r.compose(60);
+    try std.testing.expectEqual(generations, r.pulse_preparation_generations);
+    try std.testing.expectEqual(deadline, r.rows[1].highlight_until[0][0]);
+    _ = try r.compose(r.highlight.duration());
+    r.highlight.pulses = 1;
+    try r.acceptContent(&content, &look);
+    generations += 1;
+    try std.testing.expectEqual(generations, r.pulse_preparation_generations);
+    try r.resize(2, 60);
+    try r.acceptContent(&content, &look);
+    generations += 1;
+    try std.testing.expectEqual(generations, r.pulse_preparation_generations);
+    _ = content.setTrackedLine(1, "bb", .{});
+    try r.acceptContent(&content, &look);
+    generations += 1;
+    try std.testing.expectEqual(generations, r.pulse_preparation_generations);
+    try std.testing.expectEqual(@as(usize, 0), r.pulse_cache.entries.items.len);
+    _ = content.setTrackedLine(1, "bb", tracks);
+    try r.acceptContent(&content, &look);
+    try std.testing.expectEqual(@as(usize, 1), r.pulse_cache.entries.items.len);
+    try r.resize(1, 60); // Removing the only tracked row must release its generation.
+    try r.acceptContent(&content, &look);
+    try std.testing.expectEqual(@as(usize, 0), r.pulse_cache.entries.items.len);
 }
 
 test "incremental base, desired patches and painted snapshots" {

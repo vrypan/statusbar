@@ -165,6 +165,39 @@ fn adaptiveBench(io: std.Io, out: *std.Io.Writer, colors: usize, regions: usize,
     }
 }
 
+fn unrelatedRowBench(io: std.Io, out: *std.Io.Writer) !void {
+    var counted = std.testing.FailingAllocator.init(std.heap.smp_allocator, .{});
+    var content = try bar.Content.init(counted.allocator(), 4);
+    defer content.deinit();
+    var renderer = try bar.Renderer.init(counted.allocator());
+    defer renderer.deinit();
+    renderer.palette.foreground = .{ 190, 180, 210 };
+    renderer.palette.background = .{ 10, 10, 10 };
+    var tracks: bar.Tracks = .{};
+    tracks.spans[0] = .{ .owner = .left, .id = 0, .start = 0, .end = 200 };
+    tracks.len = 1;
+    for (1..4) |row| _ = content.setTrackedLine(row, "x" ** 200, tracks);
+    var styles = [_][]const u8{ "", "", "", "" };
+    var rules = [_]?[]const u8{ null, null, null, null };
+    const look: bar.Look = .{ .styles = &styles, .rules = &rules };
+    try renderer.resize(4, 512);
+    for (0..4) |n| {
+        _ = content.setLine(0, if (n % 2 == 0) "clock A" else "clock B");
+        try renderer.acceptContent(&content, &look);
+    }
+    renderer.pulse_preparation_generations = 0;
+    const allocations = counted.allocations;
+    const repeats = 10000;
+    const start = std.Io.Clock.now(.awake, io).toNanoseconds();
+    for (0..repeats) |n| {
+        _ = content.setLine(0, if (n % 2 == 0) "clock A" else "clock B");
+        try renderer.acceptContent(&content, &look);
+    }
+    const elapsed = std.Io.Clock.now(.awake, io).toNanoseconds() - start;
+    if (counted.allocations != allocations or renderer.pulse_preparation_generations != 0) return error.RendererRegression;
+    try out.print("untracked row beside 600 tracked glyphs: {d} ns/update, generations={d}, allocs=0\n", .{ @divTrunc(elapsed, repeats), renderer.pulse_preparation_generations });
+}
+
 fn renderBench(io: std.Io, out: *std.Io.Writer) !void {
     var counted = std.testing.FailingAllocator.init(std.heap.smp_allocator, .{});
     const gpa = counted.allocator();
@@ -365,6 +398,7 @@ pub fn main(init: std.process.Init) !u8 {
         try stdout.print("  {s:<7} {d:>8.0} MB/s  (sink {d})\n", .{ @tagName(kind), mb_per_s, sink.total });
     }
     try renderBench(init.io, stdout);
+    try unrelatedRowBench(init.io, stdout);
     try regionBench(init.io, stdout);
     for ([_]usize{ 1, 16, 17, 64 }) |colors| try adaptiveBench(init.io, stdout, colors, 0, 1);
     for ([_]usize{ 1, 8, 32 }) |regions| try adaptiveBench(init.io, stdout, 1, regions, 1);

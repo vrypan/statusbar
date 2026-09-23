@@ -63,6 +63,9 @@ animation step. Neighboring cells sharing a range and step reuse the color
 calculation while keeping their own attributes and reverse-video handling.
 The benchmark includes 64- and 200-character tracked labels to measure this
 reuse as well as the existing distinct-color and multi-region workloads.
+Changes confined to untracked rows preserve the current preparation generation.
+Tracked-row, geometry, palette, and pulse-count changes invalidate it. A separate
+benchmark updates an untracked row alongside 600 unchanged tracked glyphs.
 
 The terminology and scheduling contract for content updates, effects, frames,
 and terminal writes is described in the [display and animation
