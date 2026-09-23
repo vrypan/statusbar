@@ -244,12 +244,25 @@ fn installSignalHandlers() void {
     };
     posix.sigaction(.WINCH, &act, null);
     for (forwarded_signals) |sig| posix.sigaction(sig, &act, null);
+    installChildHandler();
     const ignore: posix.Sigaction = .{
         .handler = .{ .handler = posix.SIG.IGN },
         .mask = posix.sigemptyset(),
         .flags = 0,
     };
     posix.sigaction(.PIPE, &ignore, null);
+}
+
+/// A status command can close its stdout before it exits, leaving nothing
+/// else to wake the loop until the command's deadline. SIGCHLD wakes it to
+/// reap the command and schedule its next run.
+fn installChildHandler() void {
+    const act: posix.Sigaction = .{
+        .handler = .{ .handler = onSignal },
+        .mask = posix.sigemptyset(),
+        .flags = c.SA.NOCLDSTOP,
+    };
+    posix.sigaction(.CHLD, &act, null);
 }
 
 /// Collects bytes for the outer terminal and writes them in one go.
@@ -765,7 +778,12 @@ const Proxy = struct {
         var resized = false;
         for (buf[0..n]) |raw| {
             const s: posix.SIG = @enumFromInt(raw);
-            if (s == .WINCH) resized = true else sys.killGroup(pid, s);
+            // SIGCHLD only wakes the loop; the reaping happens in the source update.
+            switch (s) {
+                .WINCH => resized = true,
+                .CHLD => {},
+                else => sys.killGroup(pid, s),
+            }
         }
         if (!resized) return;
         const ws = sys.getWinsize(stdin_fd) catch return;
@@ -822,6 +840,35 @@ fn findCursorReport(bytes: []const u8) ?CursorReport {
         return .{ .start = start, .end = j + 1, .row = @intCast(@min(@max(row, 1), std.math.maxInt(u16))) };
     }
     return null;
+}
+
+test "a status command that exits after closing stdout wakes the loop" {
+    const io = std.testing.io;
+    const sig_fds = try sys.selfPipe(io);
+    defer {
+        sig_pipe_w.store(-1, .monotonic);
+        resetSignal(.CHLD);
+        sys.close(io, sig_fds[0]);
+        sys.close(io, sig_fds[1]);
+    }
+    sig_pipe_w.store(sig_fds[1], .monotonic);
+    installChildHandler();
+
+    const Command = @import("status.zig").Command;
+    var command = try Command.init(std.testing.allocator, io, "exec >&-; sleep 0.2", 1000, 1, 80);
+    defer command.deinit(io);
+    command.tick(io, 0);
+    var fds = [_]posix.pollfd{.{ .fd = command.readFd(), .events = posix.POLL.IN, .revents = 0 }};
+    _ = try posix.poll(&fds, 2000);
+    while (command.onReadable(io) == null) _ = try posix.poll(&fds, 2000);
+    // The output is complete, but the process is still running.
+    try std.testing.expect(command.pid != null);
+
+    // Well before the command's 5 s deadline, SIGCHLD makes the loop runnable.
+    var sig = [_]posix.pollfd{.{ .fd = sig_fds[0], .events = posix.POLL.IN, .revents = 0 }};
+    try std.testing.expectEqual(@as(usize, 1), try posix.poll(&sig, 2000));
+    command.tick(io, 300);
+    try std.testing.expect(command.pid == null);
 }
 
 test "cursor reports are found among keystrokes" {
