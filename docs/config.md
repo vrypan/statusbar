@@ -1,13 +1,13 @@
 # Configuration
 
-statusbar reads the first available config source in this order:
+statusbar chooses its config path in this order:
 
 1. `--config PATH`
 2. `$STATUSBAR_CONFIG`
-3. `$XDG_CONFIG_HOME/statusbar/config`
-4. `~/.config/statusbar/config`
+3. `$XDG_CONFIG_HOME/statusbar/config` if `XDG_CONFIG_HOME` is set; otherwise,
+   `~/.config/statusbar/config`
 
-When neither default location has a file, statusbar uses its built-in config:
+If the selected default file is missing, statusbar uses its built-in config:
 [`samples/default.config`](../samples/default.config). A missing file named by
 `--config` or `$STATUSBAR_CONFIG` is an error. So is a malformed config:
 statusbar reports the file, line, and problem before it touches the terminal.

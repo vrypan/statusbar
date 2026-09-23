@@ -71,8 +71,9 @@ const commands = [_]zecli.CommandSpec{
         \\Use --exec to fill the bar from a shell command, with one output line
         \\per row. That command runs repeatedly; the program after `--` runs once.
         \\
-        \\Config lookup: --config, then $STATUSBAR_CONFIG, then
-        \\~/.config/statusbar/config, then built-in defaults if no file exists.
+        \\Config lookup: --config, then $STATUSBAR_CONFIG, then the default path:
+        \\$XDG_CONFIG_HOME/statusbar/config, or ~/.config/statusbar/config if
+        \\$XDG_CONFIG_HOME is unset. A missing default file uses built-in defaults.
         \\Without --exec, the config sets the row count and default interval.
         \\Per-command intervals in the config take precedence over --interval.
         \\Styles also accept numeric terminal style codes, such as '7' for reverse video.
@@ -156,9 +157,10 @@ const commands = [_]zecli.CommandSpec{
         \\To change the running bar, pass a complete config file as input. The
         \\new layout can change the number of rows without restarting your shell.
         \\
-        \\--print and --path read the startup configuration from disk, using
-        \\$STATUSBAR_CONFIG or ~/.config/statusbar/config, with built-in defaults
-        \\if no file exists. --default always uses the built-in configuration.
+        \\--print and --path use $STATUSBAR_CONFIG if set. Otherwise, they use
+        \\$XDG_CONFIG_HOME/statusbar/config, or ~/.config/statusbar/config if
+        \\$XDG_CONFIG_HOME is unset. A missing default file uses built-in defaults.
+        \\--default always uses the built-in configuration.
         \\These display options ignore input and do not change the running bar.
         \\
         \\With no flags, shows this help when run directly in a terminal.
