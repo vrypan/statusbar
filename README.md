@@ -76,3 +76,9 @@ Start with the [user guide](docs/README.md) for a practical setup: one-command
 bars, personal layouts, live slots, Starship, and themes. Reference guides
 cover [configuration](docs/config.md), [runtime slot updates](docs/set.md),
 [Starship](docs/starship.md), and [internals and limitations](docs/internals.md).
+
+## How I use statusbar
+
+[My everyday setup](docs/how-i-use-statusbar.md): a minimal Starship bar in
+every Ghostty terminal, and an `sbx` alias to load a richer bar where I'm
+spending time.

@@ -23,6 +23,7 @@ This guide calls the visible parts of the bar *rows*. In a config file, each
 | Show changing directory or Git context | [Update slots from your shell](#put-live-context-in-a-slot) |
 | Move Starship's details out of the prompt | [Use Starship](#use-starship) |
 | Try a more visual look | [Try a theme](#try-a-theme) |
+| See an everyday setup with actual configs | [How I use statusbar](how-i-use-statusbar.md) |
 
 ## Start with one command
 
