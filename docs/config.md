@@ -114,14 +114,22 @@ Use `style` to set the base style of every row created by `statusbar push`:
 ```ini
 [line.push]
 style = fg=accent,bg=#1e1e2e
+left = "#[fg=accent]› #[default]#(stream)"
+right = "#[fg=base,bg=accent,bold] #(tag) [#(id)] #[default]"
 ```
 
-The style covers the whole row, including its right-aligned `[ID]`. It accepts the
-same attributes and named colors as `[line.N]` styles. If omitted, pushed rows
-inherit the top-level `style`. This section does not reserve a row or change
-numbered slots. Reloading the config restyles pushed rows that are already
-visible. Streamed ANSI colors can override the base style for individual
-characters; a carriage-return update starts again with the base style.
+`style` covers the whole row. `left` and `right` work like normal line
+templates, with markup, clock conversions, and named or inline commands.
+`#(stream)` inserts the current stream value in `left`; `#(tag)` and `#(id)`
+insert the tag and numeric row ID in either template. Write `[#(id)]` for a
+bracketed ID. Stream and tag values are inserted literally: their
+`#[...]` text cannot change the template's markup, while stream ANSI colors
+still work. The independent defaults are `left = "[#(id)] #(tag) > #(stream)"`
+and `right = ""`. Either can be overridden without changing the other. If
+`style` is omitted, pushed rows inherit the top-level `style`. This section does not
+reserve a row or change numbered slots. Reloading the config updates pushed
+rows already visible. A carriage-return update re-renders the current stream
+value through `left`.
 
 ## `[command.NAME]`
 

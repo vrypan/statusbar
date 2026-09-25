@@ -88,12 +88,12 @@ const commands = [_]zecli.CommandSpec{
         .name = "push",
         .description = "Show a stream in a new status bar row",
         .usage = "statusbar push [-t TEXT] [-- <COMMAND> [ARG...]]",
-        .flags = &.{.{ .name = "tag", .short = 't', .value = .string, .value_name = "TEXT", .description = "Show a label before the row ID" }},
+        .flags = &.{.{ .name = "tag", .short = 't', .value = .string, .value_name = "TEXT", .description = "Label the pushed row" }},
         .extra_help =
         \\Read stdin from a pipe or file, or run a command after --.
         \\Use -t or --tag to label the row, for example with a filename.
-        \\The tag appears before the ID on the right and must be plain text.
-        \\A command receives COLUMNS set to the row width beside the tag and ID;
+        \\By default, the row shows [ID] tag > stream on the left.
+        \\A command receives COLUMNS set to the space available for its output;
         \\both stdout and stderr are streamed into the row.
         \\The final value stays visible after input ends. It prints the ID
         \\on stdout at EOF; use `statusbar pop ID` to remove the row.

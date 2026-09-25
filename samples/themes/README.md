@@ -40,7 +40,8 @@ and right labels on the same row. On narrow terminals the right side clips
 first. Weather uses the original wttr.in command and may remain empty until
 it responds; these themes do not change that network behavior.
 Each variant also styles temporary rows created by `statusbar push` through
-`[line.push]`.
+`[line.push]`. Its `left` template adds a stream marker; its `right` template
+formats the tag and ID with the same accent and shapes as the theme's clock.
 
 Inspiration:
 - https://starship.rs/presets/pure-preset

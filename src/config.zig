@@ -45,6 +45,9 @@ pub const max_regions = 16;
 pub const Part = union(enum) {
     text: []const u8,
     command: u8,
+    tag,
+    id,
+    stream,
     track_start: u4,
     track_end: u4,
 };
@@ -68,7 +71,7 @@ pub const Template = struct {
                     i = percent + 2;
                 }
             },
-            .command, .track_start, .track_end => {},
+            .command, .tag, .id, .stream, .track_start, .track_end => {},
         };
         return false;
     }
@@ -125,6 +128,8 @@ pub const Config = struct {
     allocator: ?std.mem.Allocator = null,
     style: ?[]const u8 = null,
     push_style: ?[]const u8 = null,
+    push_left: Template = .{},
+    push_right: Template = .{},
     interval_ms: i64 = 5000,
     colors: [max_colors]markup.Color = undefined,
     colors_len: usize = 0,
@@ -195,6 +200,10 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
     defer allocator.free(raw);
     @memset(raw, .{});
     var section: Section = .root;
+    var push_left_raw: ?[]const u8 = null;
+    var push_left_at: usize = 0;
+    var push_right_raw: ?[]const u8 = null;
+    var push_right_at: usize = 0;
 
     var number: usize = 0;
     var it = std.mem.splitScalar(u8, text, '\n');
@@ -308,7 +317,13 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
             .push => {
                 if (eql(key, "style")) {
                     config.push_style = value;
-                } else return fail(diag, "unknown push line key; expected style");
+                } else if (eql(key, "left")) {
+                    push_left_raw = value;
+                    push_left_at = number;
+                } else if (eql(key, "right")) {
+                    push_right_raw = value;
+                    push_right_at = number;
+                } else return fail(diag, "unknown push line key; expected left, right or style");
             },
             .command => |n| {
                 if (eql(key, "run")) {
@@ -333,10 +348,14 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
     }
     for (raw, config.line) |*source, *line| {
         diag.line = source.left_at;
-        line.left = try compile(&config, source.left, diag);
+        line.left = try compile(&config, source.left, diag, .ordinary);
         diag.line = source.right_at;
-        line.right = try compile(&config, source.right, diag);
+        line.right = try compile(&config, source.right, diag, .ordinary);
     }
+    diag.line = push_left_at;
+    config.push_left = try compile(&config, push_left_raw orelse "[#(id)] #(tag) > #(stream)", diag, .push_left);
+    diag.line = push_right_at;
+    config.push_right = try compile(&config, push_right_raw orelse "", diag, .push_right);
     if (config.line.len == 0) {
         diag.line = 0;
         return fail(diag, "config needs at least a [line.1] section");
@@ -408,7 +427,9 @@ fn countRows(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
     return highest;
 }
 
-fn compile(config: *Config, text: []const u8, diag: *Diagnostic) Error!Template {
+const TemplateKind = enum { ordinary, push_left, push_right };
+
+fn compile(config: *Config, text: []const u8, diag: *Diagnostic, kind: TemplateKind) Error!Template {
     var template: Template = .{};
     var start: usize = 0;
     var i: usize = 0;
@@ -457,6 +478,25 @@ fn compile(config: *Config, text: []const u8, diag: *Diagnostic) Error!Template 
         };
         if (i > start) try append(&template, .{ .text = text[start..i] }, diag);
         const body = std.mem.trim(u8, text[i + 2 .. close], " \t");
+        if (kind != .ordinary and eql(body, "tag")) {
+            try append(&template, .tag, diag);
+            i = close + 1;
+            start = i;
+            continue;
+        }
+        if (kind != .ordinary and eql(body, "id")) {
+            try append(&template, .id, diag);
+            i = close + 1;
+            start = i;
+            continue;
+        }
+        if (kind != .ordinary and eql(body, "stream")) {
+            if (kind != .push_left) return fail(diag, "#(stream) belongs in [line.push] left");
+            try append(&template, .stream, diag);
+            i = close + 1;
+            start = i;
+            continue;
+        }
         const index = findCommand(config, body) orelse try addInline(config, body, diag);
         try append(&template, .{ .command = @intCast(index) }, diag);
         i = close + 1;
@@ -469,7 +509,7 @@ fn compile(config: *Config, text: []const u8, diag: *Diagnostic) Error!Template 
 
 fn append(template: *Template, part: Part, diag: *Diagnostic) Error!void {
     switch (part) {
-        .text, .command => {
+        .text, .command, .tag, .id, .stream => {
             if (template.ordinary_parts == max_parts) return fail(diag, "too many parts in one slot");
             template.ordinary_parts += 1;
         },
@@ -597,13 +637,39 @@ test "a full config parses" {
 
 test "push style is independent of numbered rows" {
     var diag: Diagnostic = .{};
-    var config = try parse(std.testing.allocator, "[line.push]\nstyle = fg=accent\n[line.1]\nleft = ready\n", &diag);
+    var config = try parse(std.testing.allocator, "[line.push]\nstyle = fg=accent\nleft = #[fg=accent]› #[default]#(stream)\nright = #[fg=clock,bold]#(tag) [#(id)]#[default]\n[line.1]\nleft = ready\n", &diag);
     defer config.deinit();
     try std.testing.expectEqual(@as(u16, 1), config.definedLines());
     try std.testing.expectEqualStrings("fg=accent", config.push_style.?);
-    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.1]\n[line.push]\nleft = x\n", &diag));
+    const left_parts = config.push_left.items();
+    try std.testing.expectEqualStrings("#[fg=accent]› #[default]", left_parts[0].text);
+    try std.testing.expect(left_parts[1] == .stream);
+    const parts = config.push_right.items();
+    try std.testing.expectEqualStrings("#[fg=clock,bold]", parts[0].text);
+    try std.testing.expect(parts[1] == .tag);
+    try std.testing.expect(parts[3] == .id);
+    try std.testing.expectEqual(@as(usize, 0), config.commandList().len);
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.1]\n[line.push]\nmiddle = x\n", &diag));
     try std.testing.expectEqual(@as(usize, 3), diag.line);
-    try std.testing.expectEqualStrings("unknown push line key; expected style", diag.message);
+    try std.testing.expectEqualStrings("unknown push line key; expected left, right or style", diag.message);
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.push]\nright = #(stream)\n[line.1]\n", &diag));
+    try std.testing.expectEqualStrings("#(stream) belongs in [line.push] left", diag.message);
+}
+
+test "pushed row templates have independent defaults" {
+    var diag: Diagnostic = .{};
+    var defaults = try parse(std.testing.allocator, "[line.1]\nleft = ready\n", &diag);
+    defer defaults.deinit();
+    const parts = defaults.push_left.items();
+    try std.testing.expect(parts[1] == .id);
+    try std.testing.expect(parts[3] == .tag);
+    try std.testing.expect(parts[5] == .stream);
+    try std.testing.expectEqual(@as(usize, 0), defaults.push_right.items().len);
+
+    var custom = try parse(std.testing.allocator, "[line.push]\nleft = #(stream)\n[line.1]\nleft = ready\n", &diag);
+    defer custom.deinit();
+    try std.testing.expectEqual(@as(usize, 1), custom.push_left.items().len);
+    try std.testing.expectEqual(@as(usize, 0), custom.push_right.items().len);
 }
 
 test "nested parentheses and escaped hashes in templates" {

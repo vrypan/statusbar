@@ -38,6 +38,8 @@ pub const Source = struct {
     metadata_stale: bool = false,
     dependencies: []Dependency = &.{},
     dirty_rows: []bool = &.{},
+    push_dependency: Dependency = .{},
+    push_dirty: bool = false,
     /// Deterministic test/benchmark evidence for avoided formatting work.
     rows_formatted: usize = 0,
 
@@ -84,11 +86,19 @@ pub const Source = struct {
                 dependency.clock[side] = template.usesClock();
                 for (template.items()) |part| switch (part) {
                     .command => |n| dependency.commands[side] |= @as(u16, 1) << @intCast(n),
-                    .text, .track_start, .track_end => {},
+                    .text, .tag, .id, .stream, .track_start, .track_end => {},
                 };
             }
         }
-        var self: Source = .{ .gpa = gpa, .io = io, .commands = commands, .cfg = cfg, .content = content, .overrides = overrides, .override_lens = override_lens, .override_literal = override_literal, .stale = true, .dependencies = dependencies, .dirty_rows = dirty_rows };
+        var push_dependency: Dependency = .{};
+        for ([2]config.Template{ cfg.push_left, cfg.push_right }, 0..) |template, side| {
+            push_dependency.clock[side] = template.usesClock();
+            for (template.items()) |part| switch (part) {
+                .command => |n| push_dependency.commands[side] |= @as(u16, 1) << @intCast(n),
+                .text, .tag, .id, .stream, .track_start, .track_end => {},
+            };
+        }
+        var self: Source = .{ .gpa = gpa, .io = io, .commands = commands, .cfg = cfg, .content = content, .overrides = overrides, .override_lens = override_lens, .override_literal = override_literal, .stale = true, .dependencies = dependencies, .dirty_rows = dirty_rows, .push_dependency = push_dependency };
         self.updateClockActivation();
         return self;
     }
@@ -155,6 +165,10 @@ pub const Source = struct {
     /// Overridden clocks need no timer. Clearing an override formats current
     /// time immediately and re-arms the usual one-second cadence.
     fn updateClockActivation(self: *Source) void {
+        if (self.push_dependency.clock[0] or self.push_dependency.clock[1]) {
+            if (self.clock_next_ms == null) self.clock_next_ms = 0;
+            return;
+        }
         for (self.cfg.line, 0..) |line, row| {
             if ((self.override_lens[row * 2] == null and line.left.usesClock()) or
                 (self.override_lens[row * 2 + 1] == null and line.right.usesClock()))
@@ -210,12 +224,17 @@ pub const Source = struct {
             if (real >= next) {
                 self.clock_next_ms = @divFloor(real, 1000) * 1000 + 1000;
                 self.dirtyClockRows();
+                if (self.push_dependency.clock[0] or self.push_dependency.clock[1]) self.push_dirty = true;
                 self.stale = self.stale or self.dirtyAny();
             }
         }
         if (self.stale) {
             self.stale = false;
             result.content_changed = self.rebuild() or result.content_changed;
+        }
+        if (self.push_dirty) {
+            result.content_changed = true;
+            self.push_dirty = false;
         }
         return result;
     }
@@ -251,6 +270,7 @@ pub const Source = struct {
 
     fn dirtyCommand(self: *Source, command: usize) void {
         const bit = @as(u16, 1) << @intCast(command);
+        if ((self.push_dependency.commands[0] | self.push_dependency.commands[1]) & bit != 0) self.push_dirty = true;
         for (self.dependencies, 0..) |dependency, row| for (0..2) |side| {
             if (dependency.commands[side] & bit != 0 and self.override_lens[row * 2 + side] == null) self.markDirty(row);
         };
@@ -275,7 +295,7 @@ pub const Source = struct {
                 if (!self.output_seen[n]) return false;
                 if (baseline & bit != 0) return false;
             },
-            .text, .track_start, .track_end => {},
+            .text, .tag, .id, .stream, .track_start, .track_end => {},
         };
         return true;
     }
@@ -294,29 +314,86 @@ pub const Source = struct {
             if (self.override(n * 2)) |value| {
                 tracks.literal[0] = self.override_literal.len > n * 2 and self.override_literal[n * 2];
                 w.writeAll(value) catch {};
-            } else self.writeTemplate(&w, &line.left, &now, &tracks, .left);
+            } else self.writeTemplate(&w, &line.left, &now, &tracks, .left, "", "", "");
             w.writeByte('\t') catch {};
             if (self.override(n * 2 + 1)) |value| {
                 tracks.literal[1] = self.override_literal.len > n * 2 + 1 and self.override_literal[n * 2 + 1];
                 w.writeAll(value) catch {};
-            } else self.writeTemplate(&w, &line.right, &now, &tracks, .right);
+            } else self.writeTemplate(&w, &line.right, &now, &tracks, .right, "", "", "");
             changed = self.content.setTrackedLine(n, w.buffered(), tracks) or changed;
         }
         return changed;
     }
 
-    fn writeTemplate(self: *const Source, w: *std.Io.Writer, template: *const config.Template, now: *const Tm, tracks: *bar.Tracks, owner: bar.cells.Owner) void {
+    pub fn writePushLeft(self: *const Source, w: *std.Io.Writer, stream: []const u8, tag: []const u8, id: []const u8, tracks: *bar.Tracks) void {
+        const now = currentTime(self.io);
+        self.writeTemplate(w, &self.cfg.push_left, &now, tracks, .left, tag, id, stream);
+    }
+
+    pub fn writePushRight(self: *const Source, w: *std.Io.Writer, tag: []const u8, id: []const u8, tracks: *bar.Tracks) void {
+        const now = currentTime(self.io);
+        self.writeTemplate(w, &self.cfg.push_right, &now, tracks, .right, tag, id, "");
+    }
+
+    fn writeTemplate(self: *const Source, w: *std.Io.Writer, template: *const config.Template, now: *const Tm, tracks: *bar.Tracks, owner: bar.cells.Owner, tag: []const u8, id: []const u8, stream: []const u8) void {
         for (template.items()) |part| switch (part) {
             .text => |text| formatTime(w, text, now),
             .command => |n| writeOneLine(w, self.outputs[n][0..self.output_lens[n]]),
-            .track_start => |id| {
-                tracks.spans[tracks.len] = .{ .owner = owner, .id = id, .start = @intCast(w.end), .end = @intCast(w.end) };
+            .tag => writeLiteralMarkup(w, tag),
+            .id => w.writeAll(id) catch {},
+            .stream => writeLiteralMarkup(w, stream),
+            .track_start => |region_id| {
+                tracks.spans[tracks.len] = .{ .owner = owner, .id = region_id, .start = @intCast(w.end), .end = @intCast(w.end) };
                 tracks.len += 1;
             },
             .track_end => tracks.spans[tracks.len - 1].end = @intCast(w.end),
         };
     }
 };
+
+fn writeLiteralMarkup(w: *std.Io.Writer, value: []const u8) void {
+    var i: usize = 0;
+    while (i < value.len) {
+        if (value[i] == 0x1b and i + 1 < value.len) {
+            if (value[i + 1] == ']') {
+                var end = i + 2;
+                while (end < value.len) : (end += 1) {
+                    if (value[end] == 0x07) {
+                        end += 1;
+                        break;
+                    }
+                    if (value[end] == 0x1b and end + 1 < value.len and value[end + 1] == '\\') {
+                        end += 2;
+                        break;
+                    }
+                }
+                if (end <= value.len) {
+                    w.writeAll(value[i..end]) catch return;
+                    i = end;
+                    continue;
+                }
+            } else if (value[i + 1] == '[') {
+                var end = i + 2;
+                while (end < value.len and (value[end] < 0x40 or value[end] > 0x7e)) : (end += 1) {}
+                if (end < value.len) {
+                    w.writeAll(value[i .. end + 1]) catch return;
+                    i = end + 1;
+                    continue;
+                }
+            }
+        }
+        if (value[i] == '#') w.writeByte('#') catch return;
+        w.writeByte(value[i]) catch return;
+        i += 1;
+    }
+}
+
+test "pushed values escape markup without changing ANSI hyperlinks" {
+    var buf: [256]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    writeLiteralMarkup(&writer, "#[bold] \x1b[31mred\x1b]8;;https://example.com/#part\x1b\\link\x1b]8;;\x1b\\");
+    try std.testing.expectEqualStrings("##[bold] \x1b[31mred\x1b]8;;https://example.com/#part\x1b\\link\x1b]8;;\x1b\\", writer.buffered());
+}
 
 /// A tab in a value would start a new slot in the middle of it, and a line
 /// break a new bar line.

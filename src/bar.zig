@@ -18,7 +18,7 @@ pub const Tracks = struct {
     spans: [32]TrackSpan = undefined,
     len: usize = 0,
     literal: [2]bool = .{ false, false },
-    /// Pushed rows keep their right-hand ID visible when the text is too long.
+    /// Pushed rows reserve their right slot when left text is too long.
     right_priority: bool = false,
     override_epoch: [2]u64 = .{ 0, 0 },
     pub fn items(self: *const Tracks) []const TrackSpan {

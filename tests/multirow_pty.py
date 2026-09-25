@@ -1192,7 +1192,7 @@ with open(os.environ['STATUSBAR_STATE'], 'rb') as state:
     state.readline()
     assert state.readline() == b'lines 1\n'
 print('PUSHED_TWO', flush=True)
-run('config', input=b'[line.push]\nstyle = fg=#654321\n[line.1]\nleft = reloaded\n[line.2]\nright = new\n')
+run('config', input=b'[line.push]\nstyle = fg=#654321\nleft = #[fg=#abcdef]> #[default]#(stream)\nright = #[fg=#abcdef,bold]<#(tag) [#(id)]>#[default]\n[line.1]\nleft = reloaded\n[line.2]\nright = new\n')
 time.sleep(.1)
 run('pop', first.decode())
 assert run('pop', first.decode()) == b''
@@ -1231,7 +1231,7 @@ command = subprocess.run([b, 'push', '--', sys.executable, '-c',
                           'sys.stdout.write("started\\n"); sys.stdout.flush(); '
                           'w=int(os.environ["COLUMNS"]); '
                           'sys.stderr.write("#" * (w-6) + " 99.9%\\r"); '
-                          'sys.exit(7 if w==76 else 9)'], capture_output=True)
+                          'sys.exit(7 if w==71 else 9)'], capture_output=True)
 assert command.returncode == 7, (command.returncode, command.stderr)
 assert command.stdout == b'8\n', command.stdout
 assert command.stderr == b'', command.stderr
@@ -1254,11 +1254,22 @@ tagged = subprocess.run([b, 'push', '-t', '100Mb.dat', '--', sys.executable,
 assert tagged.returncode == 0 and tagged.stdout == b'12\n', tagged
 time.sleep(.1)
 run('pop', '12')
+literal_tag = run('push', '-t', '#[bold]', input=b'plain').strip()
+assert literal_tag == b'13', literal_tag
+time.sleep(.1)
+run('pop', '13')
 bad_tag = subprocess.run([b, 'push', '-t', 'bad\nname'], input=b'value', capture_output=True)
 assert bad_tag.returncode != 0, bad_tag
+run('config', input=b'[line.1]\nleft = configured\n')
+default_row = subprocess.run([b, 'push', '-t', '100Mb.dat', '--', sys.executable,
+                              '-c', 'import os; print("width=" + os.environ["COLUMNS"])'],
+                             capture_output=True)
+assert default_row.returncode == 0 and default_row.stdout == b'14\n', default_row
+time.sleep(.1)
+run('pop', '14')
 print('PUSH_POP_OK', flush=True)
 '''
-    config = b'[line.push]\nstyle = fg=#123456\n[line.1]\nleft = configured\n'
+    config = b'[line.push]\nstyle = fg=#123456\nleft = #[fg=#abcdef]> #[default]#(stream)\nright = #[fg=#abcdef,bold]<#(tag) [#(id)]>#[default]\n[line.1]\nleft = configured\n'
     with tempfile.NamedTemporaryFile(delete=False) as cfg:
         cfg.write(config)
         path = cfg.name
@@ -1271,15 +1282,20 @@ print('PUSH_POP_OK', flush=True)
         plain = [re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'',
                         re.sub(rb'\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)', b'', row))
                  for row in painted]
-        assert any(row.startswith(b'first final') and row.endswith(b'[1]')
+        assert any(row.startswith(b'> first final') and row.endswith(b'< [1]>')
                    for row in plain), plain[-4:]
         assert b'[2]' in data and 'Καλημέρα ## #[bold]'.encode() in data, data[-2500:]
         assert b'\x1b[0;38;2;18;52;86m' in data, data[-2500:]
+        assert b'38;2;171;205;239' in data, data[-2500:]
         assert b'\x1b[0;38;2;101;67;33m' in data, data[-2500:]
         assert b'reloaded' in data and b'[3]' in data and b'in progress' in data, data[-700:]
         assert b'[7]' in data, data[-700:]
         assert b'[8]' in data and b'99.9%' in data, data[-700:]
-        assert any(row.startswith(b'width=65') and row.endswith(b'100Mb.dat [12]')
+        assert any(row.startswith(b'> width=61') and row.endswith(b'<100Mb.dat [12]>')
+                   for row in plain), plain[-4:]
+        assert any(row.startswith(b'> plain') and row.endswith(b'<#[bold] [13]>')
+                   for row in plain), plain[-4:]
+        assert any(row.startswith(b'[14] 100Mb.dat > width=63') and row.count(b'[14]') == 1
                    for row in plain), plain[-4:]
     finally:
         os.unlink(path)

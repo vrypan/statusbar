@@ -541,22 +541,33 @@ const Proxy = struct {
         }
         for (self.pushed.items.items[0..pushed_visible], configured..) |*row, n| {
             var text: [bar.max_line_bytes]u8 = undefined;
-            var id_buf: [22]u8 = undefined;
-            const label = try std.fmt.bufPrint(&id_buf, "[{d}]", .{row.id});
-            const tag = pushed_rows.visibleTag(row.tag(), layout.cols, @import("zunic").text(label).width());
-            var right_buf: [pushed_rows.max_tag + 23]u8 = undefined;
-            const right = if (tag.len == 0)
-                label
-            else
-                try std.fmt.bufPrint(&right_buf, "{s} {s}", .{ tag, label });
-            const value = row.value();
-            var value_len = @min(value.len, text.len - right.len - 1);
-            while (value_len > 0 and !std.unicode.utf8ValidateSlice(value[0..value_len])) : (value_len -= 1) {}
-            @memcpy(text[0..value_len], value[0..value_len]);
-            text[value_len] = '\t';
-            @memcpy(text[value_len + 1 ..][0..right.len], right);
-            const len = value_len + 1 + right.len;
-            _ = content.setTrackedLine(n, text[0..len], .{ .literal = .{ true, true }, .right_priority = true });
+            var id_text: [20]u8 = undefined;
+            const number = try std.fmt.bufPrint(&id_text, "{d}", .{row.id});
+            var tracks: bar.Tracks = .{ .right_priority = true };
+            var left_buf: [2048]u8 = undefined;
+            var left_writer: std.Io.Writer = .fixed(&left_buf);
+            runtime.source.writePushLeft(&left_writer, row.value(), row.tag(), number, &tracks);
+            const left = left_writer.buffered();
+            const right_spans_start = tracks.len;
+            var right_buf: [512]u8 = undefined;
+            var right_writer: std.Io.Writer = .fixed(&right_buf);
+            runtime.source.writePushRight(&right_writer, row.tag(), number, &tracks);
+            const right = right_writer.buffered();
+            var left_len = @min(left.len, text.len - right.len - 1);
+            while (left_len > 0 and !std.unicode.utf8ValidateSlice(left[0..left_len])) : (left_len -= 1) {}
+            @memcpy(text[0..left_len], left[0..left_len]);
+            text[left_len] = '\t';
+            @memcpy(text[left_len + 1 ..][0..right.len], right);
+            const len = left_len + 1 + right.len;
+            for (tracks.spans[0..right_spans_start]) |*span| {
+                span.start = @min(span.start, @as(u16, @intCast(left_len)));
+                span.end = @min(span.end, @as(u16, @intCast(left_len)));
+            }
+            for (tracks.spans[right_spans_start..tracks.len]) |*span| {
+                span.start += @intCast(left_len + 1);
+                span.end += @intCast(left_len + 1);
+            }
+            _ = content.setTrackedLine(n, text[0..len], tracks);
             styles[n] = pushed_style;
             rules[n] = null;
         }
@@ -617,7 +628,18 @@ const Proxy = struct {
                 return "ERR";
             };
             var response: [64]u8 = undefined;
-            const result = std.fmt.bufPrint(&response, "OK|{d}", .{id}) catch return "ERR";
+            const row_index = @as(usize, self.runtime.lines) + self.pushed.items.items.len - 1;
+            const right_width = if (row_index < self.runtime.renderer.rows.len)
+                @min(self.runtime.renderer.rows[row_index].semantic[1].cells.items.len, self.layout.cols)
+            else
+                std.fmt.count("[{d}]", .{id});
+            const left_fixed_width = if (row_index < self.runtime.renderer.rows.len)
+                @min(self.runtime.renderer.rows[row_index].semantic[0].cells.items.len, self.layout.cols)
+            else
+                0;
+            const gap: usize = if (right_width > 0) 1 else 0;
+            const available = @max(1, @as(usize, self.layout.cols) -| (left_fixed_width + right_width + gap));
+            const result = std.fmt.bufPrint(&response, "OK|{d}|{d}", .{ id, available }) catch return "ERR";
             // The caller must send this response before returning from its stack frame.
             return self.controlReply(result);
         }

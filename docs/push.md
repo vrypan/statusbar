@@ -7,36 +7,38 @@ numbered slot in your config:
 tail -n 0 -f app.log | statusbar push &
 ```
 
-The row appears below configured rows. Its left slot shows the latest stream
-value; the right slot shows a session-local ID:
+The row appears below configured rows. By default it shows the session-local ID,
+tag, and latest stream value on the left:
 
 ```text
-Starting…                         [1]
-Server ready                       [1]
+[1]  > Starting…
+[1]  > Server ready
 ```
 
-Use `-t TEXT` or `--tag TEXT` to label the row. The tag appears before its ID
-in the right slot:
+Use `-t TEXT` or `--tag TEXT` to label the row:
 
 ```sh
 tail -n 0 -f app.log | statusbar push -t app.log &
 ```
 
 ```text
-Server ready               app.log [1]
+[1] app.log > Server ready
 ```
 
 Tags must be plain UTF-8 text without control characters and may contain up to
-128 bytes. On a narrow terminal, the tag is shortened so the ID stays visible.
+128 bytes. The theme can place the tag and ID in either slot with its
+`[line.push]` templates.
 
-Set the base style of pushed rows with `[line.push]` in the config. It applies
-to the ID and text, and is reapplied to each `\r` progress update. See
+Set the base style of pushed rows with `[line.push]` in the config. Use its
+`left` template with `#(stream)`, `#(tag)`, and `#(id)` to format the row;
+the `right` template can place values on the other side. Templates are
+reapplied to each `\r` progress update. See
 [configuration](config.md#linepush).
 
 When reading a pipe, `push` cannot change the width reported to the command
-that wrote to it. Output wider than the space beside the ID is clipped.
+that wrote to it. Output wider than the space left for the stream is clipped.
 
-To let a width-aware command draw for the space beside the ID, start it with
+To let a width-aware command draw for the stream's available space, start it with
 `push --`:
 
 ```sh
@@ -44,9 +46,9 @@ statusbar push -t 100Mb.dat -- curl --progress-bar --limit-rate 1M \
   -o /dev/null https://proof.ovh.net/files/100Mb.dat &
 ```
 
-`push` sets the command's `COLUMNS` to the terminal width minus the right-hand
-tag, `[ID]`, and one separating column. It captures both stdout and stderr, so
-curl's progress output reaches the row. The width is measured when the command
+`push` sets the command's `COLUMNS` to the terminal width minus fixed template
+text and any right slot content. It captures both stdout and stderr, so curl's
+progress output reaches the row. The width is measured when the command
 starts; resizing the terminal does not change the running command's `COLUMNS`.
 The command's exit status is
 returned by `push` after it prints the row ID. Output files should be specified
@@ -93,6 +95,6 @@ and reappear when there is room. A push may therefore succeed while its row is
 hidden.
 
 If `push` loses its input or exits unexpectedly, the last value accepted by
-the running bar stays visible; its ID remains at the right edge. Neither `push`
+the running bar stays visible; its ID remains on the row. Neither `push`
 nor `pop` works outside a live statusbar session. A missing, stale, or
 incompatible session is reported as an error.

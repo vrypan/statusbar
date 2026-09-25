@@ -1,5 +1,4 @@
 const std = @import("std");
-const zunic = @import("zunic");
 
 pub const max_rows = 128;
 pub const max_text = 1024;
@@ -9,20 +8,6 @@ pub fn validTag(tag: []const u8) bool {
     if (tag.len > max_tag or !std.unicode.utf8ValidateSlice(tag)) return false;
     for (tag) |byte| if (byte < 0x20 or byte == 0x7f) return false;
     return true;
-}
-
-/// Keep the ID visible and leave a column for text when the terminal is narrow.
-pub fn visibleTag(tag: []const u8, cols: usize, id_width: usize) []const u8 {
-    const budget = cols -| (id_width + 3); // tag separator, text separator, one text column
-    var width: usize = 0;
-    var end: usize = 0;
-    var it = zunic.text(tag).graphemes().measured().iterator();
-    while (it.next()) |span| {
-        if (width + span.columns > budget) break;
-        width += span.columns;
-        end = span.end.value;
-    }
-    return tag[0..end];
 }
 
 pub const Row = struct {
@@ -138,10 +123,9 @@ test "row capacity is bounded and IDs do not wrap" {
     try std.testing.expectError(error.RowLimit, rows.push("owner", ""));
 }
 
-test "tags are plain UTF-8 and retain the ID on narrow rows" {
+test "tags are plain UTF-8" {
     try std.testing.expect(validTag("界.dat"));
     try std.testing.expect(!validTag("bad\nname"));
     try std.testing.expect(!validTag("\x1b[31m"));
     try std.testing.expect(!validTag("\xff"));
-    try std.testing.expectEqualStrings("界.d", visibleTag("界.dat", 10, 3));
 }

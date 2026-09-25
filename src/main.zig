@@ -305,7 +305,10 @@ fn pushRow(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         return 1;
     };
     if (!std.mem.startsWith(u8, created, "OK|")) return usageError(stderr, command, "the session rejected push");
-    const id = std.fmt.parseInt(u64, created[3..], 10) catch return usageError(stderr, command, "invalid row ID from session");
+    const separator = std.mem.indexOfScalarPos(u8, created, 3, '|') orelse return usageError(stderr, command, "invalid row width from session");
+    const id = std.fmt.parseInt(u64, created[3..separator], 10) catch return usageError(stderr, command, "invalid row ID from session");
+    const command_columns = std.fmt.parseInt(usize, created[separator + 1 ..], 10) catch return usageError(stderr, command, "invalid row width from session");
+    if (command_columns == 0) return usageError(stderr, command, "invalid row width from session");
     var remove_on_start_failure = child_argv.len > 0;
     defer if (remove_on_start_failure) {
         const request = std.fmt.bufPrint(&packet, "1|{s}|P|{d}", .{ token, id }) catch "";
@@ -315,23 +318,8 @@ fn pushRow(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     var child: ?std.process.Child = null;
     if (child_argv.len > 0) {
         const sys = @import("sys.zig");
-        const tty = Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .read_only }) catch |err| {
-            try stderr.print("statusbar: cannot measure terminal width: {t}\n", .{err});
-            try stderr.flush();
-            return 1;
-        };
-        defer tty.close(io);
-        const size = sys.getWinsize(tty.handle) catch {
-            try stderr.writeAll("statusbar: cannot measure terminal width\n");
-            try stderr.flush();
-            return 1;
-        };
         var width_buf: [20]u8 = undefined;
-        const id_width = std.fmt.count("[{d}]", .{id});
-        const displayed_tag = @import("pushed_rows.zig").visibleTag(tag, size.col, id_width);
-        const tag_width = if (displayed_tag.len == 0) @as(usize, 0) else @import("zunic").text(displayed_tag).width() + 1;
-        const available = @max(1, @as(usize, size.col) -| (id_width + tag_width + 1));
-        const width = try std.fmt.bufPrint(&width_buf, "{d}", .{available});
+        const width = try std.fmt.bufPrint(&width_buf, "{d}", .{command_columns});
         var child_env = try sys.environMap().clone(arena);
         defer child_env.deinit();
         try child_env.put("COLUMNS", width);
