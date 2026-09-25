@@ -3,7 +3,7 @@
 Changes are grouped by version, newest first. Each section summarizes changes
 since the previous version.
 
-## Unreleased
+## v0.4.1
 
 - Add `pop --all` (`-a`) to remove all pushed lines at once
 - Add Unicode spinners for pushed lines, with configurable timing and stable frame widths
