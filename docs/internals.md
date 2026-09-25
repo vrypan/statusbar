@@ -36,7 +36,7 @@ shell
   child-provided titles. Titles show the last three path components, with the
   local home directory abbreviated to `~` before shortening; remote titles
   retain a `host:` prefix. The original directory report stays complete.
-  Invalid reports cannot inject controls and produce no title.
+  Invalid reports cannot inject C0 or C1 controls and produce no title.
   This display feature does not alter status-command environments or working
   directories.
 - The bar is painted with autowrap off, so text that the terminal draws wider

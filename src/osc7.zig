@@ -54,7 +54,11 @@ pub fn title(uri: []const u8, local_hostname: []const u8, home_directory: []cons
 
     const path_start = if (local) 0 else authority.len + 1;
     if (len == path_start or out[path_start] != '/') return null;
-    if (!std.unicode.utf8ValidateSlice(out[0..len])) return null;
+    // Decoded C1 controls are as unsafe as C0: a terminal that honors
+    // U+009C would end the title early and print the rest on screen.
+    const view = std.unicode.Utf8View.init(out[0..len]) catch return null;
+    var points = view.iterator();
+    while (points.nextCodepoint()) |point| if (point >= 0x80 and point <= 0x9f) return null;
     const home = std.mem.trimEnd(u8, home_directory, "/");
     if (local and home.len > 0 and home[0] == '/' and
         std.mem.startsWith(u8, out[path_start..len], home) and
@@ -122,6 +126,10 @@ test "OSC 7 titles distinguish local and remote paths" {
         .{ .uri = "file:///bad\x7fname", .expected = null },
         .{ .uri = "file:///bad\xff", .expected = null },
         .{ .uri = "file://bad\x07host/tmp", .expected = null },
+        .{ .uri = "file:///bad%C2%9Ctitle", .expected = null },
+        .{ .uri = "file:///bad\xc2\x9btitle", .expected = null },
+        .{ .uri = "file://bad\xc2\x9chost/tmp", .expected = null },
+        .{ .uri = "file:///fine%C2%A0space", .expected = "/fine\u{a0}space" },
     };
 
     for (cases) |case| {
