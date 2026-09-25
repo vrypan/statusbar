@@ -243,7 +243,7 @@ layer or the layers above it in this list:
 | `render/` | Markup, styled text, the cell grid, highlight effects, and bar painting |
 | `session/` | The control socket, the session state file, and pushed rows |
 | `model/` | Config parsing, status commands, and the content they produce |
-| `proxy/` | The event loop that connects everything |
+| `proxy/` | Session setup and the `Proxy` state in `proxy.zig`; its methods grouped by concern in `loop.zig`, `rows.zig`, `terminal_input.zig` and `reload.zig` |
 | `cli/` | One file per subcommand in `commands/`, shell integration scripts in `shell/`; `main.zig` stays at the root of `src/` |
 
 `terminal/` and `render/` are independent of each other, as are `shared/` and
