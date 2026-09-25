@@ -1,31 +1,35 @@
 # How it works
 
-statusbar is a PTY proxy. It sits between the terminal and the command it
-runs, and forwards both directions.
+statusbar reserves the bottom terminal rows for its lines and runs your
+shell or command in the space above. It passes input to that command and shows
+its output. This page explains how it keeps the two areas separate and where
+the limits are. For setup and commands, start with the [user guide](README.md).
+
+Technically, statusbar does this by acting as a PTY proxy:
 
 ```
-terminal emulator     the child's screen, and the bar below it
+terminal emulator     the child's screen, and statusbar below it
     |
-statusbar             allocates a pty shorter by the visible bar rows
+statusbar             allocates a pty shorter by the visible statusbar lines
     |
 shell
 ```
 
 - The outer terminal's scrolling region (DECSTBM) covers only the child's
-  rows, so ordinary output and scrolling never reach the bar.
-- The bar is always at the bottom. Terminals only save lines to scrollback
-  when the scrolling region starts at row 1, so a bar at the top would lose
-  everything that scrolls off inside the session.
-- Output is scanned for sequences that address absolute rows (CUP, HVP, VPA,
-  DECSTBM), and rows past the child's screen are clamped so they never reach
-  the bar. Everything else passes through as it arrives.
-- Erasures that reach the bar (ED and selective DECSED), RIS, DECSTR,
+  terminal rows, so ordinary output and scrolling never reach statusbar.
+- Statusbar is always at the bottom. Terminals only save lines to scrollback
+  when the scrolling region starts at terminal row 1. A statusbar at the top would
+  lose everything that scrolls off inside the session.
+- Output is scanned for sequences that address absolute terminal rows (CUP,
+  HVP, VPA, DECSTBM). Terminal rows past the child's screen are clamped so
+  they never reach statusbar. Everything else passes through as it arrives.
+- Erasures that reach statusbar (ED and selective DECSED), RIS, DECSTR,
   DECALN and alternate-screen switches trigger a repaint. A repaint that
   follows an erasure goes out in the same write, so the terminal never shows
-  a frame without the bar.
-- Cursor position reports pass through unchanged, since the child's rows are
-  numbered the same on both sides. The text-area size report (XTWINOPS 18)
-  leaves out the bar's rows, and mouse reports aimed at the bar are not sent
+  a frame without statusbar.
+- Cursor position reports pass through unchanged, since the child's terminal
+  rows are numbered the same on both sides. The text-area size report (XTWINOPS 18)
+  leaves out statusbar's lines, and mouse reports aimed at statusbar are not sent
   to the child. SGR-Pixels reports are measured against the child's pixel
   height, and pass through unchanged when the terminal reports no pixel size.
   Terminal UI actions such as opening an OSC 8 link still work.
@@ -39,12 +43,12 @@ shell
   Invalid reports cannot inject C0 or C1 controls and produce no title.
   This display feature does not alter status-command environments or working
   directories.
-- The bar is painted with autowrap off, so text that the terminal draws wider
+- Statusbar is painted with autowrap off, so text that the terminal draws wider
   than statusbar measured is clipped at the right edge rather than wrapping.
 - Numbered `StatusBarSlotN` and `StatusBarSlotLiteralN` user variables are taken out of the
   output stream; see [set.md](set.md).
-- Pushed rows are session-owned and survive config replacement. A private local
-  datagram socket authenticates and acknowledges row creation and removal;
+- Pushed lines are session-owned and survive config replacement. A private local
+  datagram socket authenticates and acknowledges line creation and removal;
   bounded stream updates display text literally.
   Their IDs and content are separate from configured slot numbering.
 - Exact OSC 3110 `STATUSBAR` messages are also taken out of the output stream.
@@ -52,51 +56,51 @@ shell
   streaming parser stops at each request boundary so config and slot updates
   in one PTY read remain ordered. Foreign ELLO messages pass through. See
   [the protocol](osc-3110.md).
-- On a resize the child's pty follows the terminal. The visible row count is
+- On a resize the child's pty follows the terminal. The visible line count is
   the smaller of the configured count and the terminal height minus two.
-  Hidden rows retain their content and numbered-slot overrides.
+  Hidden lines retain their content and numbered-slot overrides.
 - A config replacement request is parsed into a complete runtime generation,
   which is swapped in after the old poll snapshot has been consumed. Failed
   preparation leaves the old source, renderer, commands, and geometry intact.
-- A successful config replacement updates the child pty size and every input/
-  output row bound together. The previous command runners are stopped after
-  the swap. The streaming terminal parsers, palette probe, OSC 7 observer, and
+- A successful config replacement updates the child pty size and every input
+  and output bound for terminal rows together. The previous command runners
+  stop after the swap. The streaming terminal parsers, palette probe, OSC 7 observer, and
   child process remain session-scoped and are not reset.
 
-## Rendering the bar
+## Rendering statusbar
 
 Prepared highlight ranges retain their most recently sampled RGB pair and
 animation step. Neighboring cells sharing a range and step reuse the color
 calculation while keeping their own attributes and reverse-video handling.
 The benchmark includes 64- and 200-character tracked labels to measure this
 reuse as well as the existing distinct-color and multi-region workloads.
-Changes confined to untracked rows preserve the current preparation generation.
-Tracked-row, geometry, palette, and pulse-count changes invalidate it. A separate
-benchmark updates an untracked row alongside 600 unchanged tracked glyphs.
+Changes confined to untracked lines preserve the current preparation generation.
+Tracked-line, geometry, palette, and pulse-count changes invalidate it. A separate
+benchmark updates an untracked line alongside 600 unchanged tracked glyphs.
 
 The terminology and scheduling contract for content updates, effects, frames,
 and terminal writes is described in the [display and animation
 model](display-model.md).
 
 Only the statusbar has a cell grid; the child's output remains a proxied byte
-stream. Each visible row keeps three owned versions: base content, desired
+stream. Each visible line keeps three owned versions: base content, desired
 appearance, and the last queued paint. Cells record graphemes, terminal width,
 style, hyperlink, left/right/fill ownership, and optional tracking-region ID.
 Wide graphemes also have a continuation cell, so clipping and appearance changes
 cannot split them.
 
 Compiled templates record per-side command and clock dependencies. Accepted
-command output is normalized before comparison and dirties only dependent rows
+command output is normalized before comparison and dirties only dependent lines
 whose slots are not overridden; clock ticks likewise dirty only live clock
-templates. Overrides dirty their own row. Identical command
-updates format no rows. Dirty rows compare their cells, and only rows whose
-appearance changed are repainted. Startup, resize and screen damage repaint all visible rows. Damage
+templates. Overrides dirty their own line. Identical command
+updates format no lines. Dirty lines compare their cells, and only lines whose
+appearance changed are repainted. Startup, resize and screen damage repaint all visible lines. Damage
 repair uses existing cells without parsing content again. Paints still use the
 same safe output boundaries and cursor-save timing as before.
 
 Internal slot, region, and column-range operations can patch and restore styles
-without changing content. Patches survive unrelated-row updates, equivalent content
-rebuilds, and damage repair. A semantic base change resets that row's patches;
+without changing content. Patches survive unrelated-line updates, equivalent content
+rebuilds, and damage repair. A semantic base change resets that line's patches;
 resize rebuilds the grid. Each tracked region has a monotonic deadline
 and applied-step index. The effect is two adaptive color pulses over 2.4 seconds
 by default, with one to three pulses configurable. Each frame is derived from
@@ -107,7 +111,7 @@ Command results retain why their process ran. First results and reruns requested
 by a terminal resize establish a new baseline silently; ordinary interval
 results and clock changes may start a region highlight after every command used
 in the slot has produced a first result. Step boundaries and expiry share one proxy
-poll deadline and one composition pass. Within-row selective writes are not
+poll deadline and one composition pass. Within-line selective writes are not
 implemented yet.
 
 The adaptive effect samples OKLab lightness at 30 ms intervals. It derives
@@ -151,14 +155,14 @@ for OSC ownership only while replies are outstanding.
 Protocol reference: [xterm control sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html).
 Color-space reference: [OKLab](https://bottosson.github.io/posts/oklab/).
 
-Static template markers compile to ordinal boundaries. Source rows own raw-byte
+Static template markers compile to ordinal boundaries. Source lines own raw-byte
 spans; markup expansion and ANSI filtering map those boundaries into graphemes.
-Each visible row also retains full semantic slot snapshots before clipping.
+Each visible line also retains full semantic slot snapshots before clipping.
 Regions compare glyph bytes, width, resolved style, and hyperlink values. Both
 versions are projected into the target's final available column budget to
 exclude changes in hidden suffixes and movement caused by neighboring values.
 Override transitions carry per-slot epochs so identical-text activation/clearing
-still cancels effects and establishes a silent baseline. Hidden rows discard
+still cancels effects and establishes a silent baseline. Hidden lines discard
 their snapshots and baseline silently when revealed.
 
 ### Unicode and styles
@@ -188,17 +192,17 @@ a partial snapshot as the last painted state. Established-capacity updates
 reuse storage; preparation reserves space before emission and snapshot commit.
 
 `zig build bench -Doptimize=ReleaseFast` measures full paints, identical updates,
-single-row changes, style-only patches, and independent region updates with
+single-line changes, style-only patches, and independent region updates with
 shared animation frames and damage repair. It reports time, emitted bytes and
-rows, parsed rows and allocations. The cell model reduces terminal output for
+lines, parsed lines and allocations. The cell model reduces terminal output for
 small changes but costs memory and CPU compared with the old string renderer;
 byte savings alone are not a wall-clock speedup.
 
 Adaptive workloads are independently labeled `colors` and `regions`:
 
 - `colors` uses 1, 16, 17, or 64 distinct visible, resolved foreground/background
-  pairs on 80-column rows (up to 16 pairs per row, within input limits).
-- `regions` uses 1, 8, or 32 active regions sharing one pair on a 512-column row,
+  pairs on 80-column lines (up to 16 pairs per line, within input limits).
+- `regions` uses 1, 8, or 32 active regions sharing one pair on a 512-column line,
   split across left/right slots with no more than 16 regions per slot.
 - `cold` averages 20 independent preparations and first nonzero effect frames.
   Preparation time is reported separately from frame time. Restoration is
@@ -210,7 +214,7 @@ Every workload reports monotonic-clock mean/max nanoseconds per frame, frame
 count, emitted bytes, range preparations, cache hits/misses, safety samples,
 effect traversal visits, preparation allocations and storage. Safety samples count colors checked while
 preparing a safe range, not ordinary frame sampling. Cell visits include the
-single affected-row composition scans, including skipped cells, but exclude
+single affected-line composition scans, including skipped cells, but exclude
 layout, parsing and paint comparison. Counters reset independently of cached
 ranges; they exist only in tests and benchmarks, not production binaries.
 
@@ -241,8 +245,8 @@ this list:
 | `shared/` | Leaf types used across layers: slot limits and terminal colors |
 | `platform/` | System calls, raw mode, process execution, the log file |
 | `terminal/` | Byte-stream filters between the terminal and the child, the palette probe, OSC 3110 framing |
-| `render/` | Markup, styled text, the cell grid, and the `Renderer` in `bar.zig`, with row content in `content.zig`, layout in `row_layout.zig`, highlight scheduling in `effects.zig` and paint bytes in `serialize.zig` |
-| `session/` | The control socket, the session state file, and pushed rows |
+| `render/` | Markup, styled text, the cell grid, and the `Renderer` in `bar.zig`, with line content in `content.zig`, layout in `row_layout.zig`, highlight scheduling in `effects.zig` and paint bytes in `serialize.zig` |
+| `session/` | The control socket, the session state file, and pushed lines |
 | `model/` | Config parsing, status commands, and the content they produce |
 | `proxy/` | Session setup and the `Proxy` state in `proxy.zig`; its methods grouped by concern in `loop.zig`, `rows.zig`, `terminal_input.zig` and `reload.zig` |
 | `cli/` | One file per subcommand in `commands/`, shell integration scripts in `shell/`; `main.zig` stays at the root of `src/` |
@@ -259,13 +263,13 @@ block; a new file must be added there, or its tests will not run.
 
 ## Limitations
 
-- Repaints, config replacement, and pushed-row creation and removal save and
+- Repaints, config replacement, and pushed-line creation and removal save and
   restore the cursor with DECSC/DECRC, the single save slot the child uses
   too. They only happen between complete sequences, and wait for a pause
   while the child holds a saved cursor, so collisions are unlikely but
   possible.
-- When the window grows, terminals that add blank rows at the bottom (rather
-  than pulling lines back from scrollback) can leave a copy of the old bar in
+- When the window grows, terminals that add blank terminal rows at the bottom
+  rather than pulling lines back from scrollback can leave a copy of the old statusbar in
   the child's area until it is overwritten.
 - Character widths are estimated using zunic's presentation-aware grapheme
   policy. A terminal using another Unicode

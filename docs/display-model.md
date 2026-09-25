@@ -22,7 +22,7 @@ active effect to the current base content. A frame exists in memory as styled
 grapheme cells; it is not terminal output.
 
 **Paint** is one bundled terminal write that makes the displayed statusbar
-match a frame. A paint may contain several changed rows and regions. If the new
+match a frame. A paint may contain several changed lines and regions. If the new
 frame is visually identical to the last painted frame, no paint is needed.
 
 **Terminal display refresh** is the terminal emulator turning its state into
@@ -45,7 +45,7 @@ One temporary or animated effect usually spans several frames and paints.
 
 ## Three stored appearances
 
-Each visible row has three related states:
+Each visible line has three related states:
 
 1. **Base** is the latest laid-out content without temporary effects.
 2. **Desired** is the frame produced by applying active effects to the base.
@@ -55,10 +55,10 @@ Each visible row has three related states:
 
 Content updates replace relevant parts of the base. Animation ticks derive or
 update the desired appearance from the current base and effect state. Painting
-compares desired with painted, emits only necessary rows, then advances the
+compares desired with painted, emits only necessary lines, then advances the
 painted snapshot.
 
-Effects modify appearance, never the base. Each affected row is traversed once
+Effects modify appearance, never the base. Each affected line is traversed once
 per animation tick, applying all live samples and expirations at the shared
 timestamp. When an effect expires, composing from the base naturally restores the exact current foreground, background,
 attributes, and hyperlinks. It does not restore a stale copy captured when the
@@ -75,7 +75,7 @@ Effects are consequences of content transitions, not rendering differences.
 An effect may start only while processing an eligible content update and only
 when the tracked content changed semantically.
 
-A region has a stable identity within its configured row and left/right slot.
+A region has a stable identity within its configured line and left/right slot.
 Its width and position may change without changing that identity. Comparison
 uses its full styled grapheme content before clipping, plus a visible-content
 check with both versions projected into the same final available space.
@@ -85,13 +85,13 @@ Each changed region restarts only its own effect.
 All commands in a slot must have accepted a first result before its regions
 can trigger effects. Empty results count. Overrides cancel that slot's effects;
 clearing an override establishes new baselines silently. Empty and wholly hidden
-regions carry no animation backlog, and newly revealed rows baseline silently.
+regions carry no animation backlog, and newly revealed lines baseline silently.
 
 These events never create or restart an effect:
 
 - resizing the terminal;
 - reflowing or clipping an existing value;
-- a row becoming hidden or visible;
+- a line becoming hidden or visible;
 - rebuilding cells after a style or layout change;
 - repainting after screen damage;
 - composing an animation frame; or
@@ -195,13 +195,13 @@ responsible for scheduling or painting another.
 
 | Event | Change base? | May trigger effect? | Painting behavior |
 |---|---:|---:|---|
-| Semantic source change | Yes | Only if its source is eligible | Paint changed visible rows |
+| Semantic source change | Yes | Only if its source is eligible | Paint changed visible lines |
 | Identical content result | No | No | No paint |
 | Animation tick | No | No | Paint only if appearance changed |
-| Screen damage | No | No | Repaint all visible rows |
-| Resize or layout change | Re-layout | No | Repaint the visible bar |
-| Config generation replacement | Replace and re-layout | No | Repaint the visible bar |
-| Row becomes hidden or visible | Re-layout | No | Paint visible rows as needed |
+| Screen damage | No | No | Repaint all visible lines |
+| Resize or layout change | Re-layout | No | Repaint the visible statusbar |
+| Config generation replacement | Replace and re-layout | No | Repaint the visible statusbar |
+| Line becomes hidden or visible | Re-layout | No | Paint visible lines as needed |
 
 Replacing the config cannot trigger a highlight.
 
@@ -212,13 +212,13 @@ either one.
 
 ## Paint safety and coalescing
 
-Painting the bar temporarily uses terminal cursor and mode state. statusbar
+Painting statusbar temporarily uses terminal cursor and mode state. statusbar
 therefore paints only at a safe child-output boundary and may wait briefly
 while the child owns the cursor-save slot. This safety delay does not create a
 queue of frames: only the newest desired frame matters.
 
-All changed rows for a frame are serialized into one output batch. The renderer
-may compose the entire visible statusbar in memory while emitting only rows
+All changed lines for a frame are serialized into one output batch. The renderer
+may compose the entire visible statusbar in memory while emitting only lines
 whose desired cells differ from their painted cells. A frame opportunity does
 not imply a terminal write.
 

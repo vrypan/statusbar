@@ -1,36 +1,42 @@
-# Add and remove temporary rows
+# Add and remove temporary lines
 
-Use `statusbar push` when a command needs its own row without reserving a
-numbered slot in your config:
+Use `statusbar push` when a command needs its own line. For a quick example,
+send it a line of text:
 
 ```sh
-tail -n 0 -f app.log | statusbar push &
+printf 'Build complete\n' | statusbar push -t build
 ```
 
-The row appears below configured rows. By default it shows the session-local ID,
-tag, and latest stream value on the left:
-
-```text
-[1]  > Starting…
-[1]  > Server ready
-```
-
-Use `-t TEXT` or `--tag TEXT` to label the row:
+The line appears below your configured lines. `push` prints its ID when input
+ends; the line stays visible until you remove it with `statusbar pop`. To watch
+a log, keep the pipeline running in the background:
 
 ```sh
 tail -n 0 -f app.log | statusbar push -t app.log &
 ```
 
+By default, the line shows its ID, optional tag, and latest line on the left:
+
 ```text
 [1] app.log > Server ready
 ```
 
-Tags must be plain UTF-8 text without control characters and may contain up to
-128 bytes. The theme can place the tag and ID in either slot with its
-`[line.push]` templates.
+Use `-t TEXT` or `--tag TEXT` to label a line. For a background pipeline, read
+the ID on statusbar and run `statusbar pop ID` to remove that line. Without an ID,
+`statusbar pop` removes the newest line.
 
-Set the base style of pushed rows with `[line.push]` in the config. Use its
-`left` template with `#(stream)`, `#(tag)`, and `#(id)` to format the row;
+A script can save the returned ID to remove its own line later:
+
+```sh
+id=$(printf 'Build complete\n' | statusbar push -t build)
+statusbar pop "$id"
+```
+
+Tags must be plain UTF-8 text without control characters and may contain up
+to 128 bytes. A theme can place the tag and ID in either slot.
+
+Set the base style of pushed lines with `[line.push]` in the config. Use its
+`left` template with `#(stream)`, `#(tag)`, and `#(id)` to format the line;
 the `right` template can place values on the other side. Templates are
 reapplied to each `\r` progress update. See
 [configuration](config.md#linepush).
@@ -46,13 +52,12 @@ statusbar push -t 100Mb.dat -- curl --progress-bar --limit-rate 1M \
   -o /dev/null https://proof.ovh.net/files/100Mb.dat &
 ```
 
-`push` sets the command's `COLUMNS` to the terminal width minus fixed template
-text and any right slot content. It captures both stdout and stderr, so curl's
-progress output reaches the row. The width is measured when the command
-starts; resizing the terminal does not change the running command's `COLUMNS`.
-The command's exit status is
-returned by `push` after it prints the row ID. Output files should be specified
-for commands whose stdout is data rather than status text.
+`push` sets the command's `COLUMNS` to the space available for the stream. It
+captures both stdout and stderr, so curl's progress output reaches the line.
+The width is measured when the command starts; resizing the terminal does not
+change the running command's `COLUMNS`. `push` returns the command's exit
+status after printing the line ID. Specify an output file for commands whose
+stdout contains data you want to save.
 
 `push` reads a pipe or file. It displays the latest line as it arrives,
 including partial lines and `\r` progress updates. Short input bursts are
@@ -61,40 +66,21 @@ Identical redraws are skipped. Each line is limited to 1024 bytes without
 splitting a UTF-8 character. Stream text is literal: `##` and `#[bold]`
 display as written. ANSI colors and hyperlinks work, while cursor movement
 and backspace editing are not interpreted. The final value remains on screen
-when input ends. At EOF, `push` prints the ID to stdout and exits:
+when input ends. At EOF, `push` prints the ID to stdout and exits.
 
-```sh
-id=$(printf 'Build complete\n' | statusbar push)
-# The row is still visible.
-statusbar pop "$id"
-```
-
-With no ID, `pop` removes the most recently pushed row that still exists:
-
-```sh
-statusbar pop
-```
-
-For a background pipeline, use the ID shown on the bar to remove a specific
-row:
-
-```sh
-statusbar pop 1
-```
-
-`pop` can remove any pushed row by ID, even while its input is still flowing.
-The producer keeps running and future updates to that removed row are ignored.
+`pop` can remove any pushed line by ID, even while its input is still flowing.
+The producer keeps running and future updates to that removed line are ignored.
 Removing the same ID again succeeds. IDs are never reused during a session.
-`pop` cannot remove a configured row. Up to 128 pushed rows may exist at once.
-`statusbar pop` reports an error when there are no pushed rows to remove.
+`pop` cannot remove a configured line. Up to 128 pushed lines may exist at once.
+`statusbar pop` reports an error when there are no pushed lines to remove.
 
-Pushed rows survive a replacement of the running config. They do not add
+Pushed lines survive a replacement of the running config. They do not add
 numbered slots, and `statusbar config --print current` prints only config text.
-As with configured rows, rows that do not fit a short terminal remain stored
-and reappear when there is room. A push may therefore succeed while its row is
+As with configured lines, lines that do not fit a short terminal remain stored
+and reappear when there is room. A push may therefore succeed while its line is
 hidden.
 
 If `push` loses its input or exits unexpectedly, the last value accepted by
-the running bar stays visible; its ID remains on the row. Neither `push`
+the running statusbar stays visible; its ID remains on the line. Neither `push`
 nor `pop` works outside a live statusbar session. A missing, stale, or
 incompatible session is reported as an error.

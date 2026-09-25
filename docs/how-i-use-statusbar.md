@@ -1,6 +1,6 @@
 # How I use statusbar
 
-I use statusbar in two ways: a minimal bar in every terminal, and a richer one
+I use statusbar in two ways: a minimal statusbar in every terminal, and a richer one
 in the terminal where I'm actually spending time.
 
 ## A minimal default
@@ -9,7 +9,7 @@ My default config gives Starship a fixed place at the bottom of the terminal.
 I can see my prompt information without adding an extra line to every prompt
 in the scrollback.
 
-The bar itself has no scheduled external commands or clock updates. Starship
+The statusbar itself has no scheduled external commands or clock updates. Starship
 updates it through the shell integration when the prompt is drawn, so the
 default stays very light.
 
@@ -40,7 +40,7 @@ command = statusbar -- /bin/zsh -l
 ```
 
 And in `.zshrc`, I send Starship's information to slot 3—the left side of the
-second row:
+second line:
 
 ```sh
 eval "$(statusbar init zsh --starship-slot 3)"
@@ -56,8 +56,8 @@ When I settle into a terminal, I type `sbx`:
 alias sbx='statusbar config < "$HOME/.config/statusbar/extra.config"'
 ```
 
-This replaces the bar's config in that session, without restarting my shell.
-Starship stays in the second row, and the bar grows to include the top Hacker
+This replaces statusbar's config in that session, without restarting my shell.
+Starship stays in the second line, and statusbar grows to include the top Hacker
 News story, the star count for statusbar on GitHub, CPU and memory usage,
 temperature, weather, and the date and time. Tracked values briefly highlight
 when they change.
@@ -197,5 +197,5 @@ my machine.
 
 ![screenshot extra](screenshot-extra.png)
 
-Most terminals keep the small bar. The one I'm spending time in gets the extra
+Most terminals keep the small statusbar. The one I'm spending time in gets the extra
 information, with a single command.

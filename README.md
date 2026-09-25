@@ -1,63 +1,62 @@
 # statusbar
 
-A status bar for any terminal. `statusbar` runs your shell in a smaller pty
-and keeps configured rows at the bottom of the window. The bar yields rows
-when the terminal is too short. Full-screen programs and scrollback keep
-working.
+A status bar at the bottom of your terminal. It keeps useful information
+visible while you work, without repeating it in every prompt. Your shell,
+full-screen programs, and scrollback continue to work.
 
 ![screenshot](demo/screenshot.png)
 
-- Configure the bar with templates: text, colors, strftime clocks and shell
-  commands, each on its own refresh interval.
-- Wrap values in `#[track]...#[notrack]` to pulse just those regions when
-  their displayed content changes, using their own colors and terminal palette.
-- Update it from your scripts with `statusbar set`.
-- Give a command its own row with `statusbar push -- command`, then remove it with `statusbar pop ID`.
-- Optionally move Starship's prompt details into it while keeping the prompt
-  character in the terminal.
+## Install
 
-## Build
-
-Requires Zig 0.16 on macOS or Linux.
-
-```sh
-zig build -Doptimize=ReleaseSafe      # binary in zig-out/bin/statusbar
-zig build test                        # unit tests
-```
-
-Or install a released version with Homebrew:
+With Homebrew:
 
 ```sh
 brew install vrypan/tap/statusbar
 ```
 
-## Quick start
+Or build from source with Zig 0.16 on macOS or Linux:
 
 ```sh
-# The built-in bar: user, host, load, date and time
+zig build -Doptimize=ReleaseSafe
+# The binary is zig-out/bin/statusbar
+```
+
+## Quick start
+
+If you built from source, use `./zig-out/bin/statusbar` in place of
+`statusbar` below.
+
+```sh
+# Start your usual shell with the built-in statusbar.
 statusbar
 
-# Your own, starting from the built-in config
+# Make a personal config from the built-in one.
 mkdir -p ~/.config/statusbar
 statusbar config --default > ~/.config/statusbar/config
 statusbar
-
-# Or generate a config on the fly
-printf '[line.1]\nright = %%H:%%M\n' | statusbar --config -
 ```
 
-Run `statusbar --help` for the commands. The [user guide](docs/README.md)
-has setup instructions for shell completions.
+Each config line has a left and right side. Add text, a clock, or a command's
+output; [the guide](docs/README.md) starts with small examples.
 
-To put Starship's prompt in the bar, add this to `~/.zshrc`:
+Inside a statusbar session, scripts can set a slot with `statusbar set 1 "Ready"`.
+For live output, `statusbar push -t build -- make` adds a temporary line;
+`statusbar pop` removes it. You can also move Starship's prompt details into
+a statusbar slot.
+
+Run `statusbar --help` for the full command list.
+
+## Use Starship in statusbar
+
+To put Starship's prompt in statusbar, add this to `~/.zshrc`:
 
 ```zsh
 eval "$(statusbar init zsh)"
 ```
 
-Initialization also reports the current directory for the terminal title.
-Use `--report-cwd=false` if another integration already does this, or
-`--starship=false` for directory reporting alone.
+This moves Starship's information into slot 3 and leaves the prompt character
+in the terminal. It also updates the terminal title when you change directory.
+[Starship setup](docs/starship.md) covers other slots and options.
 
 Fish uses its native prompt function; put these after one another in
 `~/.config/fish/config.fish`:
@@ -67,20 +66,15 @@ starship init fish | source
 statusbar init fish | source
 ```
 
-For Nushell, copy [samples/statusbar.nu](samples/statusbar.nu) to
-`~/.config/nushell/statusbar.nu`, then add
-`source ~/.config/nushell/statusbar.nu` to `config.nu`.
+## More examples and details
 
-## Learn more
-
-Start with the [user guide](docs/README.md) for a practical setup: one-command
-bars, personal layouts, live slots, Starship, and themes. Reference guides
-cover [configuration](docs/config.md), [runtime slot updates](docs/set.md),
-[temporary rows](docs/push.md),
-[Starship](docs/starship.md), and [internals and limitations](docs/internals.md).
+The [user guide](docs/README.md) covers layouts, live updates, and themes.
+See [configuration](docs/config.md), [slot updates](docs/set.md),
+[temporary lines](docs/push.md), or [how statusbar works](docs/internals.md)
+when you need more detail. The guide also covers [shell completions](docs/usage.md#completion).
 
 ## How I use statusbar
 
-[My everyday setup](docs/how-i-use-statusbar.md): a minimal Starship bar in
-every Ghostty terminal, and an `sbx` alias to load a richer bar where I'm
+[My everyday setup](docs/how-i-use-statusbar.md): a minimal Starship statusbar in
+every Ghostty terminal, and an `sbx` alias to load a richer statusbar where I'm
 spending time.

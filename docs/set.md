@@ -1,14 +1,14 @@
 # Set the text of a slot
 
-Each configured row has two numbered slots:
+Each configured line has two numbered slots:
 
-| Row | Left | Right |
+| Line | Left | Right |
 |-----|------|-------|
 | 1   | 1    | 2     |
 | 2   | 3    | 4     |
 | 3   | 5    | 6     |
 
-The pattern continues: row *N* uses slots *2N − 1* and *2N*.
+The pattern continues: line *N* uses slots *2N − 1* and *2N*.
 
 `statusbar set SLOT [TEXT...]` sets the text of a slot. With no text, or a value made
 only of CR/LF line breaks, it restores the configured value:
@@ -19,11 +19,11 @@ statusbar set 4 "build ✓"
 statusbar set 4
 ```
 
-Slots exist for every desired row, including rows temporarily hidden because
+Slots exist for every desired line, including lines temporarily hidden because
 the terminal is short. Updating a hidden slot persists and appears when its
-row becomes visible. A slot outside the session's configured range is an
-error and never creates another row. Validation uses the session's current
-config after an interactive replacement, not its startup row count.
+line becomes visible. A slot outside the session's configured range is an
+error and never creates another line. Validation uses the session's current
+config after an interactive replacement, not its startup line count.
 
 Words are joined with spaces. Tabs and interior line breaks become spaces,
 while quoted spaces—including an all-space value—are preserved as padding.
@@ -42,6 +42,31 @@ capture command output:
 command = "statusbar set 4 \"$(git branch --show-current)\""
 when = true
 ```
+
+## Update a slot at each prompt
+
+A prompt hook can keep a slot in sync with the current directory. For Bash,
+add this to `~/.bashrc`:
+
+```bash
+__statusbar_cwd() {
+  local previous_status=$?
+  statusbar set 1 -- "$PWD"
+  return "$previous_status"
+}
+PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND}; }__statusbar_cwd"
+```
+
+For Fish, add this to `~/.config/fish/config.fish`:
+
+```fish
+function __statusbar_cwd --on-event fish_prompt
+  statusbar set 1 -- "$PWD"
+end
+```
+
+These examples use slot 1, the left side of line 1. If another prompt
+framework manages your hooks, add the update through that framework.
 
 ## The escape sequence
 

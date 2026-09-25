@@ -35,11 +35,11 @@ without startup files:
 ./zig-out/bin/statusbar --config "$PWD/samples/themes/tokyo-night.config" -- /bin/zsh -f
 ```
 
-All variants define two rows. Their rules fill unused space and can frame left
-and right labels on the same row. On narrow terminals the right side clips
+All variants define two lines. Their rules fill unused space and can frame left
+and right labels on the same line. On narrow terminals the right side clips
 first. Weather uses the original wttr.in command and may remain empty until
 it responds; these themes do not change that network behavior.
-Each variant also styles temporary rows created by `statusbar push` through
+Each variant also styles temporary lines created by `statusbar push` through
 `[line.push]`. Its `left` template adds a stream marker; its `right` template
 formats the tag and ID with the same accent and shapes as the theme's clock.
 

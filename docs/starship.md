@@ -1,6 +1,6 @@
 # Use statusbar with Starship
 
-[Starship](https://starship.rs) can move its prompt details into the bar.
+[Starship](https://starship.rs) can move its prompt details into statusbar.
 The terminal keeps only the prompt character:
 
 ```
@@ -23,7 +23,7 @@ statusbar to update the terminal title. Add `--report-cwd=false` if another
 integration already reports it. Both features default to enabled; use
 `--starship=false` to keep only directory reporting.
 
-By default the prompt details go to slot 3, the left side of row 2. Select
+By default the prompt details go to slot 3, the left side of line 2. Select
 another slot, including a right-side slot, with:
 
 ```zsh
@@ -32,7 +32,7 @@ eval "$(statusbar init zsh --starship-slot 5)"
 
 There is nothing to change in `starship.toml`. Inside a statusbar session,
 each prompt runs Starship as usual and splits the result: every line but the
-last goes to the bar's left slot, and the last line (with Starship's default
+last goes to statusbar's left slot, and the last line (with Starship's default
 layout, the prompt character) stays in the terminal. The character still
 turns red after a failed command and follows vi keymaps.
 
@@ -41,14 +41,14 @@ turns red after a failed command and follows vi keymaps.
   run.
 - Outside statusbar, `statusbar init zsh` prints nothing, so the same
   `.zshrc` works in every terminal.
-- A one-line Starship prompt is left whole in the terminal, and the bar keeps
+- A one-line Starship prompt is left whole in the terminal, and statusbar keeps
   its configured content.
 - If the selected slot is not present, the complete Starship prompt stays in
   the terminal. The integration starts moving its details automatically when
   a configuration loaded later adds that slot.
 - Starship's `add_newline` blank line stays in the terminal, above the
   prompt, as it would without statusbar.
-- The bar's right slot, and the right prompt (`right_format`), are untouched.
+- Statusbar's right slot, and the right prompt (`right_format`), are untouched.
 
 Run `statusbar init zsh` inside a session to read the code it installs.
 
@@ -70,7 +70,7 @@ statusbar init fish --starship-slot 5 | source
 ```
 
 The integration keeps Starship's final prompt line and moves preceding lines
-to the bar. Starship's right prompt remains untouched. Bash is not supported
+to statusbar. Starship's right prompt remains untouched. Bash is not supported
 for prompt relocation; see the [user guide](README.md#put-live-context-in-a-slot)
 for a simple Bash slot hook instead.
 
@@ -97,19 +97,66 @@ OSC 7 before each prompt. You do not need to source `starship init nu` separatel
 If you already source it, put the statusbar source line after it so statusbar's
 left prompt closure takes effect.
 
+## Formatting
+
+Everything comes from the same `starship.toml`, so module settings apply to
+both statusbar and the normal prompt. For example, the working directory is the
+`directory` module:
+
+```toml
+[directory]
+truncation_length = 2          # last two directories
+truncation_symbol = "…/"
+truncate_to_repo  = true       # inside a repository, start at its root
+style = "blue bold"
+```
+
+Run `starship print-config directory` to see every option and its current
+value, or the [starship configuration docs](https://starship.rs/config/) for
+all modules.
+
+To style statusbar differently from the prompt, run the hook's
+`starship prompt` with its own config file:
+`STARSHIP_CONFIG=~/.config/starship-bar.toml STARSHIP_SHELL= starship prompt …`.
+
+Starship's colors pass through to statusbar as they are. The rest of statusbar
+(the config's other slot, the rule line) is styled by statusbar's own config;
+see [config.md](config.md).
+
+## Troubleshooting
+
+**`%{` or `\[` in statusbar.** The hook is missing `STARSHIP_SHELL=`.
+
+**Statusbar shows the `❯` line, or is empty.** Your `format` doesn't end in
+`$line_break$character`, so the last line isn't just the prompt character.
+Set up the split by hand with a profile, as in
+[Choosing what goes in statusbar](#choosing-what-goes-in-statusbar).
+
+**Nothing reaches statusbar.** Check that `$STATUSBAR_STATE` is set in the
+session, that `statusbar init zsh` prints code there, and that
+`statusbar set 3 test` shows `test`. A statusbar started before you
+updated it may need a restart.
+
+**The right side is misaligned.** statusbar counts most wide characters and
+emoji as two cells, but a terminal may draw a symbol at a different width
+than statusbar measures. Starship's Nerd Font symbols are counted as one
+cell. If a module's symbol throws off alignment, change it in that module's
+`symbol` setting.
+
 ## Doing it by hand
 
 The sections below build the same thing from parts, for when you want a
 different split: another selection of modules, the right slot, or a
 profile. Use them instead of `statusbar init zsh`, not together with it. Both
-pieces go in `~/.zshrc` after `eval "$(starship init zsh)"`, and both check
-`$STATUSBAR_STATE`, so the same `.zshrc` works inside and outside statusbar.
+pieces go in `~/.zshrc` after `eval "$(starship init zsh)"`. The prompt
+replacement checks `$STATUSBAR_STATE`, and `statusbar set` does nothing outside
+a session, so the same `.zshrc` works everywhere.
 
-1. A hook that sends Starship's output to the bar before each prompt.
+1. A hook that sends Starship's output to statusbar before each prompt.
 2. A shorter `PROMPT` while inside statusbar, so the same details don't
    show twice.
 
-### 1. Send the prompt to the bar
+### 1. Send the prompt to statusbar
 
 ```zsh
 statusbar_precmd() {
@@ -124,7 +171,7 @@ precmd_functions+=(statusbar_precmd)
 
 - `STARSHIP_SHELL=` is required. In a zsh session starship wraps every color
   code in `%{…%}` for zsh's prompt, and those markers would show up as
-  literal text in the bar.
+  literal text in statusbar.
 - `$?` is already overwritten when this hook runs. Starship's own hook,
   which runs first, keeps the exit status and duration in
   `STARSHIP_CMD_STATUS` and `STARSHIP_DURATION`, so the `status` and
@@ -138,7 +185,7 @@ precmd_functions+=(statusbar_precmd)
 
 Use an even slot, such as `statusbar set 4`, to put the prompt on the right.
 
-#### Choosing what goes in the bar
+#### Choosing what goes in statusbar
 
 If your `format` doesn't end in `$line_break$character`, or you want a
 different selection than the prompt, define a profile and use it instead of
@@ -190,49 +237,3 @@ If other modules share the last line of your `format`, such as an
 The blank line above each prompt comes from starship's `add_newline`. Set
 `add_newline = false` at the top of `starship.toml` to remove it; that also
 applies outside statusbar.
-
-## Formatting
-
-Everything comes from the same `starship.toml`, so module settings apply to
-both the bar and the normal prompt. For example, the working directory is the
-`directory` module:
-
-```toml
-[directory]
-truncation_length = 2          # last two directories
-truncation_symbol = "…/"
-truncate_to_repo  = true       # inside a repository, start at its root
-style = "blue bold"
-```
-
-Run `starship print-config directory` to see every option and its current
-value, or the [starship configuration docs](https://starship.rs/config/) for
-all modules.
-
-To style the bar differently from the prompt, run the hook's
-`starship prompt` with its own config file:
-`STARSHIP_CONFIG=~/.config/starship-bar.toml STARSHIP_SHELL= starship prompt …`.
-
-Starship's colors pass through to the bar as they are. The rest of the bar
-(the config's other slot, the rule line) is styled by statusbar's own config;
-see [config.md](config.md).
-
-## Troubleshooting
-
-**`%{` or `\[` in the bar.** The hook is missing `STARSHIP_SHELL=`.
-
-**The bar shows the `❯` line, or is empty.** Your `format` doesn't end in
-`$line_break$character`, so the last line isn't just the prompt character.
-Set up the split by hand with a profile, as in
-[Choosing what goes in the bar](#choosing-what-goes-in-the-bar).
-
-**Nothing reaches the bar.** Check that `$STATUSBAR_STATE` is set in the
-session, that `statusbar init zsh` prints code there, and that
-`statusbar set 3 test` shows `test`. A statusbar started before you
-updated it may need a restart.
-
-**The right side is misaligned.** statusbar counts most wide characters and
-emoji as two cells, but a terminal may draw a symbol at a different width
-than statusbar measures. Starship's Nerd Font symbols are counted as one
-cell. If a module's symbol throws off alignment, change it in that module's
-`symbol` setting.

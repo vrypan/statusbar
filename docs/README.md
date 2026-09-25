@@ -1,34 +1,16 @@
 # statusbar guide
 
-statusbar gives a terminal session a persistent area at its bottom. Use it to
-keep context that is useful between commands—where you are, what branch you
-are on, whether work succeeded, or what the machine is doing—without putting
-that information in every prompt.
+statusbar keeps information visible at the bottom of a terminal. Use it for a
+clock, project context, build status, or command progress without adding those
+details to every prompt.
 
-It runs your shell in a slightly smaller pseudo-terminal and paints the bar in
-the rows below it. Your shell, full-screen programs, and scrollback continue
-to work normally.
+This guide starts with a small statusbar, then shows how to customize it. Each
+`[line.N]` section in a config adds one statusbar line with a left and right side.
 
-This guide calls the visible parts of the bar *rows*. In a config file, each
-`[line.N]` section defines one row.
+## Start with one line
 
-## Choose a starting point
-
-| Goal | Start here |
-|---|---|
-| Show a clock or one command's output | [A single command](#start-with-one-command) |
-| Build a persistent personal layout | [Make a config](#make-a-config) |
-| Change layouts without restarting the shell | [Load another config](#load-another-config) |
-| Notice when a command's value changes | [Highlight changed values](#highlight-changed-values) |
-| Show changing directory or Git context | [Update slots from your shell](#put-live-context-in-a-slot) |
-| Give a command its own temporary row | [Push a stream into a row](push.md) |
-| Move Starship's details out of the prompt | [Use Starship](#use-starship) |
-| Try a more visual look | [Try a theme](#try-a-theme) |
-| See an everyday setup with actual configs | [How I use statusbar](how-i-use-statusbar.md) |
-
-## Start with one command
-
-For a lightweight bar, pass a small config directly:
+Run the built-in statusbar with `statusbar`. To try a one-line clock instead, pass a
+small config directly:
 
 ```sh
 statusbar --config - <<'EOF'
@@ -37,8 +19,8 @@ right = %H:%M
 EOF
 ```
 
-Scripts can generate one too: `generate-config | statusbar --config -`.
-See [the command reference](usage.md#generate-a-config-on-the-fly) for details.
+To leave, exit the shell inside statusbar. A script can also write a config to
+standard input; see [configs from stdin](usage.md#generate-a-config-on-the-fly).
 
 ## Make a config
 
@@ -50,109 +32,25 @@ statusbar config --default > ~/.config/statusbar/config
 statusbar
 ```
 
-Each consecutive `[line.N]` section creates a row. Every row has a left and
-right slot; an optional `rule` fills the unused space between them. This
-three-row layout has a labeled divider, stable machine information, and room
-for live project context:
+Each `[line.N]` section adds a line. Lines have a left and right side. You can
+replace the starter config with this two-line example:
 
 ```ini
-interval = 5
-
-[colors]
-accent = #89b4fa
-muted = #6c7086
-
 [line.1]
-left = " Build "
-right = " ready "
-rule = ─
-style = fg=muted
+left = " Ready "
+right = %H:%M
 
 [line.2]
-left = " #[fg=accent,bold]#(hostname -s)#[default] · load #(load)"
-right = "%a %d  #[bold]%H:%M:%S#[default] "
-
-[line.3]
-left = "Project context appears here"
-
-[command.load]
-run = uptime | awk -F'load averages?: ' '{print $2}'
-interval = 10
+left = "Host #(hostname)"
 ```
 
-The terminal shows as many configured rows as fit while preserving at least
-two rows for the program inside it. Rows that do not fit are hidden and return
-when the terminal grows. [Configuration](config.md) explains templates,
-commands, markup, colors, rules, and all layout details.
+`%H:%M` shows the current time. `#(hostname)` runs the command and shows its
+first output line. By default, commands run every five seconds. You can add
+colors, change intervals, and fill the space between sides with a `rule`;
+see [configuration](config.md).
 
-## Load another config
-
-Inside a running statusbar session, pipe a config into `statusbar config` to
-replace the whole configuration:
-
-```sh
-cat ./themes/dark.config | statusbar config
-statusbar config --default | statusbar config
-```
-
-The command reads the file locally and sends its contents to the running
-session. See [configuration](config.md#replace-the-running-config) for the
-transactional behavior and [OSC config replacement](osc-3110.md) for the wire
-format and size limit.
-
-The running statusbar validates the config before replacing anything; an
-invalid one leaves the current bar unchanged. A successful load
-can add or remove rows and change every configuration setting without restarting
-the shell or foreground program. Overrides in numbered slots that still exist
-are retained. Config files run shell commands, so load only files you trust.
-
-## Highlight changed values
-
-Wrap a value in `#[track]...#[notrack]` to briefly highlight it when its displayed
-content changes. This works for commands and template clocks, and is useful for
-weather, unread notifications, resource metrics, or build state:
-
-```ini
-[line.1]
-left = " Clock #[track]#(clock)#[notrack] "
-
-[command.clock]
-run = date '+%H:%M:%S'
-interval = 1
-```
-
-The first result establishes a baseline; identical later results do nothing.
-By default, changes play two smooth pulses over 2.4 seconds, derived from each
-grapheme's own foreground and background colors, using your terminal's palette. The
-marked region is highlighted; its label and other content keep their normal
-appearance. Several regions in one slot can change width and pulse independently:
-
-```ini
-left = "CPU #[track]#(cpu)#[notrack]  MEM #[track]#(mem)#[notrack]"
-```
-
-The background smoothly moves toward the text's lightness, then returns:
-dark backgrounds brighten and light backgrounds darken. The foreground adjusts
-alongside it, and a contrast safeguard limits the pulse to keep text readable.
-Gray text on a dark background sweeps toward near-white; on a light background,
-the text moves toward near-black. Colored text keeps its hue where possible.
-Between peaks, the highlight softens without returning to the original styling;
-the original colors return only when the whole animation ends.
-Styles and hyperlinks are preserved. If the terminal cannot report a needed
-color, that grapheme uses a bold fallback.
-
-```ini
-[highlight]
-pulses = 2
-```
-
-Use `pulses = 1` for 1.2 seconds or `pulses = 3` for 3.6 seconds. Each pulse
-keeps the same pace; more pulses give you longer to notice the changed value.
-Older `effect`, custom highlight color, and `step` settings are no longer
-accepted; remove them when upgrading. Markup colors remain configurable.
-
-See [Highlight changes](config.md#highlight-changes) for the complete behavior
-and `[highlight]` reference.
+statusbar keeps at least two terminal rows for your shell. Configured statusbar lines
+that do not fit are hidden until the window grows.
 
 ## Put live context in a slot
 
@@ -165,45 +63,36 @@ Slots are numbered left-to-right, top-to-bottom: line 1 uses slots 1 and 2,
 line 2 uses 3 and 4, and so on.
 
 ```zsh
-# Put the current directory in the left side of line 3 before each prompt.
+# ~/.zshrc: put the current directory in slot 1 before each prompt.
 __statusbar_cwd() {
-  statusbar set 5 -- "$PWD"
+  statusbar set 1 -- "$PWD"
 }
 precmd_functions+=(__statusbar_cwd)
 ```
 
-The same idea works in Bash and Fish. If another prompt framework manages
-these hooks, add the update through that framework instead of replacing its
-hook outright.
-
-```bash
-# ~/.bashrc
-__statusbar_cwd() {
-  local previous_status=$?
-  statusbar set 5 -- "$PWD"
-  return "$previous_status"
-}
-PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND}; }__statusbar_cwd"
-```
-
-```fish
-# ~/.config/fish/config.fish
-function __statusbar_cwd --on-event fish_prompt
-  statusbar set 5 -- "$PWD"
-end
-```
-
-Calling `statusbar set 5` with no text restores the value from the config.
-Use [`statusbar push`](push.md) to show a command's latest output line as it arrives.
+Calling `statusbar set 1` with no text restores the value from the config.
 `statusbar set` is a no-op outside a statusbar session, so the same shell setup
-works in regular terminals. [Updating slots](set.md) covers numbering,
-formatting, and sending updates from scripts.
+works in regular terminals. [Updating slots](set.md) has Bash and Fish hooks,
+formatting details, and examples for scripts.
+
+## Give a command its own line
+
+Use `push` for output that changes while a command runs:
+
+```sh
+statusbar push -t build -- make
+```
+
+The new line shows the latest output line and stays visible when `make` ends.
+`push` prints the line's ID so you can remove it later with `statusbar pop ID`.
+Use `statusbar pop` without an ID to remove the newest line. See
+[temporary lines](push.md) for pipes, logs, progress bars, and styling.
 
 ## Use Starship
 
 If you already use [Starship](https://starship.rs), keep its prompt character
 in the terminal and move its useful details—directory, Git state, durations,
-and language versions—into a bar slot:
+and language versions—into a statusbar slot:
 
 ```zsh
 eval "$(statusbar init zsh)"
@@ -236,7 +125,7 @@ eval "$(statusbar init zsh --starship-slot 5)"
 
 [The Starship guide](starship.md) explains the automatic integration, shell
 ordering, and how to select modules or use a dedicated Starship profile for
-the bar.
+statusbar.
 
 ## Try a theme
 
@@ -246,16 +135,73 @@ styles: [Pure](../samples/themes/pure.config),
 [Gruvbox](../samples/themes/gruvbox.config), and
 [Pastel Powerline](../samples/themes/pastel-powerline.config).
 
-Try one without replacing your config:
+From the repository checkout, try one without replacing your config:
 
 ```sh
-statusbar --config /path/to/statusbar/samples/themes/tokyo-night.config
+statusbar --config ./samples/themes/tokyo-night.config
 ```
 
 The Gruvbox and Pastel Powerline themes need Powerline glyphs, usually supplied
 by a Nerd Font. Pure and Tokyo Night use ordinary terminal text and Unicode.
 The themes are a good way to explore backgrounds, colored labels, rules, and
 restrained use of icons; see [their notes](../samples/themes/README.md).
+
+## Load another config
+
+Inside a running statusbar session, send a config to `statusbar config` to
+replace the whole layout. From the repository checkout, for example:
+
+```sh
+statusbar config < ./samples/themes/tokyo-night.config
+statusbar config --default | statusbar config
+```
+
+Statusbar checks the new config before applying it. If it is invalid, the
+current layout stays in place. A valid one can add or remove lines without
+restarting the shell. Only load config files you trust, since they can run
+commands. See [configuration](config.md#replace-the-running-config) for what
+happens to slot values and pushed lines; the [protocol](osc-3110.md) is there
+for programs that send config changes directly.
+
+## Highlight changed values
+
+Wrap a value in `#[track]...#[notrack]` to briefly highlight it when its displayed
+content changes. This works for commands and template clocks, and is useful for
+weather, unread notifications, resource metrics, or build state:
+
+```ini
+[line.1]
+left = " Clock #[track]#(clock)#[notrack] "
+
+[command.clock]
+run = date '+%H:%M:%S'
+interval = 1
+```
+
+The first result sets a baseline. Later changes briefly highlight only the
+marked text. You can mark more than one value in a slot:
+
+```ini
+left = "CPU #[track]#(cpu)#[notrack]  MEM #[track]#(mem)#[notrack]"
+```
+
+The default effect makes two pulses over 2.4 seconds. Set `pulses = 1` or
+`pulses = 3` under `[highlight]` to change the duration. See
+[highlight settings](config.md#highlight-changes) for the full behavior and
+older-config migration details.
+
+## Reference and behavior
+
+- [How I use statusbar](how-i-use-statusbar.md) — a minimal everyday statusbar and a richer optional layout.
+- [Usage](usage.md) — commands, options, completions, generated configs, and environment.
+- [Configuration](config.md) — lines, commands, change highlights, colors, markup, and rules.
+- [Updating slots](set.md) — runtime updates from scripts and the terminal protocol.
+- [Pushing lines](push.md) — stream output into a new line and remove it by ID.
+- [Starship](starship.md) — prompt integration and customization.
+- [Display and animation model](display-model.md) — content updates, animation
+  ticks, composed frames, and terminal paints.
+- [Internals and limitations](internals.md) — PTY behavior, supported terminal
+  interactions, and edge cases relevant to terminal-tool authors.
 
 ## Contributing and testing
 
@@ -270,15 +216,3 @@ For rendering measurements, run `zig build bench -Doptimize=ReleaseFast`.
 It separates first-use color preparation from repeated effects and tests
 multiple colors and tracked regions. See [measurement details](internals.md#resource-limits-and-measurement)
 before comparing timings; a single warm frame does not predict first-use cost.
-
-## Reference and behavior
-
-- [Usage](usage.md) — commands, options, completions, generated configs, and environment.
-- [Configuration](config.md) — rows, commands, change highlights, colors, markup, and rules.
-- [Updating slots](set.md) — runtime updates from scripts and the terminal protocol.
-- [Pushing rows](push.md) — stream output into a new row and remove it by ID.
-- [Starship](starship.md) — prompt integration and customization.
-- [Display and animation model](display-model.md) — content updates, animation
-  ticks, composed frames, and terminal paints.
-- [Internals and limitations](internals.md) — PTY behavior, supported terminal
-  interactions, and edge cases relevant to terminal-tool authors.

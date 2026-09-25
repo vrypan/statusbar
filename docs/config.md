@@ -1,5 +1,45 @@
 # Configuration
 
+A config file decides what each statusbar line shows. Start with a small one:
+
+```ini
+[line.1]
+left = " Ready "
+right = %H:%M
+```
+
+Each `[line.N]` section adds a line. `left` and `right` place text on either
+side. `%H:%M` shows the current time. Run `statusbar` to use the built-in
+config, or save this example as `~/.config/statusbar/config` to use it instead.
+
+## Add colors and a command
+
+```ini
+interval = 5
+
+[colors]
+accent = #89b4fa
+dim    = #7f849c
+rule   = #45475a
+
+[line.1]
+rule  = ─
+style = fg=rule
+
+[line.2]
+left  = " #[fg=accent,bold]#(host)#[default] #[fg=dim]· ready#[default]"
+right = "%a %d %b  #[bold]%H:%M#[default] "
+
+[command.host]
+run      = hostname
+interval = 60
+```
+
+`[command.host]` runs `hostname`, and `#(host)` puts its latest first line in
+statusbar. `[colors]` names colors used by `style` and `#[...]` markup.
+
+## Where statusbar finds the config
+
 statusbar chooses its config path in this order:
 
 1. `--config PATH` (use `-` to read from stdin)
@@ -12,7 +52,7 @@ If the selected default file is missing, statusbar uses its built-in config:
 `--config` or `$STATUSBAR_CONFIG` is an error. So is a malformed config:
 statusbar reports the file, line, and problem before it touches the terminal.
 
-The built-in config is commented. Its regular bar colors use the terminal's
+The built-in config is commented. Its regular statusbar colors use the terminal's
 palette, and its change highlight derives a pulse from each grapheme's colors.
 Start from it:
 
@@ -31,48 +71,45 @@ For generated configs and here-documents, see
 
 ## Replace the running config
 
-A program inside the session can replace the complete running config:
+Inside a session, you can replace the whole config. From the repository
+checkout, for example:
 
 ```sh
-cat ./themes/dark.config | statusbar config
-statusbar config < ./themes/dark.config
+statusbar config < ./samples/themes/tokyo-night.config
 ```
 
-Loading is transactional: an invalid config leaves the active bar in place.
-A successful replacement applies every
-setting, including its number of `[line.N]` sections. Existing numbered-slot
+An invalid config leaves the active statusbar unchanged. A successful replacement
+applies every setting, including its number of `[line.N]` sections. Numbered-slot
 overrides survive only where the same slot number exists in the new layout.
-Rows created by `statusbar push` stay below the configured rows with their
+Lines created by `statusbar push` stay below the configured lines with their
 IDs and content intact; they are separate from numbered slots.
 Configured commands restart and establish their first values without a change
 highlight. Because those commands are executable code, load trusted configs.
 
-The command reads the file in its own process and sends its contents to the
-running proxy. The receiver does not resolve the filename. OSC transport limits
-these configs to 24,523 bytes. See [the protocol](osc-3110.md).
+The file is read where you run `statusbar config`. The session receives its
+contents and never needs access to that file. See
+[config replacement details](usage.md#config-replacement-details) for the size
+limit and [the protocol](osc-3110.md) for its terminal sequence.
 
-## Example
+## Templates
 
-```ini
-interval = 5
+Templates mix text, markup and command output:
 
-[colors]
-accent = #89b4fa
-dim    = #7f849c
-rule   = #45475a
+- `#(NAME)`: the first line of `[command.NAME]`'s latest output
+- `#(anything else)`: runs as a shell command at the top-level `interval`,
+  as in tmux; the same text used twice runs once
+- `%H:%M`, `%a %d %b`: strftime(3) conversions, re-read every second;
+  `%%` is a literal `%`
+- `#[...]`: [markup](#markup)
+- `#[track]...#[notrack]`: an independently [highlighted region](#highlight-changes)
 
-[line.1]
-rule  = ─
-style = fg=rule
+## Syntax
 
-[line.2]
-left  = " #[fg=accent,bold]#(hostname -s)#[default] #[fg=dim]·#[default] #(load)"
-right = "%a %d %b  #[bold]%H:%M#[default] "
-
-[command.load]
-run      = sysctl -n vm.loadavg | awk '{print $2}'
-interval = 10
-```
+- Wrap a value in double quotes to keep leading or trailing spaces.
+- Any value may use a `|` block; see [commands](#commandname) for its syntax.
+- Lines starting with `#` or `;` are comments. A `#` anywhere else is part of
+  the value, since markup and colors use it, so a comment can't follow a
+  value on the same line.
 
 ## Top level
 
@@ -90,9 +127,9 @@ accepts, but not another name.
 ## `[line.N]`
 
 At least `[line.1]` is required, even if it is empty.
-Line sections define the bar's desired height and must be consecutive from
+Line sections define statusbar's desired height and must be consecutive from
 `[line.1]`. They may appear in any order in the file and render in numeric
-order. An empty section still reserves its row. The maximum is 65533 rows.
+order. An empty section still reserves its line. The maximum is 65533 lines.
 
 | Key     | Meaning                                         |
 |---------|-------------------------------------------------|
@@ -109,26 +146,26 @@ narrow, the right slot is clipped first; the left slot is kept longest.
 
 ## `[line.push]`
 
-Use `style` to set the base style of every row created by `statusbar push`:
+Use `style` to set the base style of every line created by `statusbar push`:
 
 ```ini
 [line.push]
 style = fg=accent,bg=#1e1e2e
 left = "#[fg=accent]› #[default]#(stream)"
-right = "#[fg=base,bg=accent,bold] #(tag) [#(id)] #[default]"
+right = "#[fg=#1e1e2e,bg=accent,bold] #(tag) [#(id)] #[default]"
 ```
 
-`style` covers the whole row. `left` and `right` work like normal line
+`style` covers the whole line. `left` and `right` work like normal line
 templates, with markup, clock conversions, and named or inline commands.
 `#(stream)` inserts the current stream value in `left`; `#(tag)` and `#(id)`
-insert the tag and numeric row ID in either template. Write `[#(id)]` for a
+insert the tag and numeric line ID in either template. Write `[#(id)]` for a
 bracketed ID. Stream and tag values are inserted literally: their
 `#[...]` text cannot change the template's markup, while stream ANSI colors
 still work. The independent defaults are `left = "[#(id)] #(tag) > #(stream)"`
 and `right = ""`. Either can be overridden without changing the other. If
-`style` is omitted, pushed rows inherit the top-level `style`. This section does not
-reserve a row or change numbered slots. Reloading the config updates pushed
-rows already visible. A carriage-return update re-renders the current stream
+`style` is omitted, pushed lines inherit the top-level `style`. This section does not
+reserve a line or change numbered slots. Reloading the config updates pushed
+lines already visible. A carriage-return update re-renders the current stream
 value through `left`.
 
 ## `[command.NAME]`
@@ -154,8 +191,37 @@ interval = 60
 Only the first line of a command's latest output is displayed. Each command
 runs on its own schedule, so a slow one never holds up the clock or other
 commands. One that runs past its interval (at least five seconds) is killed.
+Commands run in the directory where statusbar started, with stdin and stderr
+connected to `/dev/null`. `STATUSBAR_COLUMNS` gives them the current statusbar width.
 
-### Highlight changes
+## Markup
+
+Style text with tmux-like markup instead of escape codes:
+
+```
+#[fg=accent,bold]host#[default] #[fg=brightblack]·#[default] 3.73
+```
+
+Style markup holds attributes separated by commas or spaces. The standalone
+tracking markers described above are template boundaries, not style attributes.
+
+- `fg=COLOR`, `bg=COLOR`, where COLOR is one of
+  - `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`,
+    and `brightblack` … `brightwhite`: the terminal's palette, which follows
+    its theme
+  - `colour214` or `214`: the 256-color palette
+  - `#rrggbb`: an exact color
+  - a `[colors]` name
+  - `default`: the terminal's own foreground or background
+- `bold`, `dim`, `italics`, `underscore`, `blink`, `reverse`,
+  `strikethrough`, `overline`, and `no…` (`nobold`) to turn each off
+- `default` or `none`: back to the line's style
+
+`##` is a literal `#`. Unknown attributes are ignored. Styles don't carry
+across slots. Raw SGR escapes and OSC 8 hyperlinks work too; other escape
+sequences are stripped.
+
+## Highlight changes
 
 Mark the part of a left/right template you want to watch:
 
@@ -203,7 +269,7 @@ To migrate an older config, remove `track = true` (or `track = false`) from
 `[command.NAME]` and wrap each desired use in `#[track]...#[notrack]`. The old
 command key is rejected with migration guidance.
 
-### `[highlight]`: adaptive pulse
+## `[highlight]`: adaptive pulse
 
 With no highlight configuration, each marked grapheme pulses using its own
 foreground and background colors. By default, two pulses play over 2.4 seconds.
@@ -251,55 +317,3 @@ migrated. Ordinary markup colors and the `[colors]` palette are unchanged.
 Resize and screen repair preserve an active pulse's position and deadline. If
 safe repainting is temporarily blocked by child output, obsolete frames are
 skipped rather than replayed.
-
-Commands run in the directory where statusbar started, not your shell's,
-with stdin and stderr on `/dev/null`. `STATUSBAR_COLUMNS` is the current
-width. Use `statusbar config --print current` to inspect the current
-configuration, including lines hidden by terminal size.
-
-## Templates
-
-Templates mix text, markup and command output:
-
-- `#(NAME)`: the first line of `[command.NAME]`'s latest output
-- `#(anything else)`: runs as a shell command at the top-level `interval`,
-  as in tmux; the same text used twice runs once
-- `%H:%M`, `%a %d %b`: strftime(3) conversions, re-read every second;
-  `%%` is a literal `%`
-- `#[...]`: [markup](#markup)
-- `#[track]...#[notrack]`: an independently [highlighted region](#highlight-changes)
-
-## Syntax
-
-- Wrap a value in double quotes to keep leading or trailing spaces.
-- Any value may use a `|` block; see [commands](#commandname) for its syntax.
-- Lines starting with `#` or `;` are comments. A `#` anywhere else is part of
-  the value, since markup and colors use it, so a comment can't follow a
-  value on the same line.
-
-## Markup
-
-Style text with tmux-like markup instead of escape codes:
-
-```
-#[fg=accent,bold]host#[default] #[fg=brightblack]·#[default] 3.73
-```
-
-Style markup holds attributes separated by commas or spaces. The standalone
-tracking markers described above are template boundaries, not style attributes.
-
-- `fg=COLOR`, `bg=COLOR`, where COLOR is one of
-  - `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`,
-    and `brightblack` … `brightwhite`: the terminal's palette, which follows
-    its theme
-  - `colour214` or `214`: the 256-color palette
-  - `#rrggbb`: an exact color
-  - a `[colors]` name
-  - `default`: the terminal's own foreground or background
-- `bold`, `dim`, `italics`, `underscore`, `blink`, `reverse`,
-  `strikethrough`, `overline`, and `no…` (`nobold`) to turn each off
-- `default` or `none`: back to the line's style
-
-`##` is a literal `#`. Unknown attributes are ignored. Styles don't carry
-across slots. Raw SGR escapes and OSC 8 hyperlinks work too; other escape
-sequences are stripped.
