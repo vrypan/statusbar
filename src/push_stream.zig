@@ -5,6 +5,7 @@ const posix = std.posix;
 const zunic = @import("zunic");
 const sys = @import("sys.zig");
 const max_value = @import("output.zig").max_value;
+const push_protocol = @import("push_protocol.zig");
 const control = @import("session_control.zig");
 
 pub const State = struct {
@@ -110,12 +111,8 @@ const Sender = struct {
         if (!self.state.pending()) return;
         const now_ms = self.now();
         if (!final and self.state.timeout(now_ms) != 0) return;
-        const value = self.state.value();
-        const encoder = std.base64.standard.Encoder;
-        var encoded: [encoder.calcSize(max_value)]u8 = undefined;
-        _ = encoder.encode(encoded[0..encoder.calcSize(value.len)], value);
-        var frame: [1500]u8 = undefined;
-        const sequence = std.fmt.bufPrint(&frame, "1|{s}|U|{d}|{s}", .{ self.token, self.id, encoded[0..encoder.calcSize(value.len)] }) catch return error.Stream;
+        var frame: [push_protocol.max_packet]u8 = undefined;
+        const sequence = push_protocol.encode(&frame, self.token, .{ .update = .{ .id = self.id, .value = self.state.value() } }) catch return error.Stream;
         self.client.send(sequence) catch return error.Stream;
         self.state.markSent(now_ms);
     }

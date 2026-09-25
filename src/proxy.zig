@@ -32,6 +32,7 @@ const PaletteProbe = @import("terminal_palette.zig").Probe;
 const PushedRows = @import("pushed_rows.zig").Rows;
 const PushedRow = @import("pushed_rows.zig").Row;
 const pushed_rows = @import("pushed_rows.zig");
+const push_protocol = @import("push_protocol.zig");
 const control = @import("session_control.zig");
 
 const io_buf_size = 64 * 1024;
@@ -562,29 +563,16 @@ const Proxy = struct {
         self.requestPaint(now_ms);
     }
 
-    fn controlRequest(self: *Proxy, packet: []const u8, owner: []const u8, now_ms: i64) []const u8 {
-        var parts = std.mem.splitScalar(u8, packet, '|');
-        if (!std.mem.eql(u8, parts.next() orelse return "ERR", "1")) return "ERR";
-        const token = parts.next() orelse return "ERR";
-        if (!std.mem.eql(u8, token, &self.session_token)) return "ERR";
-        const operation = parts.next() orelse return "ERR";
-        if (std.mem.eql(u8, operation, "C")) {
-            const encoded = parts.next();
-            if (parts.next() != null or @as(usize, self.runtime.lines) + self.pushed.items.items.len >= 65533) return "ERR";
-            var decoded: [pushed_rows.max_tag]u8 = undefined;
-            const tag = if (encoded) |data| blk: {
-                const len = std.base64.standard.Decoder.calcSizeForSlice(data) catch return "ERR";
-                if (len > decoded.len) return "ERR";
-                std.base64.standard.Decoder.decode(decoded[0..len], data) catch return "ERR";
-                break :blk decoded[0..len];
-            } else "";
-            const id = self.pushed.push(owner, tag) catch return "ERR";
+    fn controlRequest(self: *Proxy, request: push_protocol.Request, owner: []const u8, now_ms: i64) push_protocol.Reply {
+        if (request == .create) {
+            if (@as(usize, self.runtime.lines) + self.pushed.items.items.len >= 65533) return .rejected;
+            const tag = request.create;
+            const id = self.pushed.push(owner, tag) catch return .rejected;
             self.resizeForPushedRows(now_ms) catch {
                 _ = self.pushed.pop(id);
                 self.pushed.next_id = id;
-                return "ERR";
+                return .rejected;
             };
-            var response: [64]u8 = undefined;
             const row_index = @as(usize, self.runtime.lines) + self.pushed.items.items.len - 1;
             const right_width = if (row_index < self.runtime.renderer.rows.len)
                 @min(self.runtime.renderer.rows[row_index].semantic[1].cells.items.len, self.layout.cols)
@@ -596,25 +584,17 @@ const Proxy = struct {
                 0;
             const gap: usize = if (right_width > 0) 1 else 0;
             const available = @max(1, @as(usize, self.layout.cols) -| (left_fixed_width + right_width + gap));
-            const result = std.fmt.bufPrint(&response, "OK|{d}|{d}", .{ id, available }) catch return "ERR";
-            // The caller must send this response before returning from its stack frame.
-            return self.controlReply(result);
+            return .{ .created = .{ .id = id, .columns = available } };
         }
-        const id = if (parts.next()) |id_text|
-            std.fmt.parseInt(u64, id_text, 10) catch return "ERR"
-        else if (std.mem.eql(u8, operation, "P"))
-            self.pushed.latestId() orelse return "EMPTY"
-        else
-            return "ERR";
-        if (id == 0 or id >= self.pushed.next_id) return "ERR";
-        if (std.mem.eql(u8, operation, "U")) {
-            if (!self.pushed.ownedBy(id, owner)) return "ERR";
-            const encoded = parts.next() orelse return "ERR";
-            if (parts.next() != null) return "ERR";
-            var decoded: [1024]u8 = undefined;
-            const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(encoded) catch return "ERR";
-            if (decoded_len > decoded.len) return "ERR";
-            std.base64.standard.Decoder.decode(decoded[0..decoded_len], encoded) catch return "ERR";
+        const id = switch (request) {
+            .create => unreachable,
+            .update => |update| update.id,
+            .finish => |id| id,
+            .pop => |id| id orelse self.pushed.latestId() orelse return .empty,
+        };
+        if (id == 0 or id >= self.pushed.next_id) return .rejected;
+        if (request == .update) {
+            if (!self.pushed.ownedBy(id, owner)) return .rejected;
             var before: ?PushedRow = null;
             var changed_index: usize = 0;
             for (self.pushed.items.items, 0..) |row, index| if (row.id == id) {
@@ -622,40 +602,34 @@ const Proxy = struct {
                 changed_index = index;
                 break;
             };
-            if (self.pushed.update(id, decoded[0..decoded_len])) {
+            if (self.pushed.update(id, request.update.value)) {
                 const visible = self.composePushedUpdate(self.runtime, self.layout, changed_index) catch {
                     for (self.pushed.items.items) |*row| if (row.id == id) {
                         row.* = before.?;
                         break;
                     };
                     self.composeRows(self.runtime, self.layout, true) catch {};
-                    return "ERR";
+                    return .rejected;
                 };
                 if (visible) self.requestPaint(now_ms);
             }
-            return "OK";
+            return .ok;
         }
-        if (parts.next() != null) return "ERR";
-        if (std.mem.eql(u8, operation, "F")) return if (self.pushed.ownedBy(id, owner) or !self.pushed.exists(id)) "OK" else "ERR";
-        if (std.mem.eql(u8, operation, "P")) {
+        if (request == .finish) return if (self.pushed.ownedBy(id, owner) or !self.pushed.exists(id)) .ok else .rejected;
+        if (request == .pop) {
             for (self.pushed.items.items, 0..) |row, index| {
                 if (row.id != id) continue;
                 _ = self.pushed.pop(id);
                 self.resizeForPushedRows(now_ms) catch {
                     self.pushed.items.insert(self.gpa, index, row) catch unreachable;
                     self.composeRows(self.runtime, self.layout, true) catch {};
-                    return "ERR";
+                    return .rejected;
                 };
                 break;
             }
-            return "OK";
+            return .ok;
         }
-        return "ERR";
-    }
-
-    fn controlReply(self: *Proxy, value: []const u8) []const u8 {
-        @memcpy(self.control_reply[0..value.len], value);
-        return self.control_reply[0..value.len];
+        return .rejected;
     }
 
     fn drainControl(self: *Proxy, now_ms: i64) void {
@@ -665,9 +639,21 @@ const Proxy = struct {
             var from_len: c.socklen_t = undefined;
             const message = self.control_endpoint.receive(&packet, &from, &from_len) orelse break;
             const owner = control.senderPath(&from, from_len) orelse continue;
-            const reply = self.controlRequest(message, owner, now_ms);
-            // Updates do not need responses. Acknowledged operations do.
-            if (std.mem.indexOf(u8, message, "|U|") == null) self.control_endpoint.reply(&from, from_len, reply);
+            var envelope = push_protocol.Envelope.parse(message) catch {
+                self.control_endpoint.reply(&from, from_len, "ERR");
+                continue;
+            };
+            var decoded: [pushed_rows.max_text]u8 = undefined;
+            const reply: push_protocol.Reply = reply: {
+                if (!std.mem.eql(u8, envelope.token, &self.session_token)) break :reply .rejected;
+                const request = envelope.decode(&decoded) catch break :reply .rejected;
+                break :reply self.controlRequest(request, owner, now_ms);
+            };
+            if (envelope.needsReply()) {
+                var response: [64]u8 = undefined;
+                const encoded = push_protocol.encodeReply(&response, reply) catch "ERR";
+                self.control_endpoint.reply(&from, from_len, encoded);
+            }
         }
     }
 

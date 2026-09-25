@@ -283,6 +283,7 @@ fn setSlot(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stde
 }
 
 const push_stream = @import("push_stream.zig");
+const push_protocol = @import("push_protocol.zig");
 const control = @import("session_control.zig");
 
 fn sessionClient(io: Io, path_buf: *[96]u8) !control.Client {
@@ -306,25 +307,19 @@ fn pushRow(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     defer client.deinit();
     var packet: [384]u8 = undefined;
     var reply: [128]u8 = undefined;
-    var encoded_tag: [std.base64.standard.Encoder.calcSize(@import("pushed_rows.zig").max_tag)]u8 = undefined;
-    const encoded = std.base64.standard.Encoder.encode(&encoded_tag, tag);
-    const create_request = if (tag.len == 0)
-        try std.fmt.bufPrint(&packet, "1|{s}|C", .{token})
-    else
-        try std.fmt.bufPrint(&packet, "1|{s}|C|{s}", .{ token, encoded });
+    const create_request = try push_protocol.encode(&packet, token, .{ .create = tag });
     const created = client.request(create_request, &reply) catch |err| {
         try stderr.print("statusbar: cannot create row: {t}\n", .{err});
         try stderr.flush();
         return 1;
     };
-    if (!std.mem.startsWith(u8, created, "OK|")) return usageError(stderr, command, "the session rejected push");
-    const separator = std.mem.indexOfScalarPos(u8, created, 3, '|') orelse return usageError(stderr, command, "invalid row width from session");
-    const id = std.fmt.parseInt(u64, created[3..separator], 10) catch return usageError(stderr, command, "invalid row ID from session");
-    const command_columns = std.fmt.parseInt(usize, created[separator + 1 ..], 10) catch return usageError(stderr, command, "invalid row width from session");
-    if (command_columns == 0) return usageError(stderr, command, "invalid row width from session");
+    const response = push_protocol.decodeReply(created) catch return usageError(stderr, command, "invalid row response from session");
+    if (response != .created) return usageError(stderr, command, "the session rejected push");
+    const id = response.created.id;
+    const command_columns = response.created.columns;
     var remove_on_start_failure = child_argv.len > 0;
     defer if (remove_on_start_failure) {
-        const request = std.fmt.bufPrint(&packet, "1|{s}|P|{d}", .{ token, id }) catch "";
+        const request = push_protocol.encode(&packet, token, .{ .pop = id }) catch "";
         if (request.len > 0) _ = client.request(request, &reply) catch {};
     };
     var child_pipe: ?@import("sys.zig").Fd = null;
@@ -369,12 +364,13 @@ fn pushRow(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
             else => 1,
         };
     } else 0;
-    const finished = client.request(try std.fmt.bufPrint(&packet, "1|{s}|F|{d}", .{ token, id }), &reply) catch |err| {
+    const finished = client.request(try push_protocol.encode(&packet, token, .{ .finish = id }), &reply) catch |err| {
         try stderr.print("statusbar: cannot finish row: {t}\n", .{err});
         try stderr.flush();
         return 1;
     };
-    if (!std.mem.eql(u8, finished, "OK")) return usageError(stderr, command, "the session rejected the final value");
+    const finish_reply = push_protocol.decodeReply(finished) catch return usageError(stderr, command, "invalid finish response from session");
+    if (finish_reply != .ok) return usageError(stderr, command, "the session rejected the final value");
     try stdout.print("{d}\n", .{id});
     try stdout.flush();
     return child_status;
@@ -395,21 +391,19 @@ fn popRow(io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
     defer client.deinit();
     var packet: [128]u8 = undefined;
     var reply: [128]u8 = undefined;
-    const request = if (id) |number|
-        try std.fmt.bufPrint(&packet, "1|{s}|P|{d}", .{ token, number })
-    else
-        try std.fmt.bufPrint(&packet, "1|{s}|P", .{token});
+    const request = try push_protocol.encode(&packet, token, .{ .pop = id });
     const answer = client.request(request, &reply) catch |err| {
         try stderr.print("statusbar: cannot remove row: {t}\n", .{err});
         try stderr.flush();
         return 1;
     };
-    if (id == null and std.mem.eql(u8, answer, "EMPTY")) {
+    const pop_reply = push_protocol.decodeReply(answer) catch return usageError(stderr, command, "invalid pop response from session");
+    if (id == null and pop_reply == .empty) {
         try stderr.writeAll("statusbar: no pushed rows to remove\n");
         try stderr.flush();
         return 1;
     }
-    if (!std.mem.eql(u8, answer, "OK")) return usageError(stderr, command, if (id == null) "cannot remove the latest pushed row" else "ID does not belong to this session");
+    if (pop_reply != .ok) return usageError(stderr, command, if (id == null) "cannot remove the latest pushed row" else "ID does not belong to this session");
     return 0;
 }
 

@@ -6,7 +6,7 @@ const sys = @import("sys.zig");
 
 extern "c" fn socket(domain: c_int, sock_type: c_int, protocol: c_int) c_int;
 
-pub const max_packet = 1536;
+pub const max_packet = @import("push_protocol.zig").max_packet;
 pub const Address = c.sockaddr.un;
 
 /// recvfrom may return a short or unterminated address. Only a complete
