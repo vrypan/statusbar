@@ -190,8 +190,84 @@ const RawLine = struct {
     right_at: usize = 0,
 };
 
-pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) (Error || std.mem.Allocator.Error)!Config {
+/// Both parsing passes consume complete statements. Values borrow their
+/// original source bytes, including physical newlines in quotes and blocks.
+const Statements = struct {
     const Input = struct { source: []const u8, number: usize };
+    const Statement = union(enum) {
+        section: []const u8,
+        assignment: struct { key: []const u8, value: []const u8 },
+    };
+
+    text: []const u8,
+    lines: std.mem.SplitIterator(u8, .scalar),
+    number: usize = 0,
+    queued: ?Input = null,
+
+    fn init(text: []const u8) Statements {
+        return .{ .text = text, .lines = std.mem.splitScalar(u8, text, '\n') };
+    }
+
+    fn physicalLine(self: *Statements) ?Input {
+        if (self.queued) |input| {
+            self.queued = null;
+            return input;
+        }
+        const source = self.lines.next() orelse return null;
+        self.number += 1;
+        return .{ .source = source, .number = self.number };
+    }
+
+    fn next(self: *Statements, diag: *Diagnostic) Error!?Statement {
+        while (self.physicalLine()) |input| {
+            const line = std.mem.trim(u8, input.source, " \t\r");
+            if (line.len == 0 or line[0] == '#' or line[0] == ';') continue;
+            diag.line = input.number;
+            if (line[0] == '[') {
+                if (line[line.len - 1] != ']') return fail(diag, "a section header must end with ]");
+                return .{ .section = std.mem.trim(u8, line[1 .. line.len - 1], " \t") };
+            }
+            const eq = std.mem.indexOfScalar(u8, line, '=') orelse return fail(diag, "expected key = value");
+            const key = std.mem.trim(u8, line[0..eq], " \t");
+            if (key.len == 0) return fail(diag, "missing key before =");
+            var value = std.mem.trim(u8, line[eq + 1 ..], " \t");
+            if (eql(value, "|")) value = try self.blockValue(diag);
+            if (value.len > 0 and value[0] == '"' and !isClosedQuote(value)) value = try self.quotedValue(value, diag);
+            return .{ .assignment = .{ .key = key, .value = unquote(value) } };
+        }
+        return null;
+    }
+
+    fn offset(self: *const Statements, bytes: []const u8) usize {
+        return @intFromPtr(bytes.ptr) - @intFromPtr(self.text.ptr);
+    }
+
+    fn blockValue(self: *Statements, diag: *Diagnostic) Error![]const u8 {
+        var start: ?usize = null;
+        var end: usize = 0;
+        while (self.physicalLine()) |input| {
+            const continued = std.mem.trim(u8, input.source, " \t\r");
+            const indented = input.source.len > 0 and (input.source[0] == ' ' or input.source[0] == '\t');
+            if (continued.len > 0 and !indented) {
+                self.queued = input;
+                break;
+            }
+            if (start == null) start = self.offset(input.source);
+            end = self.offset(input.source) + input.source.len;
+        }
+        return self.text[(start orelse return fail(diag, "a block value needs indented content"))..end];
+    }
+
+    fn quotedValue(self: *Statements, opening: []const u8, diag: *Diagnostic) Error![]const u8 {
+        while (self.physicalLine()) |input| {
+            const continued = std.mem.trim(u8, input.source, " \t\r");
+            if (endsWithQuote(continued)) return self.text[self.offset(opening) .. self.offset(continued) + continued.len];
+        }
+        return fail(diag, "unterminated quoted value");
+    }
+};
+
+pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) (Error || std.mem.Allocator.Error)!Config {
     const row_count = try countRows(allocator, text, diag);
     var config: Config = .{ .allocator = allocator, .line = try allocator.alloc(Line, row_count) };
     errdefer config.deinit();
@@ -205,76 +281,18 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
     var push_right_raw: ?[]const u8 = null;
     var push_right_at: usize = 0;
 
-    var number: usize = 0;
-    var it = std.mem.splitScalar(u8, text, '\n');
-    var queued: ?Input = null;
-    while (true) {
-        const input = if (queued) |item| block: {
-            queued = null;
-            break :block item;
-        } else block: {
-            const source_line = it.next() orelse break;
-            number += 1;
-            break :block Input{ .source = source_line, .number = number };
+    var statements = Statements.init(text);
+    while (try statements.next(diag)) |statement| {
+        const assignment = switch (statement) {
+            .section => |name| {
+                section = try parseSection(&config, name, diag);
+                continue;
+            },
+            .assignment => |value| value,
         };
-        number = input.number;
-        diag.line = number;
-        const source_line = input.source;
-        const line = std.mem.trim(u8, source_line, " \t\r");
-        if (line.len == 0 or line[0] == '#' or line[0] == ';') continue;
-
-        if (line[0] == '[') {
-            if (line[line.len - 1] != ']') return fail(diag, "a section header must end with ]");
-            section = try parseSection(&config, std.mem.trim(u8, line[1 .. line.len - 1], " \t"), diag);
-            continue;
-        }
-
-        const eq = std.mem.indexOfScalar(u8, line, '=') orelse return fail(diag, "expected key = value");
-        const key = std.mem.trim(u8, line[0..eq], " \t");
-        var raw_value = std.mem.trim(u8, line[eq + 1 ..], " \t");
-        if (key.len == 0) return fail(diag, "missing key before =");
-
-        if (eql(raw_value, "|")) {
-            const opening_line = number;
-            var start: ?usize = null;
-            var end: usize = undefined;
-            while (it.next()) |continued_source_line| {
-                number += 1;
-                const continued = std.mem.trim(u8, continued_source_line, " \t\r");
-                const indented = continued_source_line.len > 0 and (continued_source_line[0] == ' ' or continued_source_line[0] == '\t');
-                if (continued.len > 0 and !indented) {
-                    queued = .{ .source = continued_source_line, .number = number };
-                    break;
-                }
-                if (start == null) start = @intFromPtr(continued_source_line.ptr) - @intFromPtr(text.ptr);
-                end = @intFromPtr(continued_source_line.ptr) - @intFromPtr(text.ptr) + continued_source_line.len;
-            }
-            if (start == null) {
-                diag.line = opening_line;
-                return fail(diag, "a block value needs indented content");
-            }
-            raw_value = text[start.?..end];
-        }
-
-        // A quoted value can contain a shell command formatted over several
-        // physical lines. All source lines are slices of `text`, so the
-        // completed value can still borrow its storage without allocation.
-        if (raw_value.len > 0 and raw_value[0] == '"' and !isClosedQuote(raw_value)) {
-            const start = @intFromPtr(raw_value.ptr) - @intFromPtr(text.ptr);
-            var closed = false;
-            while (it.next()) |continued_source_line| {
-                number += 1;
-                const continued = std.mem.trim(u8, continued_source_line, " \t\r");
-                if (endsWithQuote(continued)) {
-                    const end = @intFromPtr(continued.ptr) - @intFromPtr(text.ptr) + continued.len;
-                    raw_value = text[start..end];
-                    closed = true;
-                    break;
-                }
-            }
-            if (!closed) return fail(diag, "unterminated quoted value");
-        }
-        const value = unquote(raw_value);
+        const key = assignment.key;
+        const value = assignment.value;
+        const number = diag.line;
 
         switch (section) {
             .root => {
@@ -390,39 +408,16 @@ fn parseSection(config: *Config, name: []const u8, diag: *Diagnostic) Error!Sect
 fn countRows(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) (Error || std.mem.Allocator.Error)!usize {
     var indices: std.ArrayList(usize) = .empty;
     defer indices.deinit(allocator);
-    var number: usize = 0;
-    var it = std.mem.splitScalar(u8, text, '\n');
-    var block = false;
-    var quoted = false;
-    while (it.next()) |source_line| {
-        number += 1;
-        const line = std.mem.trim(u8, source_line, " \t\r");
-        if (quoted) {
-            if (endsWithQuote(line)) quoted = false;
-            continue;
-        }
-        if (block) {
-            const indented = source_line.len > 0 and (source_line[0] == ' ' or source_line[0] == '\t');
-            if (line.len == 0 or indented) continue;
-            block = false;
-        }
-        if (line.len == 0 or line[0] == '#' or line[0] == ';') continue;
-        if (std.mem.indexOfScalar(u8, line, '=')) |eq| {
-            const value = std.mem.trim(u8, line[eq + 1 ..], " \t");
-            if (eql(value, "|")) {
-                block = true;
-                continue;
-            }
-            if (value.len > 0 and value[0] == '"' and !isClosedQuote(value)) {
-                quoted = true;
-                continue;
-            }
-        }
-        if (line.len < 2 or line[0] != '[' or line[line.len - 1] != ']') continue;
-        const name = std.mem.trim(u8, line[1 .. line.len - 1], " \t");
+    var last_row_line: usize = 0;
+    var statements = Statements.init(text);
+    while (try statements.next(diag)) |statement| {
+        const name = switch (statement) {
+            .section => |name| name,
+            .assignment => continue,
+        };
         if (eql(name, "line.push")) continue;
         if (!std.mem.startsWith(u8, name, "line.")) continue;
-        diag.line = number;
+        last_row_line = diag.line;
         const suffix = name[5..];
         if (suffix.len == 0) return fail(diag, "line number must be a positive decimal integer");
         for (suffix) |byte| if (byte < '0' or byte > '9') return fail(diag, "line number must be a positive decimal integer");
@@ -433,7 +428,10 @@ fn countRows(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
     }
     var highest: usize = 0;
     for (indices.items) |n| highest = @max(highest, n);
-    if (highest != indices.items.len) return fail(diag, "line sections must be consecutive from [line.1]");
+    if (highest != indices.items.len) {
+        diag.line = last_row_line;
+        return fail(diag, "line sections must be consecutive from [line.1]");
+    }
     return highest;
 }
 
@@ -795,6 +793,7 @@ test "errors name the line" {
         .{ "lines = 2", 1 },
         .{ "\n\nposition = bottom", 3 },
         .{ "[line.1]\n[line.3]", 2 },
+        .{ "[line.1]\n[line.3]\nleft = text", 2 },
         .{ "[colours]", 1 },
         .{ "[line.1]\nleft\n", 2 },
         .{ "[command.x]\ninterval = 0", 2 },
