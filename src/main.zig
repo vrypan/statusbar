@@ -86,6 +86,7 @@ test {
     _ = commands.config;
     _ = commands.completion;
     _ = @import("session/push_stream.zig");
+    _ = @import("session/push_protocol.zig");
     _ = @import("cli/common.zig");
     _ = @import("cli/config_source.zig");
     _ = @import("terminal/output.zig");
