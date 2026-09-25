@@ -34,6 +34,8 @@
 //! slice is allocator-owned and must be released with `deinit`.
 
 const std = @import("std");
+pub const Spinner = @import("spinner.zig").Spinner;
+pub const PushState = @import("session").pushed_rows.State;
 const markup = @import("render").markup;
 
 pub const max_lines = 65533;
@@ -48,6 +50,9 @@ pub const Part = union(enum) {
     tag,
     id,
     stream,
+    spinner,
+    exit_code,
+    signal,
     track_start: u4,
     track_end: u4,
 };
@@ -62,6 +67,11 @@ pub const Template = struct {
         return self.parts[0..self.len];
     }
 
+    pub fn usesSpinner(self: *const Template) bool {
+        for (self.items()) |part| if (part == .spinner) return true;
+        return false;
+    }
+
     pub fn usesClock(self: *const Template) bool {
         for (self.items()) |part| switch (part) {
             .text => |text| {
@@ -71,7 +81,7 @@ pub const Template = struct {
                     i = percent + 2;
                 }
             },
-            .command, .tag, .id, .stream, .track_start, .track_end => {},
+            .command, .tag, .id, .stream, .spinner, .exit_code, .signal, .track_start, .track_end => {},
         };
         return false;
     }
@@ -114,12 +124,27 @@ pub const Highlight = struct {
     pulses: u8 = 2,
 };
 
+pub const PushOverride = struct {
+    left: ?Template = null,
+    right: ?Template = null,
+    style: ?[]const u8 = null,
+};
+
+pub const PushLayout = struct {
+    left: *const Template,
+    right: *const Template,
+    style: []const u8,
+};
+
 pub const Config = struct {
     allocator: ?std.mem.Allocator = null,
     style: ?[]const u8 = null,
     push_style: ?[]const u8 = null,
+    spinner: Spinner = .{},
+    spinner_interval_ms: i64 = 100,
     push_left: Template = .{},
     push_right: Template = .{},
+    push_completion: [3]PushOverride = @splat(.{}),
     interval_ms: i64 = 5000,
     colors: [max_colors]markup.Color = undefined,
     colors_len: usize = 0,
@@ -127,6 +152,21 @@ pub const Config = struct {
     commands: [max_commands]Command = undefined,
     commands_len: usize = 0,
     highlight: Highlight = .{},
+
+    /// Resolve each field independently; an explicitly empty field overrides.
+    pub fn pushLayout(self: *const Config, state: PushState) PushLayout {
+        var layout: PushLayout = .{ .left = &self.push_left, .right = &self.push_right, .style = self.push_style orelse self.style orelse "" };
+        if (state == .running) return layout;
+        applyPushOverride(&layout, &self.push_completion[0]);
+        if (state != .done) applyPushOverride(&layout, &self.push_completion[@intFromEnum(state) - 1]);
+        return layout;
+    }
+
+    fn applyPushOverride(layout: *PushLayout, override: *const PushOverride) void {
+        if (override.left) |*left| layout.left = left;
+        if (override.right) |*right| layout.right = right;
+        if (override.style) |style| layout.style = style;
+    }
 
     pub fn deinit(self: *Config) void {
         if (self.allocator) |allocator| allocator.free(self.line);
@@ -169,13 +209,21 @@ const Section = union(enum) {
     colors,
     highlight,
     line: usize,
-    push,
+    push: PushState,
     command: usize,
 };
 
 const RawLine = struct {
     left: []const u8 = "",
     right: []const u8 = "",
+    left_at: usize = 0,
+    right_at: usize = 0,
+};
+
+const RawPush = struct {
+    left: ?[]const u8 = null,
+    right: ?[]const u8 = null,
+    style: ?[]const u8 = null,
     left_at: usize = 0,
     right_at: usize = 0,
 };
@@ -266,10 +314,7 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
     defer allocator.free(raw);
     @memset(raw, .{});
     var section: Section = .root;
-    var push_left_raw: ?[]const u8 = null;
-    var push_left_at: usize = 0;
-    var push_right_raw: ?[]const u8 = null;
-    var push_right_at: usize = 0;
+    var push_raw: [4]RawPush = @splat(.{});
 
     var statements = Statements.init(text);
     while (try statements.next(diag)) |statement| {
@@ -322,16 +367,22 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
                     config.line[n].style = value;
                 } else return fail(diag, "unknown line key; expected left, right, rule or style");
             },
-            .push => {
+            .push => |state| {
+                const target = &push_raw[@intFromEnum(state)];
                 if (eql(key, "style")) {
-                    config.push_style = value;
+                    target.style = value;
                 } else if (eql(key, "left")) {
-                    push_left_raw = value;
-                    push_left_at = number;
+                    target.left = value;
+                    target.left_at = number;
                 } else if (eql(key, "right")) {
-                    push_right_raw = value;
-                    push_right_at = number;
-                } else return fail(diag, "unknown push line key; expected left, right or style");
+                    target.right = value;
+                    target.right_at = number;
+                } else if (eql(key, "spinner") or eql(key, "spinner_interval")) {
+                    if (state != .running) return fail(diag, "spinner settings belong in [line.push]");
+                    if (eql(key, "spinner")) {
+                        config.spinner = Spinner.parse(value) catch return fail(diag, "spinner must contain at most 128 visible UTF-8 graphemes (1024 bytes), without control characters");
+                    } else config.spinner_interval_ms = try parseInterval(value, diag);
+                } else return fail(diag, "unknown push line key; expected left, right, style, spinner or spinner_interval");
             },
             .command => |n| {
                 if (eql(key, "run")) {
@@ -360,10 +411,22 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
         diag.line = source.right_at;
         line.right = try compile(&config, source.right, diag, .ordinary);
     }
-    diag.line = push_left_at;
-    config.push_left = try compile(&config, push_left_raw orelse "[#(id)] #(tag) > #(stream)", diag, .push_left);
-    diag.line = push_right_at;
-    config.push_right = try compile(&config, push_right_raw orelse "", diag, .push_right);
+    diag.line = push_raw[0].left_at;
+    config.push_left = try compile(&config, push_raw[0].left orelse "[#(id)] #(tag) > #(stream)", diag, .push_left);
+    diag.line = push_raw[0].right_at;
+    config.push_right = try compile(&config, push_raw[0].right orelse "", diag, .push_right);
+    config.push_style = push_raw[0].style;
+    for (push_raw[1..], &config.push_completion) |source, *override| {
+        if (source.left) |left| {
+            diag.line = source.left_at;
+            override.left = try compile(&config, left, diag, .push_left);
+        }
+        if (source.right) |right| {
+            diag.line = source.right_at;
+            override.right = try compile(&config, right, diag, .push_right);
+        }
+        override.style = source.style;
+    }
     if (config.line.len == 0) {
         diag.line = 0;
         return fail(diag, "config needs at least a [line.1] section");
@@ -375,7 +438,12 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
 fn parseSection(config: *Config, name: []const u8, diag: *Diagnostic) Error!Section {
     if (eql(name, "colors")) return .colors;
     if (eql(name, "highlight")) return .highlight;
-    if (eql(name, "line.push")) return .push;
+    if (eql(name, "line.push")) return .{ .push = .running };
+    if (std.mem.startsWith(u8, name, "line.push.")) {
+        const state = std.meta.stringToEnum(PushState, name[10..]) orelse return fail(diag, "unknown push state; expected done, success or failed");
+        if (state == .running) return fail(diag, "use [line.push] for running streams");
+        return .{ .push = state };
+    }
     if (std.mem.startsWith(u8, name, "line.")) {
         const n = std.fmt.parseInt(usize, name[5..], 10) catch 0;
         if (n < 1 or n > config.line.len) return fail(diag, "line sections must be consecutive from [line.1]");
@@ -405,7 +473,7 @@ fn countRows(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
             .section => |name| name,
             .assignment => continue,
         };
-        if (eql(name, "line.push")) continue;
+        if (eql(name, "line.push") or std.mem.startsWith(u8, name, "line.push.")) continue;
         if (!std.mem.startsWith(u8, name, "line.")) continue;
         last_row_line = diag.line;
         const suffix = name[5..];
@@ -476,24 +544,15 @@ fn compile(config: *Config, text: []const u8, diag: *Diagnostic, kind: TemplateK
         };
         if (i > start) try append(&template, .{ .text = text[start..i] }, diag);
         const body = std.mem.trim(u8, text[i + 2 .. close], " \t");
-        if (kind != .ordinary and eql(body, "tag")) {
-            try append(&template, .tag, diag);
-            i = close + 1;
-            start = i;
-            continue;
-        }
-        if (kind != .ordinary and eql(body, "id")) {
-            try append(&template, .id, diag);
-            i = close + 1;
-            start = i;
-            continue;
-        }
-        if (kind != .ordinary and eql(body, "stream")) {
-            if (kind != .push_left) return fail(diag, "#(stream) belongs in [line.push] left");
-            try append(&template, .stream, diag);
-            i = close + 1;
-            start = i;
-            continue;
+        if (kind != .ordinary) {
+            const value: ?Part = if (eql(body, "tag")) .tag else if (eql(body, "id")) .id else if (eql(body, "stream")) .stream else if (eql(body, "spinner")) .spinner else if (eql(body, "exit_code")) .exit_code else if (eql(body, "signal")) .signal else null;
+            if (value) |part| {
+                if (part == .stream and kind != .push_left) return fail(diag, "#(stream) belongs in [line.push] left");
+                try append(&template, part, diag);
+                i = close + 1;
+                start = i;
+                continue;
+            }
         }
         const index = findCommand(config, body) orelse try addInline(config, body, diag);
         try append(&template, .{ .command = @intCast(index) }, diag);
@@ -507,7 +566,7 @@ fn compile(config: *Config, text: []const u8, diag: *Diagnostic, kind: TemplateK
 
 fn append(template: *Template, part: Part, diag: *Diagnostic) Error!void {
     switch (part) {
-        .text, .command, .tag, .id, .stream => {
+        .text, .command, .tag, .id, .stream, .spinner, .exit_code, .signal => {
             if (template.ordinary_parts == max_parts) return fail(diag, "too many parts in one slot");
             template.ordinary_parts += 1;
         },
@@ -649,7 +708,7 @@ test "push style is independent of numbered rows" {
     try std.testing.expectEqual(@as(usize, 0), config.commandList().len);
     try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.1]\n[line.push]\nmiddle = x\n", &diag));
     try std.testing.expectEqual(@as(usize, 3), diag.line);
-    try std.testing.expectEqualStrings("unknown push line key; expected left, right or style", diag.message);
+    try std.testing.expectEqualStrings("unknown push line key; expected left, right, style, spinner or spinner_interval", diag.message);
     try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.push]\nright = #(stream)\n[line.1]\n", &diag));
     try std.testing.expectEqualStrings("#(stream) belongs in [line.push] left", diag.message);
 }
@@ -906,4 +965,52 @@ test "configs require an explicit row" {
     var cfg = try parse(std.testing.allocator, "[line.1]\n", &diag);
     defer cfg.deinit();
     try std.testing.expectEqual(@as(u16, 1), cfg.definedLines());
+}
+
+test "push completion inherits individual fields regardless of section order" {
+    var diag: Diagnostic = .{};
+    var cfg = try parse(std.testing.allocator,
+        \\[line.push.failed]
+        \\right = "exit #(exit_code) signal #(signal)"
+        \\[line.push.success]
+        \\right = ""
+        \\style = ""
+        \\[line.push.done]
+        \\right = done
+        \\style = fg=green
+        \\[line.push]
+        \\left = #(stream)
+        \\right = #(tag)
+        \\style = fg=blue
+        \\[line.1]
+    , &diag);
+    defer cfg.deinit();
+    try std.testing.expectEqual(@as(usize, 1), cfg.line.len);
+    try std.testing.expectEqual(@as(usize, 0), cfg.commands_len);
+    try std.testing.expectEqualStrings("fg=blue", cfg.pushLayout(.running).style);
+    try std.testing.expectEqualStrings("done", cfg.pushLayout(.done).right.items()[0].text);
+    try std.testing.expectEqualStrings("fg=green", cfg.pushLayout(.failed).style);
+    try std.testing.expectEqualStrings("", cfg.pushLayout(.success).style);
+    try std.testing.expectEqual(@as(usize, 0), cfg.pushLayout(.success).right.len);
+    for (std.enums.values(PushState)) |state| try std.testing.expect(cfg.pushLayout(state).left == &cfg.push_left);
+    for ([_][]const u8{ "[line.push.unknown]\n[line.1]", "[line.push.running]\n[line.1]", "[line.push.done]\nright = #(stream)\n[line.1]", "[line.push.done]\nrule = -\n[line.1]" }) |invalid| {
+        try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, invalid, &diag));
+    }
+}
+
+test "spinner settings and placeholders are confined to pushed lines" {
+    var diag: Diagnostic = .{};
+    var cfg = try parse(std.testing.allocator, "[line.1]\n[line.push]\nspinner = \"-\\|/\"\nspinner_interval = 0.2\nleft = #(spinner) #(stream)\nright = #(spinner)\n", &diag);
+    defer cfg.deinit();
+    try std.testing.expectEqual(@as(usize, 4), cfg.spinner.len);
+    try std.testing.expectEqual(@as(i64, 200), cfg.spinner_interval_ms);
+    try std.testing.expectEqual(@as(usize, 0), cfg.commands_len);
+    try std.testing.expect(cfg.push_left.usesSpinner() and cfg.push_right.usesSpinner());
+    try std.testing.expect(!cfg.push_left.usesClock());
+    for ([_][]const u8{ "spinner_interval = 0", "spinner_interval = nan", "spinner_interval = 86401", "spinner = \"a\nb\"" }) |assignment| {
+        var buffer: [256]u8 = undefined;
+        const text = try std.fmt.bufPrint(&buffer, "[line.1]\n[line.push]\n{s}\n", .{assignment});
+        try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, text, &diag));
+    }
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.1]\n[line.push.done]\nspinner = x\n", &diag));
 }

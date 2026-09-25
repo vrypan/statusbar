@@ -1311,6 +1311,107 @@ print('PUSH_POP_OK', flush=True)
     print('push/pop streams, command width, stable IDs, reloads, active removal, and authentication passed')
 
 
+def check_push_completion(binary):
+    child = r'''
+import os, signal, subprocess, sys, time
+b = sys.argv[1]
+def pause():
+    time.sleep(.2)
+def pop():
+    subprocess.run([b, 'pop'], check=True, capture_output=True)
+p = subprocess.Popen([b, 'push'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+p.stdin.write(b'PIPE_CONTENT'); p.stdin.flush(); time.sleep(1)
+p.stdin.close()
+assert p.wait(timeout=4) == 0
+pause(); pop()
+for code in (0, 7, 130):
+    command = subprocess.run([b, 'push', '--', sys.executable, '-c',
+                              f'print("COMMAND_CONTENT"); raise SystemExit({code})'], capture_output=True)
+    assert command.returncode == code, command
+    pause(); pop()
+command = subprocess.run([b, 'push', '--', sys.executable, '-c',
+                          'import os,signal; os.kill(os.getpid(), signal.SIGTERM)'], capture_output=True)
+assert command.returncode == 128 + signal.SIGTERM, command
+pause()
+# Reload must use the stored result, including signal identity.
+subprocess.run([b, 'config'], input=b'[line.1]\n[line.push.failed]\nleft = RELOADED_CODE_#(exit_code)_SIGNAL_#(signal)\n', check=True, capture_output=True)
+pause(); pop()
+print('COMPLETION_OK', flush=True)
+'''
+    config = b'''[line.1]
+left = configured
+[line.push]
+left = ACTIVE #(stream)
+right = ""
+[line.push.done]
+left = PIPE_DONE #(stream)
+right = CODE_#(exit_code)_SIGNAL_#(signal)_END
+[line.push.success]
+left = COMMAND_OK #(stream)
+[line.push.failed]
+left = COMMAND_FAILED #(stream)
+'''
+    with tempfile.NamedTemporaryFile(delete=False) as cfg:
+        cfg.write(config)
+        path = cfg.name
+    try:
+        code, data = capture_pty([binary, '-c', path, '--', sys.executable, '-c', child, binary], timeout=12)
+        assert code == 0 and b'COMPLETION_OK' in data, data[-3000:]
+        plain = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', data)
+        assert plain.index(b'PIPE_CONTENT') < plain.index(b'PIPE_DONE'), plain[-1000:]
+        for expected in (b'PIPE_DONE PIPE_CONTENT', b'CODE__SIGNAL__END',
+                         b'COMMAND_OK COMMAND_CONTENT', b'COMMAND_FAILED COMMAND_CONTENT',
+                         b'CODE_0_SIGNAL__END', b'CODE_7_SIGNAL__END', b'CODE_130_SIGNAL__END',
+                         b'CODE_143_SIGNAL_15_END', b'RELOADED_CODE_143_SIGNAL_15'):
+            assert expected in plain, (expected, plain[-4000:])
+    finally:
+        os.unlink(path)
+    print('push completion, exit codes, signals, and completion after reload passed')
+
+
+def check_push_spinner(binary):
+    child = r'''
+import os, subprocess, sys, time
+b = sys.argv[1]
+r = subprocess.run([b, 'push', '--', sys.executable, '-c',
+    'import os,time; print("width=" + os.environ["COLUMNS"], flush=True); time.sleep(.8)'], capture_output=True)
+assert r.returncode == 0 and r.stdout == b'1\n', r
+# A completed line must remain quiet even while the session stays open.
+time.sleep(.4)
+with open(os.environ['SPINNER_COUNTER']) as f:
+    assert f.read().splitlines() == ['once']
+print('SPINNER_OK', flush=True)
+'''
+    config = '''[line.1]
+left = #(note)
+[line.push]
+spinner = "-界"
+spinner_interval = 0.1
+left = "<#(spinner)>#(stream)"
+right = "[#(id)]"
+[line.push.done]
+left = "DONE #(spinner)#(stream)"
+[command.note]
+run = printf 'once\\n' >> "$SPINNER_COUNTER"; printf snapshot
+interval = 86400
+'''
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, 'config')
+        with open(path, 'w') as f:
+            f.write(config)
+        env = os.environ.copy()
+        env['SPINNER_COUNTER'] = os.path.join(directory, 'counter')
+        code, data = capture_pty([binary, '-c', path, '--', sys.executable, '-c', child, binary], env=env, timeout=8)
+        assert code == 0 and b'SPINNER_OK' in data, data[-2000:]
+        plain = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', data)
+        assert plain.count(b'<- >width=72') >= 2, plain[-2000:]
+        assert plain.count('<界>width=72'.encode()) >= 2, plain[-2000:]
+        assert b'DONE width=72' in plain, plain[-2000:]
+        completed = plain[plain.index(b'DONE width=72'):]
+        assert b'<- >' not in completed and '<界>'.encode() not in completed, completed
+    print('push spinner animation, stable command width, completion, and command pacing passed')
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: multirow_pty.py STATUSBAR")
@@ -1360,6 +1461,8 @@ def main():
     check_theme_growth(binary)
     check_background_job_exit(binary)
     check_push_pop(binary)
+    check_push_completion(binary)
+    check_push_spinner(binary)
     config = """\
 [line.1]
 left = one

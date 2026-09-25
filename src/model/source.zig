@@ -90,17 +90,20 @@ pub const Source = struct {
                 dependency.clock[side] = template.usesClock();
                 for (template.items()) |part| switch (part) {
                     .command => |n| dependency.commands[side] |= @as(u16, 1) << @intCast(n),
-                    .text, .tag, .id, .stream, .track_start, .track_end => {},
+                    .text, .tag, .id, .stream, .spinner, .exit_code, .signal, .track_start, .track_end => {},
                 };
             }
         }
         var push_dependency: Dependency = .{};
-        for ([2]config.Template{ cfg.push_left, cfg.push_right }, 0..) |template, side| {
-            push_dependency.clock[side] = template.usesClock();
-            for (template.items()) |part| switch (part) {
-                .command => |n| push_dependency.commands[side] |= @as(u16, 1) << @intCast(n),
-                .text, .tag, .id, .stream, .track_start, .track_end => {},
-            };
+        for (std.enums.values(config.PushState)) |state| {
+            const layout = cfg.pushLayout(state);
+            for ([_]*const config.Template{ layout.left, layout.right }, 0..) |template, side| {
+                push_dependency.clock[side] = push_dependency.clock[side] or template.usesClock();
+                for (template.items()) |part| switch (part) {
+                    .command => |n| push_dependency.commands[side] |= @as(u16, 1) << @intCast(n),
+                    .text, .tag, .id, .stream, .spinner, .exit_code, .signal, .track_start, .track_end => {},
+                };
+            }
         }
         var self: Source = .{ .gpa = gpa, .io = io, .commands = commands, .cfg = cfg, .content = content, .overrides = overrides, .override_lens = override_lens, .override_literal = override_literal, .stale = true, .dependencies = dependencies, .dirty_rows = dirty_rows, .push_dependency = push_dependency };
         self.updateClockActivation();
@@ -299,7 +302,7 @@ pub const Source = struct {
                 if (!self.output_seen[n]) return false;
                 if (baseline & bit != 0) return false;
             },
-            .text, .tag, .id, .stream, .track_start, .track_end => {},
+            .text, .tag, .id, .stream, .spinner, .exit_code, .signal, .track_start, .track_end => {},
         };
         return true;
     }
@@ -309,6 +312,10 @@ pub const Source = struct {
         tag: []const u8 = "",
         id: []const u8 = "",
         stream: []const u8 = "",
+        spinner_frame: usize = 0,
+        state: config.PushState = .running,
+        exit_code: []const u8 = "",
+        signal: []const u8 = "",
     };
 
     /// Capture once for every slot that belongs to the same composition.
@@ -342,11 +349,11 @@ pub const Source = struct {
     }
 
     pub fn writePushLeft(self: *const Source, w: *std.Io.Writer, context: *const TemplateContext, tracks: *Tracks) void {
-        self.writeTemplate(w, &self.cfg.push_left, context, tracks, .left);
+        self.writeTemplate(w, self.cfg.pushLayout(context.state).left, context, tracks, .left);
     }
 
     pub fn writePushRight(self: *const Source, w: *std.Io.Writer, context: *const TemplateContext, tracks: *Tracks) void {
-        self.writeTemplate(w, &self.cfg.push_right, context, tracks, .right);
+        self.writeTemplate(w, self.cfg.pushLayout(context.state).right, context, tracks, .right);
     }
 
     fn writeTemplate(self: *const Source, w: *std.Io.Writer, template: *const config.Template, context: *const TemplateContext, tracks: *Tracks, owner: cells.Owner) void {
@@ -356,6 +363,13 @@ pub const Source = struct {
             .tag => writeLiteralMarkup(w, context.tag),
             .id => w.writeAll(context.id) catch {},
             .stream => writeLiteralMarkup(w, context.stream),
+            .spinner => if (context.state == .running) {
+                const frame = self.cfg.spinner.frame(context.spinner_frame);
+                writeLiteralMarkup(w, frame.text);
+                w.splatByteAll(' ', self.cfg.spinner.columns - frame.columns) catch {};
+            },
+            .exit_code => w.writeAll(context.exit_code) catch {},
+            .signal => w.writeAll(context.signal) catch {},
             .track_start => |region_id| {
                 tracks.spans[tracks.len] = .{ .owner = owner, .id = region_id, .start = @intCast(w.end), .end = @intCast(w.end) };
                 tracks.len += 1;
@@ -806,4 +820,14 @@ test "config source initialization cleans every allocation failure" {
     var cfg = try config.parse(std.testing.allocator, "[line.1]\nleft = one\n[line.2]\nright = two\n", &diag);
     defer cfg.deinit();
     try std.testing.checkAllAllocationFailures(std.testing.allocator, configAllocationScenario, .{&cfg});
+}
+
+test "completion templates contribute command and clock dependencies" {
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(std.testing.allocator, "[line.1]\n[line.push.done]\nright = %S #(note)\n[command.note]\nrun = printf done\n", &diag);
+    defer cfg.deinit();
+    var source = try Source.initConfig(std.testing.allocator, std.testing.io, &cfg, 80);
+    defer source.deinit();
+    try std.testing.expect(source.push_dependency.clock[1]);
+    try std.testing.expectEqual(@as(u16, 1), source.push_dependency.commands[1]);
 }

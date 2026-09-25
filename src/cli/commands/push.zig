@@ -71,15 +71,15 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         try stderr.flush();
         return 1;
     };
-    const child_status: u8 = if (child) |*process| blk: {
+    const completion: @import("session").pushed_rows.Completion = if (child) |*process| blk: {
         const term = try process.wait(io);
         break :blk switch (term) {
-            .exited => |code| code,
-            .signal => |signal| @as(u8, @intCast(128 + @intFromEnum(signal))),
-            else => 1,
+            .exited => |code| .{ .exited = code },
+            .signal => |signal| .{ .signal = @intCast(@intFromEnum(signal)) },
+            else => .{ .exited = 1 },
         };
-    } else 0;
-    const finished = client.request(try push_protocol.encode(&packet, token, .{ .finish = id }), &reply) catch |err| {
+    } else .done;
+    const finished = client.request(try push_protocol.encode(&packet, token, .{ .finish = .{ .id = id, .result = completion } }), &reply) catch |err| {
         try stderr.print("statusbar: cannot finish row: {t}\n", .{err});
         try stderr.flush();
         return 1;
@@ -88,5 +88,5 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     if (finish_reply != .ok) return common.usageError(stderr, command, "the session rejected the final value");
     try stdout.print("{d}\n", .{id});
     try stdout.flush();
-    return child_status;
+    return completion.exitCode() orelse 0;
 }

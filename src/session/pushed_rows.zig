@@ -10,7 +10,35 @@ pub fn validTag(tag: []const u8) bool {
     return true;
 }
 
+pub const State = enum { running, done, success, failed };
+
+/// A pipe has no command result. Signals retain their identity separately from
+/// the shell-compatible exit status.
+pub const Completion = union(enum) {
+    done,
+    exited: u8,
+    signal: u7,
+
+    pub fn state(self: Completion) State {
+        return switch (self) {
+            .done => .done,
+            .exited => |code| if (code == 0) .success else .failed,
+            .signal => .failed,
+        };
+    }
+
+    pub fn exitCode(self: Completion) ?u8 {
+        return switch (self) {
+            .done => null,
+            .exited => |code| code,
+            .signal => |number| 128 + @as(u8, number),
+        };
+    }
+};
+
 pub const Row = struct {
+    completion: ?Completion = null,
+
     id: u64,
     owner: [108]u8 = undefined,
     owner_len: usize = 0,
@@ -18,6 +46,10 @@ pub const Row = struct {
     tag_len: usize = 0,
     text: [max_text]u8 = undefined,
     len: usize = 0,
+
+    pub fn state(self: *const Row) State {
+        return if (self.completion) |result| result.state() else .running;
+    }
 
     pub fn value(self: *const Row) []const u8 {
         return self.text[0..self.len];
@@ -70,7 +102,7 @@ pub const Rows = struct {
 
     pub fn update(self: *Rows, id: u64, value: []const u8) bool {
         for (self.items.items) |*row| {
-            if (row.id != id) continue;
+            if (row.id != id or row.completion != null) continue;
             if (row.len == value.len and std.mem.eql(u8, row.value(), value)) return false;
             if (value.len > max_text) return false;
             @memcpy(row.text[0..value.len], value);

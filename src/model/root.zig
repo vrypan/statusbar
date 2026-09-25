@@ -6,6 +6,7 @@ pub const config = @import("config.zig");
 pub const display = @import("display.zig");
 pub const runtime_config = @import("runtime_config.zig");
 pub const source = @import("source.zig");
+pub const spinner = @import("spinner.zig");
 pub const status = @import("status.zig");
 
 test {
@@ -15,4 +16,5 @@ test {
     _ = runtime_config;
     _ = source;
     _ = status;
+    _ = spinner;
 }

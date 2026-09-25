@@ -3,6 +3,12 @@
 Changes are grouped by version, newest first. Each section summarizes changes
 since the previous version.
 
+## Unreleased
+
+- Add Unicode spinners for pushed lines, with configurable timing and stable frame widths
+- Add completion layouts for pushed lines, with inherited done, success, and failed settings
+- Expose command exit status and signal number in pushed-line templates
+
 ## v0.4.0
 
 - Add dynamic pushed rows with command streaming, tags, stable IDs, and optional latest-row pop

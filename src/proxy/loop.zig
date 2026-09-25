@@ -104,6 +104,7 @@ pub fn pump(self: *Proxy, sig_r: sys.Fd, pid: c.pid_t) !void {
         var timeout = minTimeout(self.paintTimeout(now_ms), self.runtime.source.timeout(now_ms));
         if (ctl.fd < 0 and self.output.atBoundary()) timeout = minTimeout(timeout, @max(self.last_output_ms + paint_quiet_ms - now_ms, 0));
         timeout = minTimeout(timeout, self.runtime.renderer.nextFrameTimeout(now_ms));
+        timeout = minTimeout(timeout, self.runtime.composition.spinnerTimeout(&self.runtime.source, self.pushed.items.items, self.layout.bar, now_ms));
         if (self.palette_deadline_ms) |deadline| timeout = minTimeout(timeout, @max(deadline - now_ms, 0));
         if (self.child_status != null) timeout = minTimeout(timeout, self.exitTimeout(now_ms));
         if (self.held_config_len != null and self.output.atBoundary()) timeout = minTimeout(timeout, @max(self.last_output_ms + paint_quiet_ms - now_ms, 0));
@@ -203,6 +204,11 @@ pub fn pump(self: *Proxy, sig_r: sys.Fd, pid: c.pid_t) !void {
                 const slot = row * 2 + side;
                 if (self.runtime.source.override_lens[slot] != null or (slot < 32 and source_update.override_events & (@as(u32, 1) << @intCast(slot)) != 0)) self.runtime.renderer.cancelHighlight(row, side);
             };
+        }
+        if (self.runtime.composition.advanceSpinner(&self.runtime.source, self.pushed.items.items, self.layout.bar, now_ms)) {
+            const look = self.runtime.composition.look(self.runtime.look.palette);
+            try self.runtime.renderer.acceptContent(&self.runtime.composition.content.?, &look);
+            self.requestPaint(now_ms);
         }
         if (try self.runtime.renderer.compose(now_ms)) self.requestPaint(now_ms);
 

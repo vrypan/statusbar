@@ -114,11 +114,12 @@ pub fn controlRequest(self: *Proxy, request: push_protocol.Request, owner: []con
     const id = switch (request) {
         .create => unreachable,
         .update => |update| update.id,
-        .finish => |id| id,
+        .finish => |finish| finish.id,
         .pop => |id| id orelse self.pushed.latestId() orelse return .empty,
     };
     if (id == 0 or id >= self.pushed.next_id) return .rejected;
-    if (request == .update) {
+    if (request == .update or request == .finish) {
+        if (request == .finish and !self.pushed.exists(id)) return .ok;
         if (!self.pushed.ownedBy(id, owner)) return .rejected;
         var before: ?PushedRow = null;
         var changed_index: usize = 0;
@@ -127,7 +128,16 @@ pub fn controlRequest(self: *Proxy, request: push_protocol.Request, owner: []con
             changed_index = index;
             break;
         };
-        if (self.pushed.update(id, request.update.value)) {
+        const changed = if (request == .update) self.pushed.update(id, request.update.value) else changed: {
+            const row = &self.pushed.items.items[changed_index];
+            if (row.completion) |result| {
+                if (!std.meta.eql(result, request.finish.result)) return .rejected;
+                break :changed false;
+            }
+            row.completion = request.finish.result;
+            break :changed true;
+        };
+        if (changed) {
             const visible = self.composePushedUpdate(self.runtime, self.layout, changed_index) catch {
                 for (self.pushed.items.items) |*row| if (row.id == id) {
                     row.* = before.?;
@@ -140,7 +150,6 @@ pub fn controlRequest(self: *Proxy, request: push_protocol.Request, owner: []con
         }
         return .ok;
     }
-    if (request == .finish) return if (self.pushed.ownedBy(id, owner) or !self.pushed.exists(id)) .ok else .rejected;
     if (request == .pop) {
         for (self.pushed.items.items, 0..) |row, index| {
             if (row.id != id) continue;
@@ -272,4 +281,39 @@ test "control requests wait out a saved cursor like a paint" {
     try std.testing.expect(proxy.controlDue(130));
     proxy.output.state = .csi;
     try std.testing.expect(!proxy.controlDue(1000));
+}
+
+test "finish is authenticated idempotent and repaints a style-only change" {
+    const gpa = std.testing.allocator;
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(gpa, "[line.1]\n[line.push]\nleft = #(stream)\n[line.push.done]\nstyle = fg=red\n", &diag);
+    defer cfg.deinit();
+    var runtime = try Runtime.initInitial(gpa, std.testing.io, &cfg, 1, 80);
+    defer runtime.deinit();
+    var pushed: PushedRows = .{ .allocator = gpa };
+    defer pushed.deinit();
+    const id = try pushed.push("owner", "");
+    try std.testing.expect(pushed.update(id, "retained"));
+    const layout = Layout.of(.{ .row = 24, .col = 80, .xpixel = 0, .ypixel = 0 }, 2);
+    try runtime.renderer.resize(layout.bar, layout.cols);
+    var proxy = schedulerProxy();
+    proxy.pushed = &pushed;
+    proxy.runtime = &runtime;
+    proxy.layout = layout;
+    try proxy.composeRows(&runtime, layout, true);
+    const finish: push_protocol.Request = .{ .finish = .{ .id = id, .result = .{ .exited = 7 } } };
+    try std.testing.expectEqual(push_protocol.Reply.rejected, proxy.controlRequest(finish, "other", 1));
+    try std.testing.expect(pushed.items.items[0].completion == null);
+    try std.testing.expectEqual(push_protocol.Reply.ok, proxy.controlRequest(finish, "owner", 2));
+    try std.testing.expectEqual(@as(?i64, 2), proxy.paint_requested_ms);
+    try std.testing.expectEqualStrings("retained\t", runtime.composition.content.?.line(1));
+    try std.testing.expectEqualStrings("31", runtime.composition.styles[1]);
+    proxy.paint_requested_ms = null;
+    try std.testing.expectEqual(push_protocol.Reply.ok, proxy.controlRequest(finish, "owner", 3));
+    try std.testing.expect(proxy.paint_requested_ms == null);
+    try std.testing.expectEqual(push_protocol.Reply.rejected, proxy.controlRequest(.{ .finish = .{ .id = id } }, "owner", 3));
+    try std.testing.expectEqual(push_protocol.Reply.ok, proxy.controlRequest(.{ .update = .{ .id = id, .value = "late" } }, "owner", 4));
+    try std.testing.expectEqualStrings("retained", pushed.items.items[0].value());
+    try std.testing.expect(pushed.pop(id));
+    try std.testing.expectEqual(push_protocol.Reply.ok, proxy.controlRequest(finish, "owner", 5));
 }

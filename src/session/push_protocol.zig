@@ -6,7 +6,7 @@ pub const Operation = enum { create, update, finish, pop };
 pub const Request = union(Operation) {
     create: []const u8,
     update: struct { id: u64, value: []const u8 },
-    finish: u64,
+    finish: struct { id: u64, result: rows.Completion = .done },
     pop: ?u64,
 };
 pub const Reply = union(enum) {
@@ -37,11 +37,23 @@ pub const Envelope = struct {
         return self.operation != .update;
     }
 
+    fn decodeCompletion(self: *Envelope) Invalid!rows.Completion {
+        const kind = self.fields.next() orelse return .done;
+        const value = self.fields.next() orelse return error.InvalidPacket;
+        if (std.mem.eql(u8, kind, "exit")) return .{ .exited = std.fmt.parseInt(u8, value, 10) catch return error.InvalidPacket };
+        if (std.mem.eql(u8, kind, "signal")) {
+            const number = std.fmt.parseInt(u7, value, 10) catch return error.InvalidPacket;
+            if (number == 0) return error.InvalidPacket;
+            return .{ .signal = number };
+        }
+        return error.InvalidPacket;
+    }
+
     pub fn decode(self: *Envelope, buffer: *[rows.max_text]u8) Invalid!Request {
         const request: Request = switch (self.operation) {
             .create => .{ .create = if (self.fields.next()) |value| try decodeValue(value, buffer[0..rows.max_tag]) else "" },
             .update => .{ .update = .{ .id = try parseId(self.fields.next()), .value = try decodeValue(self.fields.next() orelse return error.InvalidPacket, buffer) } },
-            .finish => .{ .finish = try parseId(self.fields.next()) },
+            .finish => .{ .finish = .{ .id = try parseId(self.fields.next()), .result = try self.decodeCompletion() } },
             .pop => .{ .pop = if (self.fields.next()) |value| try parseId(value) else null },
         };
         if (self.fields.next() != null) return error.InvalidPacket;
@@ -76,7 +88,14 @@ pub fn encode(buffer: []u8, token: []const u8, request: Request) ![]const u8 {
             try writer.print("U|{d}", .{update.id});
             value = update.value;
         },
-        .finish => |id| try writer.print("F|{d}", .{id}),
+        .finish => |finish| {
+            try writer.print("F|{d}", .{finish.id});
+            switch (finish.result) {
+                .done => {},
+                .exited => |code| try writer.print("|exit|{d}", .{code}),
+                .signal => |number| try writer.print("|signal|{d}", .{number}),
+            }
+        },
         .pop => |id| {
             try writer.writeAll("P");
             if (id) |number| try writer.print("|{d}", .{number});
@@ -120,7 +139,10 @@ test "push wire format remains compatible and rejects malformed fields" {
         .{ .request = .{ .create = "" }, .wire = "1|token|C" },
         .{ .request = .{ .create = "tag" }, .wire = "1|token|C|dGFn" },
         .{ .request = .{ .update = .{ .id = 7, .value = "text" } }, .wire = "1|token|U|7|dGV4dA==" },
-        .{ .request = .{ .finish = 7 }, .wire = "1|token|F|7" },
+        .{ .request = .{ .finish = .{ .id = 7 } }, .wire = "1|token|F|7" },
+        .{ .request = .{ .finish = .{ .id = 7, .result = .{ .exited = 0 } } }, .wire = "1|token|F|7|exit|0" },
+        .{ .request = .{ .finish = .{ .id = 7, .result = .{ .exited = 255 } } }, .wire = "1|token|F|7|exit|255" },
+        .{ .request = .{ .finish = .{ .id = 7, .result = .{ .signal = 2 } } }, .wire = "1|token|F|7|signal|2" },
         .{ .request = .{ .pop = 7 }, .wire = "1|token|P|7" },
         .{ .request = .{ .pop = null }, .wire = "1|token|P" },
     };
@@ -130,7 +152,7 @@ test "push wire format remains compatible and rejects malformed fields" {
         try std.testing.expectEqualDeep(case.request, try envelope.decode(&decoded));
         try std.testing.expectEqual(case.request != .update, envelope.needsReply());
     }
-    for ([_][]const u8{ "1|token|U|0|", "1|token|U|1|!", "1|token|U|1", "1|token|F|1|extra", "1|token|P|", "1|token|C||extra" }) |wire| {
+    for ([_][]const u8{ "1|token|U|0|", "1|token|U|1|!", "1|token|U|1", "1|token|F|1|extra", "1|token|F|1|exit|256", "1|token|F|1|exit|-1", "1|token|F|1|signal|0", "1|token|F|1|signal|128", "1|token|F|1|exit|0|extra", "1|token|P|", "1|token|C||extra" }) |wire| {
         var envelope = try Envelope.parse(wire);
         try std.testing.expectError(error.InvalidPacket, envelope.decode(&decoded));
     }

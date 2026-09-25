@@ -168,6 +168,91 @@ reserve a line or change numbered slots. Reloading the config updates pushed
 lines already visible. A carriage-return update re-renders the current stream
 value through `left`.
 
+### Spinner
+
+Set `spinner` to a sequence of characters and insert the current frame with
+`#(spinner)` in either slot:
+
+```ini
+[line.push]
+spinner = "-\|/"
+spinner_interval = 0.1
+left = "#(spinner) [#(id)] > #(stream)"
+
+[line.push.done]
+left = "· [#(id)] > #(stream)"
+
+[line.push.success]
+left = "✓ [#(id)] > #(stream)"
+```
+
+Each Unicode grapheme is one frame, so a character and its combining accents
+or a joined emoji stay together. For a braille spinner, use
+`spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"`. Backslashes in config values are literal;
+the ASCII example above needs only one backslash.
+
+`spinner_interval` is the time between frames in seconds, defaults to `0.1`,
+and accepts values from `0.1` to `86400`. These two settings belong in
+`[line.push]`. An omitted or empty sequence disables the indicator; a single
+character provides a static indicator while running.
+
+Frames share the width of the widest character, with padding after narrower
+frames. This keeps surrounding text steady and reserves the correct space
+when `push --` sets the command's `COLUMNS`. Frames are plain text, not markup;
+put styles around `#(spinner)` in the template. A sequence can contain up to
+128 frames and 1024 bytes, without control characters or standalone characters
+that take no screen space.
+
+Only visible, running pushed lines using `#(spinner)` animate. They share one
+animation timer, which stops when no such lines remain. Animation does not
+rerun commands or reformat configured lines. `#(spinner)` becomes empty on
+completion; use completion sections for a static marker. Reloading the config
+starts the new sequence from its first frame. As with other width changes,
+a reload does not update a running command's `COLUMNS`.
+
+See [the spinner sample](../samples/spinner.config) for a complete config.
+
+### Completion settings
+
+Use `[line.push.done]` to change a line when its input ends. With
+`statusbar push -- command`, `[line.push.success]` applies when the command
+exits with zero, and `[line.push.failed]` applies for any other exit status
+or termination by a signal.
+
+```ini
+[line.push]
+left = "#(stream)"
+right = "#(tag) [#(id)]"
+
+[line.push.done]
+right = "done · #(tag) [#(id)]"
+
+[line.push.success]
+right = "#[fg=green]✓#[default] #(tag) [#(id)]"
+
+[line.push.failed]
+right = "#[fg=red]exit #(exit_code)#[default] #(tag) [#(id)]"
+```
+
+Each section accepts `left`, `right`, and `style`. Settings inherit in this
+order: `[line.push]`, then `done`, then `success` or `failed` when the command
+result is known. Only specified settings are replaced; `right = ""` clears
+an inherited right slot. A `style` value replaces the inherited style as a
+whole. Section order in the file does not matter.
+
+`#(exit_code)` inserts the command's numeric exit status. `#(signal)` inserts
+the signal number if the command was terminated by a signal; the exit status
+is then `128 + signal`. Both values are empty while running. For piped input,
+`push` knows only that input ended: it applies `done` and leaves both values
+empty. A command exiting normally with `130` has no signal value, whereas
+SIGINT produces exit status `130` and signal `2`.
+
+With `push --`, completion waits for both the end of output and the command's
+exit. The final stream text remains available as `#(stream)`. Completion
+settings do not add or remove lines. The result survives config reloads and
+is retained when a line is hidden by a short terminal. If `push` exits before
+sending its completion message, the line keeps its last received state.
+
 ## `[command.NAME]`
 
 | Key        | Meaning                                                     |

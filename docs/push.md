@@ -41,6 +41,31 @@ the `right` template can place values on the other side. Templates are
 reapplied to each `\r` progress update. See
 [configuration](config.md#linepush).
 
+To show activity even when a command is quiet, add a
+[spinner](config.md#spinner) to its line. A complete example is available in
+[samples/spinner.config](../samples/spinner.config).
+
+To show when work finishes, add completion sections to your config:
+
+```ini
+[line.push.done]
+right = "done · #(tag) [#(id)]"
+
+[line.push.success]
+right = "✓ #(tag) [#(id)]"
+
+[line.push.failed]
+right = "exit #(exit_code) · #(tag) [#(id)]"
+```
+
+`done` applies to every completed stream. Commands started with `push --`
+also apply `success` for exit status zero or `failed` for a nonzero status
+or signal. A pipe does not report the producer's exit status, so it uses
+only `done`. These sections inherit settings from `[line.push]`; the final
+text stays visible unless you replace `left`.
+See [completion settings](config.md#completion-settings) for inheritance,
+styles, and `#(signal)`.
+
 When reading a pipe, `push` cannot change the width reported to the command
 that wrote to it. Output wider than the space left for the stream is clipped.
 

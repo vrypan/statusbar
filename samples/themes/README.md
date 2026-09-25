@@ -40,8 +40,12 @@ and right labels on the same line. On narrow terminals the right side clips
 first. Weather uses the original wttr.in command and may remain empty until
 it responds; these themes do not change that network behavior.
 Each variant also styles temporary lines created by `statusbar push` through
-`[line.push]`. Its `left` template adds a stream marker; its `right` template
-formats the tag and ID with the same accent and shapes as the theme's clock.
+`[line.push]`. The left side shows a spinner, muted ID, brighter tag, and stream
+text. Completion replaces the spinner with a neutral dot, a success checkmark,
+or a failure cross. Failed commands show their exit status on the right;
+Pastel Powerline and Tokyo Night keep their badge shapes for that label.
+See [completion settings](../../docs/config.md#completion-settings) and
+[spinners](../../docs/config.md#spinner).
 
 Inspiration:
 - https://starship.rs/presets/pure-preset
