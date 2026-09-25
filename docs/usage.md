@@ -7,6 +7,7 @@ commands most people need:
 statusbar set 1 "Build passed"       # show text in a numbered slot
 statusbar push -t build -- make       # give a command a temporary line
 statusbar pop                         # remove the newest temporary line
+statusbar pop --all                   # remove all temporary lines
 statusbar config < another.config    # change the running layout
 ```
 
@@ -18,7 +19,7 @@ statusbar [run] [options] [-- COMMAND...]
 statusbar set <SLOT> [TEXT...]
 statusbar push
 statusbar push -- <COMMAND> [ARG...]
-statusbar pop [ID]
+statusbar pop [ID | --all]
 statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
 statusbar config [--print [default|startup|current]] [--default] [--path]
 statusbar completion <bash|zsh|fish>

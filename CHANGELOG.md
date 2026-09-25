@@ -5,6 +5,7 @@ since the previous version.
 
 ## Unreleased
 
+- Add `pop --all` (`-a`) to remove all pushed lines at once
 - Add Unicode spinners for pushed lines, with configurable timing and stable frame widths
 - Add completion layouts for pushed lines, with inherited done, success, and failed settings
 - Expose command exit status and signal number in pushed-line templates

@@ -1276,6 +1276,29 @@ sys.stdout.flush()
 saved = run('push', input=b'saved cursor').strip()
 assert saved == b'15', saved
 run('pop', saved.decode())
+# Remove both active and completed lines with one request.
+p = subprocess.Popen([b, 'push'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+p.stdin.write(b'active before clear'); p.stdin.flush()
+time.sleep(1)
+completed = run('push', input=b'completed before clear').strip()
+assert completed == b'17', completed
+assert os.get_terminal_size(0).lines == 21
+conflict = subprocess.run([b, 'pop', '--all', '17'], capture_output=True)
+assert conflict.returncode == 2 and b'choose an ID or --all' in conflict.stderr, conflict
+assert subprocess.run([b, 'pop', '--all'], env=wrong, capture_output=True).returncode != 0
+assert os.get_terminal_size(0).lines == 21
+assert run('pop', '--all') == b''
+assert os.get_terminal_size(0).lines == 23
+assert run('pop', '-a') == b''
+assert run('pop', '--all') == b''
+assert subprocess.run([b, 'pop'], capture_output=True).returncode == 1
+# A removed producer can still finish, and its ID is never reused.
+p.stdin.write(b'late output'); p.stdin.close()
+assert p.wait(timeout=4) == 0, p.stderr.read()
+assert p.stdout.read() == b'16\n'
+assert run('push', input=b'new after clear').strip() == b'18'
+assert run('pop', '-a') == b''
+assert os.get_terminal_size(0).lines == 23
 print('PUSH_POP_OK', flush=True)
 '''
     config = b'[line.push]\nstyle = fg=#123456\nleft = #[fg=#abcdef]> #[default]#(stream)\nright = #[fg=#abcdef,bold]<#(tag) [#(id)]>#[default]\n[line.1]\nleft = configured\n'
@@ -1284,7 +1307,7 @@ print('PUSH_POP_OK', flush=True)
         path = cfg.name
     try:
         code, data = capture_pty([binary, '-c', path, '--', sys.executable,
-                                  '-c', child, binary], timeout=12)
+                                  '-c', child, binary], timeout=20)
         assert code == 0 and b'PUSH_POP_OK' in data, data[-2500:]
         assert b'[1]' in data and b'first final' in data, data[-2500:]
         painted = re.findall(rb'\x1b\[24;1H(.*?)(?=\x1b8)', data, re.S)
@@ -1308,7 +1331,7 @@ print('PUSH_POP_OK', flush=True)
                    for row in plain), plain[-4:]
     finally:
         os.unlink(path)
-    print('push/pop streams, command width, stable IDs, reloads, active removal, and authentication passed')
+    print('push/pop streams, command width, stable IDs, reloads, pop --all, active removal, and authentication passed')
 
 
 def check_push_completion(binary):

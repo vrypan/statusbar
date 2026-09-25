@@ -103,10 +103,16 @@ const commands = [_]zecli.CommandSpec{
     },
     .{
         .name = "pop",
-        .description = "Remove a pushed row",
-        .usage = "statusbar pop [ID]",
-        .arguments = &.{.{ .name = "ID", .description = "Row ID; omit to remove the latest pushed row" }},
-        .examples = &.{ "statusbar pop", "statusbar pop 7" },
+        .description = "Remove pushed lines",
+        .usage = "statusbar pop [ID | --all]",
+        .flags = &.{.{ .name = "all", .short = 'a', .description = "Remove all pushed lines" }},
+        .arguments = &.{.{ .name = "ID", .description = "Line ID; omit to remove the latest pushed line" }},
+        .extra_help =
+        \\Use --all or -a to remove every pushed line, including active streams.
+        \\Removing lines does not stop the commands producing their output.
+        \\--all succeeds even when there are no pushed lines.
+        ++ "\n",
+        .examples = &.{ "statusbar pop", "statusbar pop 7", "statusbar pop --all" },
     },
     .{
         .name = "init",

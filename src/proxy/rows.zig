@@ -111,8 +111,20 @@ pub fn controlRequest(self: *Proxy, request: push_protocol.Request, owner: []con
         const available = @max(1, @as(usize, self.layout.cols) -| (left_fixed_width + right_width + gap));
         return .{ .created = .{ .id = id, .columns = available } };
     }
+    if (request == .pop_all) {
+        const previous = self.pushed.items.items;
+        if (previous.len == 0) return .ok;
+        // Keep storage and IDs so a failed resize can restore all lines.
+        self.pushed.items.items.len = 0;
+        self.resizeForPushedRows(now_ms) catch {
+            self.pushed.items.items = previous;
+            self.composeRows(self.runtime, self.layout, true) catch {};
+            return .rejected;
+        };
+        return .ok;
+    }
     const id = switch (request) {
-        .create => unreachable,
+        .create, .pop_all => unreachable,
         .update => |update| update.id,
         .finish => |finish| finish.id,
         .pop => |id| id orelse self.pushed.latestId() orelse return .empty,

@@ -2,12 +2,13 @@
 const std = @import("std");
 const rows = @import("pushed_rows.zig");
 pub const max_packet = 1536;
-pub const Operation = enum { create, update, finish, pop };
+pub const Operation = enum { create, update, finish, pop, pop_all };
 pub const Request = union(Operation) {
     create: []const u8,
     update: struct { id: u64, value: []const u8 },
     finish: struct { id: u64, result: rows.Completion = .done },
     pop: ?u64,
+    pop_all,
 };
 pub const Reply = union(enum) {
     ok,
@@ -29,7 +30,7 @@ pub const Envelope = struct {
         if (!std.mem.eql(u8, fields.next() orelse return error.InvalidPacket, "1")) return error.InvalidPacket;
         const token = fields.next() orelse return error.InvalidPacket;
         const code = fields.next() orelse return error.InvalidPacket;
-        const operation: Operation = if (std.mem.eql(u8, code, "C")) .create else if (std.mem.eql(u8, code, "U")) .update else if (std.mem.eql(u8, code, "F")) .finish else if (std.mem.eql(u8, code, "P")) .pop else return error.InvalidPacket;
+        const operation: Operation = if (std.mem.eql(u8, code, "C")) .create else if (std.mem.eql(u8, code, "U")) .update else if (std.mem.eql(u8, code, "F")) .finish else if (std.mem.eql(u8, code, "P")) .pop else if (std.mem.eql(u8, code, "A")) .pop_all else return error.InvalidPacket;
         return .{ .token = token, .operation = operation, .fields = fields };
     }
 
@@ -54,6 +55,7 @@ pub const Envelope = struct {
             .create => .{ .create = if (self.fields.next()) |value| try decodeValue(value, buffer[0..rows.max_tag]) else "" },
             .update => .{ .update = .{ .id = try parseId(self.fields.next()), .value = try decodeValue(self.fields.next() orelse return error.InvalidPacket, buffer) } },
             .finish => .{ .finish = .{ .id = try parseId(self.fields.next()), .result = try self.decodeCompletion() } },
+            .pop_all => .pop_all,
             .pop => .{ .pop = if (self.fields.next()) |value| try parseId(value) else null },
         };
         if (self.fields.next() != null) return error.InvalidPacket;
@@ -96,6 +98,7 @@ pub fn encode(buffer: []u8, token: []const u8, request: Request) ![]const u8 {
                 .signal => |number| try writer.print("|signal|{d}", .{number}),
             }
         },
+        .pop_all => try writer.writeAll("A"),
         .pop => |id| {
             try writer.writeAll("P");
             if (id) |number| try writer.print("|{d}", .{number});
@@ -145,6 +148,7 @@ test "push wire format remains compatible and rejects malformed fields" {
         .{ .request = .{ .finish = .{ .id = 7, .result = .{ .signal = 2 } } }, .wire = "1|token|F|7|signal|2" },
         .{ .request = .{ .pop = 7 }, .wire = "1|token|P|7" },
         .{ .request = .{ .pop = null }, .wire = "1|token|P" },
+        .{ .request = .pop_all, .wire = "1|token|A" },
     };
     for (cases) |case| {
         try std.testing.expectEqualStrings(case.wire, try encode(&packet, "token", case.request));
@@ -152,7 +156,7 @@ test "push wire format remains compatible and rejects malformed fields" {
         try std.testing.expectEqualDeep(case.request, try envelope.decode(&decoded));
         try std.testing.expectEqual(case.request != .update, envelope.needsReply());
     }
-    for ([_][]const u8{ "1|token|U|0|", "1|token|U|1|!", "1|token|U|1", "1|token|F|1|extra", "1|token|F|1|exit|256", "1|token|F|1|exit|-1", "1|token|F|1|signal|0", "1|token|F|1|signal|128", "1|token|F|1|exit|0|extra", "1|token|P|", "1|token|C||extra" }) |wire| {
+    for ([_][]const u8{ "1|token|U|0|", "1|token|U|1|!", "1|token|U|1", "1|token|F|1|extra", "1|token|F|1|exit|256", "1|token|F|1|exit|-1", "1|token|F|1|signal|0", "1|token|F|1|signal|128", "1|token|F|1|exit|0|extra", "1|token|P|", "1|token|A|1", "1|token|A|", "1|token|C||extra" }) |wire| {
         var envelope = try Envelope.parse(wire);
         try std.testing.expectError(error.InvalidPacket, envelope.decode(&decoded));
     }

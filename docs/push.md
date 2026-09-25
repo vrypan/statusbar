@@ -23,7 +23,16 @@ By default, the line shows its ID, optional tag, and latest line on the left:
 
 Use `-t TEXT` or `--tag TEXT` to label a line. For a background pipeline, read
 the ID on statusbar and run `statusbar pop ID` to remove that line. Without an ID,
-`statusbar pop` removes the newest line.
+`statusbar pop` removes the newest line. To remove all pushed lines at once:
+
+```sh
+statusbar pop --all
+# Short form: statusbar pop -a
+```
+
+`--all` succeeds even when there are no pushed lines. It cannot be combined
+with an ID. Configured lines stay in place, and active producers keep running;
+their later output is ignored.
 
 A script can save the returned ID to remove its own line later:
 
