@@ -393,18 +393,28 @@ fn countRows(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
     var number: usize = 0;
     var it = std.mem.splitScalar(u8, text, '\n');
     var block = false;
+    var quoted = false;
     while (it.next()) |source_line| {
         number += 1;
+        const line = std.mem.trim(u8, source_line, " \t\r");
+        if (quoted) {
+            if (endsWithQuote(line)) quoted = false;
+            continue;
+        }
         if (block) {
-            const trimmed = std.mem.trim(u8, source_line, " \t\r");
             const indented = source_line.len > 0 and (source_line[0] == ' ' or source_line[0] == '\t');
-            if (trimmed.len == 0 or indented) continue;
+            if (line.len == 0 or indented) continue;
             block = false;
         }
-        const line = std.mem.trim(u8, source_line, " \t\r");
+        if (line.len == 0 or line[0] == '#' or line[0] == ';') continue;
         if (std.mem.indexOfScalar(u8, line, '=')) |eq| {
-            if (eql(std.mem.trim(u8, line[eq + 1 ..], " \t"), "|")) {
+            const value = std.mem.trim(u8, line[eq + 1 ..], " \t");
+            if (eql(value, "|")) {
                 block = true;
+                continue;
+            }
+            if (value.len > 0 and value[0] == '"' and !isClosedQuote(value)) {
+                quoted = true;
                 continue;
             }
         }
@@ -695,6 +705,32 @@ test "quoted values may span physical lines" {
     defer config.deinit();
     try std.testing.expectEqualStrings("first command ||\n  second command", config.commands[0].run);
     try std.testing.expectEqual(@as(i64, 10_000), config.commandInterval(0));
+}
+
+test "quoted values do not create line sections" {
+    var diag: Diagnostic = .{};
+    var parsed = try parse(std.testing.allocator,
+        \\[command.x]
+        \\run = "printf first
+        \\[line.2]
+        \\last"
+        \\[line.1]
+        \\left = #(x)
+    , &diag);
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(u16, 1), parsed.definedLines());
+    try std.testing.expectEqualStrings("printf first\n[line.2]\nlast", parsed.commands[0].run);
+}
+
+test "comments cannot open a multiline quoted value" {
+    var diag: Diagnostic = .{};
+    var parsed = try parse(std.testing.allocator,
+        \\# example = "unfinished
+        \\[line.1]
+        \\left = ready
+    , &diag);
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(u16, 1), parsed.definedLines());
 }
 
 test "blocks preserve lines and end at the next key" {
