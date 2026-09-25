@@ -753,6 +753,14 @@ const Proxy = struct {
         return !self.output.cursor_saved or now_ms - self.last_output_ms >= paint_quiet_ms;
     }
 
+    /// Creating and removing pushed rows resize the bar, which borrows the
+    /// cursor save slot. Follow the paint rule: a saved cursor postpones
+    /// control requests only until the child's output pauses.
+    fn controlDue(self: *const Proxy, now_ms: i64) bool {
+        if (!self.output.atBoundary()) return false;
+        return !self.output.cursor_saved or now_ms - self.last_output_ms >= paint_quiet_ms;
+    }
+
     fn applyHeldConfig(self: *Proxy, now_ms: i64) bool {
         const len = self.held_config_len orelse return false;
         self.held_config_len = null;
@@ -830,11 +838,12 @@ const Proxy = struct {
             in.fd = if (stdin_open and self.pending_input.room() > in_buf.len + input_headroom) stdin_fd else -1;
             out.events = posix.POLL.IN;
             if (self.pending_input.len > 0) out.events |= posix.POLL.OUT;
-            ctl.fd = if (self.output.atBoundary() and !self.output.cursor_saved) self.control_endpoint.fd else -1;
             const command_fds = self.runtime.source.pollFds(fds[4..]);
 
             var now_ms = self.now();
+            ctl.fd = if (self.controlDue(now_ms)) self.control_endpoint.fd else -1;
             var timeout = minTimeout(self.paintTimeout(now_ms), self.runtime.source.timeout(now_ms));
+            if (ctl.fd < 0 and self.output.atBoundary()) timeout = minTimeout(timeout, @max(self.last_output_ms + paint_quiet_ms - now_ms, 0));
             timeout = minTimeout(timeout, self.runtime.renderer.nextFrameTimeout(now_ms));
             if (self.palette_deadline_ms) |deadline| timeout = minTimeout(timeout, @max(deadline - now_ms, 0));
             if (self.child_status != null) timeout = minTimeout(timeout, self.exitTimeout(now_ms));
@@ -1340,6 +1349,19 @@ test "a config request waits while the child holds a saved cursor" {
     proxy.session_token = "fedcba9876543210fedcba9876543210".*;
     try std.testing.expect(!proxy.applyConfigRequest(payload, 100));
     try std.testing.expect(proxy.held_config_len == null);
+}
+
+test "control requests wait out a saved cursor like a paint" {
+    var proxy = schedulerProxy();
+    try std.testing.expect(proxy.controlDue(0));
+
+    // A save that is never restored must not block pushed rows forever.
+    proxy.output.cursor_saved = true;
+    proxy.last_output_ms = 100;
+    try std.testing.expect(!proxy.controlDue(120));
+    try std.testing.expect(proxy.controlDue(130));
+    proxy.output.state = .csi;
+    try std.testing.expect(!proxy.controlDue(1000));
 }
 
 test "an exited child ends the session once its output pauses" {

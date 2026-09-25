@@ -1280,6 +1280,12 @@ default_row = subprocess.run([b, 'push', '-t', '100Mb.dat', '--', sys.executable
 assert default_row.returncode == 0 and default_row.stdout == b'14\n', default_row
 time.sleep(.1)
 run('pop', '14')
+# A cursor save that is never restored must not starve row requests.
+sys.stdout.write('\x1b7')
+sys.stdout.flush()
+saved = run('push', input=b'saved cursor').strip()
+assert saved == b'15', saved
+run('pop', saved.decode())
 print('PUSH_POP_OK', flush=True)
 '''
     config = b'[line.push]\nstyle = fg=#123456\nleft = #[fg=#abcdef]> #[default]#(stream)\nright = #[fg=#abcdef,bold]<#(tag) [#(id)]>#[default]\n[line.1]\nleft = configured\n'

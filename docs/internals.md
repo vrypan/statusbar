@@ -229,10 +229,11 @@ checks explicitly skip missing zsh/fish locally; release CI installs both.
 
 ## Limitations
 
-- Repaints save and restore the cursor with DECSC/DECRC, the single save slot
-  the child uses too. They only happen between complete sequences, and wait
-  for a pause while the child holds a saved cursor, so collisions are
-  unlikely but possible.
+- Repaints, config replacement, and pushed-row creation and removal save and
+  restore the cursor with DECSC/DECRC, the single save slot the child uses
+  too. They only happen between complete sequences, and wait for a pause
+  while the child holds a saved cursor, so collisions are unlikely but
+  possible.
 - When the window grows, terminals that add blank rows at the bottom (rather
   than pulling lines back from scrollback) can leave a copy of the old bar in
   the child's area until it is overwritten.
