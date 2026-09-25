@@ -1029,7 +1029,7 @@ const Proxy = struct {
     }
 };
 
-fn receiveSlotUpdate(context: *anyopaque, slot: usize, value: []const u8, mode: @import("output.zig").SlotMode) void {
+fn receiveSlotUpdate(context: *anyopaque, slot: usize, value: []const u8, mode: @import("slots.zig").SlotMode) void {
     const source: *Source = @ptrCast(@alignCast(context));
     source.setOverrideMode(slot, value, mode == .literal);
 }
@@ -1121,7 +1121,7 @@ test "palette filtering preserves CSI translation across fragmented input" {
     proxy.feedTerminalInput("[8;24;80t\x1b]11;rgb:1111/2222/3333\x1b");
     proxy.feedTerminalInput("\\keys\x1b[<0;3;24M");
     try std.testing.expectEqualStrings("\x1b[8;22;80tkeys", proxy.pending_input.pending());
-    try std.testing.expectEqualDeep(@import("terminal_palette.zig").Rgb{ 17, 34, 51 }, renderer.palette.background.?);
+    try std.testing.expectEqualDeep(@import("color.zig").Rgb{ 17, 34, 51 }, renderer.palette.background.?);
 }
 
 test "completed palette discovery bypasses its copy stage" {

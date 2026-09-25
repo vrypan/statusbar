@@ -67,7 +67,7 @@ pub const Runtime = struct {
         errdefer composition.deinit();
         var renderer = try bar.Renderer.init(gpa);
         errdefer renderer.deinit();
-        renderer.highlight = cfg.highlight;
+        renderer.highlight = .{ .pulses = cfg.highlight.pulses };
         try renderer.resize(visible, cols);
         try renderer.relayout(&source.content, &look);
         return .{

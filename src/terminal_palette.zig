@@ -1,21 +1,8 @@
 //! Read-only OSC 4/10/11 discovery. Never invent RGB values for terminal colors.
 const std = @import("std");
-const styled = @import("styled_text.zig");
-pub const Rgb = [3]u8;
-pub const Palette = struct {
-    indexed: [256]?Rgb = @splat(null),
-    foreground: ?Rgb = null,
-    background: ?Rgb = null,
-    revision: usize = 0,
-
-    pub fn resolve(self: *const Palette, color: styled.Color, foreground: bool) ?Rgb {
-        return switch (color) {
-            .rgb => |rgb| rgb,
-            .indexed => |index| self.indexed[index],
-            .default => if (foreground) self.foreground else self.background,
-        };
-    }
-};
+const color = @import("color.zig");
+const Rgb = color.Rgb;
+const Palette = color.Palette;
 
 /// XParseColor's rgb:r/g/b components have independent 1..4 digit precision.
 pub fn parseRgb(text: []const u8) ?Rgb {

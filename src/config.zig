@@ -109,19 +109,9 @@ pub const Command = struct {
     interval_ms: ?i64 = null,
 };
 
+/// The `[highlight]` section. The renderer derives the effect's timing.
 pub const Highlight = struct {
     pulses: u8 = 2,
-    pub fn frameMs(self: Highlight) i64 {
-        _ = self;
-        return @import("relative_highlight.zig").step_ms;
-    }
-
-    pub fn steps(self: Highlight) u8 {
-        return @import("relative_highlight.zig").steps * self.pulses;
-    }
-    pub fn duration(self: Highlight) i64 {
-        return self.frameMs() * self.steps();
-    }
 };
 
 pub const Config = struct {
@@ -843,8 +833,6 @@ test "adaptive highlight defaults to two pulses" {
     var cfg = try parse(std.testing.allocator, "[line.1]", &diag);
     defer cfg.deinit();
     try std.testing.expectEqual(@as(u8, 2), cfg.highlight.pulses);
-    try std.testing.expectEqual(@as(i64, 30), cfg.highlight.frameMs());
-    try std.testing.expectEqual(@as(i64, 2400), cfg.highlight.duration());
 }
 
 test "highlight pulse counts are bounded" {
@@ -854,7 +842,7 @@ test "highlight pulse counts are bounded" {
         defer std.testing.allocator.free(text);
         var cfg = try parse(std.testing.allocator, text, &diag);
         defer cfg.deinit();
-        try std.testing.expectEqual(@as(i64, @intCast(count * 1200)), cfg.highlight.duration());
+        try std.testing.expectEqual(@as(u8, @intCast(count)), cfg.highlight.pulses);
     }
     for ([_][]const u8{ "0", "4", "256", "-1", "1.5", "many" }) |value| {
         const text = try std.fmt.allocPrint(std.testing.allocator, "[highlight]\npulses = {s}\n", .{value});

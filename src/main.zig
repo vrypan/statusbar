@@ -258,7 +258,7 @@ fn setSlot(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stde
         try text.appendSlice(arena, word);
     }
     text.items.len = normalizeSlotText(text.items).len;
-    if (text.items.len > @import("output.zig").max_value) return usageError(stderr, command, "TEXT must be at most 1024 bytes");
+    if (text.items.len > @import("slots.zig").max_value) return usageError(stderr, command, "TEXT must be at most 1024 bytes");
 
     // Outside a session there is no bar to update, and nothing is written.
     const env = @import("environment.zig");

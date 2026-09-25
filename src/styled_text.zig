@@ -3,11 +3,7 @@
 const std = @import("std");
 const zunic = @import("zunic");
 
-pub const Color = union(enum) {
-    default,
-    indexed: u8,
-    rgb: [3]u8,
-};
+pub const Color = @import("color.zig").Color;
 pub const Style = struct {
     fg: Color = .default,
     bg: Color = .default,

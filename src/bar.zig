@@ -102,7 +102,7 @@ pub const Look = struct {
 pub const cells = @import("cells.zig");
 const styled = @import("styled_text.zig");
 const relative_highlight = @import("relative_highlight.zig");
-const terminal_palette = @import("terminal_palette.zig");
+const color = @import("color.zig");
 
 pub const State = struct {
     base: cells.Row = .{},
@@ -141,8 +141,8 @@ pub const Renderer = struct {
     writer: std.Io.Writer.Allocating,
     parsed_rows: usize = 0,
     emitted_rows: usize = 0,
-    highlight: @import("config.zig").Highlight = .{},
-    palette: terminal_palette.Palette = .{},
+    highlight: relative_highlight.Highlight = .{},
+    palette: color.Palette = .{},
     palette_revision: usize = 0,
     pulse_cache: relative_highlight.Cache = .{},
     pulse_ranges_dirty: bool = true,

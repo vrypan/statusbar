@@ -2,10 +2,36 @@
 //! Matrices: https://bottosson.github.io/posts/oklab/
 const std = @import("std");
 const styled = @import("styled_text.zig");
-const terminal = @import("terminal_palette.zig");
-const Rgb = terminal.Rgb;
+const color = @import("color.zig");
+const Rgb = color.Rgb;
 pub const steps: u8 = 40;
 pub const step_ms: i64 = 30;
+// Highlight.steps below would shadow the constant inside the struct.
+const steps_per_pulse = steps;
+
+/// Effect timing for a configured number of pulses.
+pub const Highlight = struct {
+    pulses: u8 = 2,
+
+    pub fn frameMs(_: Highlight) i64 {
+        return step_ms;
+    }
+
+    pub fn steps(self: Highlight) u8 {
+        return steps_per_pulse * self.pulses;
+    }
+
+    pub fn duration(self: Highlight) i64 {
+        return self.frameMs() * self.steps();
+    }
+};
+
+test "highlight timing follows the pulse count" {
+    try std.testing.expectEqual(@as(i64, 30), (Highlight{}).frameMs());
+    try std.testing.expectEqual(@as(i64, 2400), (Highlight{}).duration());
+    for (1..4) |count| try std.testing.expectEqual(@as(i64, @intCast(count * 1200)), (Highlight{ .pulses = @intCast(count) }).duration());
+}
+
 pub const measuring = @import("builtin").is_test or @import("measurement_options").enabled;
 /// Per-cache counters. Reset these independently of entries to measure warm
 /// reuse; resetting the whole Cache also discards prepared ranges.
@@ -100,11 +126,11 @@ fn repeatedAmount(step: usize, pulses: u8) f64 {
     return if (t < 0.4) start + (peak - start) * smooth(t / 0.4) else peak + (end - peak) * smooth((t - 0.4) / 0.6);
 }
 
-pub fn apply(base: styled.Style, palette: *const terminal.Palette, step: usize) styled.Style {
+pub fn apply(base: styled.Style, palette: *const color.Palette, step: usize) styled.Style {
     return applyRepeated(base, palette, step, 1);
 }
 
-pub fn applyRepeated(base: styled.Style, palette: *const terminal.Palette, step: usize, pulses: u8) styled.Style {
+pub fn applyRepeated(base: styled.Style, palette: *const color.Palette, step: usize, pulses: u8) styled.Style {
     if (step >= @as(usize, steps) * pulses or step == 0) return base;
     const fg = palette.resolve(base.fg, true) orelse return fallback(base);
     const bg = palette.resolve(base.bg, false) orelse return fallback(base);
@@ -221,7 +247,7 @@ pub const Cache = struct {
 
     /// Retain one resolved pair for the next preparation generation. Unknown
     /// terminal colors deliberately remain on the allocation-free fallback.
-    pub fn prepare(self: *Cache, base: styled.Style, palette: *const terminal.Palette, pulses: u8) ?u32 {
+    pub fn prepare(self: *Cache, base: styled.Style, palette: *const color.Palette, pulses: u8) ?u32 {
         const fg = palette.resolve(base.fg, true) orelse return null;
         const bg = palette.resolve(base.bg, false) orelse return null;
         const text = if (base.reverse) bg else fg;
@@ -244,7 +270,7 @@ pub const Cache = struct {
         self.preparing.clearRetainingCapacity();
     }
 
-    pub fn apply(self: *Cache, base: styled.Style, palette: *const terminal.Palette, step: usize, pulses: u8) styled.Style {
+    pub fn apply(self: *Cache, base: styled.Style, palette: *const color.Palette, step: usize, pulses: u8) styled.Style {
         if (step >= @as(usize, steps) * pulses) return base;
         const fg = palette.resolve(base.fg, true) orelse return fallback(base);
         const bg = palette.resolve(base.bg, false) orelse return fallback(base);
@@ -286,7 +312,7 @@ fn fallback(base: styled.Style) styled.Style {
 }
 
 test "sample cache shares colors without sharing attributes or animation steps" {
-    var palette: terminal.Palette = .{ .foreground = .{ 190, 180, 210 }, .background = .{ 10, 10, 10 } };
+    var palette: color.Palette = .{ .foreground = .{ 190, 180, 210 }, .background = .{ 10, 10, 10 } };
     var cache: Cache = .{};
     defer cache.deinit(std.testing.allocator);
     try cache.reserve(std.testing.allocator, 2);
@@ -312,7 +338,7 @@ test "sample cache shares colors without sharing attributes or animation steps" 
 }
 
 test "range cache reuses resolved colors and invalidates colors or pulses" {
-    var palette: terminal.Palette = .{ .foreground = .{ 190, 190, 190 }, .background = .{ 10, 10, 10 } };
+    var palette: color.Palette = .{ .foreground = .{ 190, 190, 190 }, .background = .{ 10, 10, 10 } };
     var cache: Cache = .{};
     defer cache.deinit(std.testing.allocator);
     try cache.reserve(std.testing.allocator, 4);
@@ -343,7 +369,7 @@ test "range cache reuses resolved colors and invalidates colors or pulses" {
 }
 
 test "repeated pulses stay animated across interior valleys" {
-    const palette: terminal.Palette = .{ .foreground = .{ 240, 230, 210 }, .background = .{ 0, 0, 0 } };
+    const palette: color.Palette = .{ .foreground = .{ 240, 230, 210 }, .background = .{ 0, 0, 0 } };
     const base: styled.Style = .{};
     for ([_]u8{ 1, 2, 3 }) |pulses| {
         const total = @as(usize, steps) * pulses;
@@ -365,7 +391,7 @@ test "repeated pulses stay animated across interior valleys" {
 }
 
 test "gray uses full foreground range and single pulses have no brightness reversals" {
-    const palette: terminal.Palette = .{};
+    const palette: color.Palette = .{};
     const pairs = [_]Pair{
         .{ .text = .{ 0, 0, 0 }, .back = .{ 255, 255, 255 } },
         .{ .text = .{ 255, 255, 255 }, .back = .{ 0, 0, 0 } },
@@ -398,7 +424,7 @@ test "gray uses full foreground range and single pulses have no brightness rever
 }
 
 test "relative pulse retains attributes handles reverse and restores exact colors" {
-    var palette: terminal.Palette = .{};
+    var palette: color.Palette = .{};
     palette.foreground = .{ 230, 220, 190 };
     palette.background = .{ 30, 25, 20 };
     palette.indexed[3] = .{ 200, 150, 40 };
@@ -424,7 +450,7 @@ test "relative pulse retains attributes handles reverse and restores exact color
 }
 
 test "pulse contrast and gamut stay bounded on light dark and saturated pairs" {
-    const palette: terminal.Palette = .{};
+    const palette: color.Palette = .{};
     const colors = [_]Rgb{ .{ 255, 255, 255 }, .{ 0, 0, 0 }, .{ 255, 0, 0 }, .{ 0, 0, 255 }, .{ 80, 80, 80 }, .{ 255, 255, 0 } };
     for (colors) |fg| for (colors) |bg| {
         const base: styled.Style = .{ .fg = .{ .rgb = fg }, .bg = .{ .rgb = bg } };
@@ -438,7 +464,7 @@ test "pulse contrast and gamut stay bounded on light dark and saturated pairs" {
 }
 
 test "black white and colored backgrounds pulse toward text lightness" {
-    const palette: terminal.Palette = .{};
+    const palette: color.Palette = .{};
     const backgrounds = [_]Rgb{ .{ 0, 0, 0 }, .{ 255, 255, 255 }, .{ 30, 50, 80 }, .{ 220, 200, 170 } };
     for (backgrounds, 0..) |bg, i| {
         const fg: Rgb = if (i % 2 == 0) .{ 255, 255, 255 } else .{ 0, 0, 0 };

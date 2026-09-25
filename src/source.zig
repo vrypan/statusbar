@@ -14,7 +14,7 @@ const c = std.c;
 const bar = @import("bar.zig");
 const config = @import("config.zig");
 const status = @import("status.zig");
-const output = @import("output.zig");
+const slots = @import("slots.zig");
 
 const max_output_line = 512;
 
@@ -27,7 +27,7 @@ pub const Source = struct {
     output_seen: [config.max_commands]bool = @splat(false),
     cfg: *const config.Config,
     content: bar.Content,
-    overrides: [][output.max_value]u8,
+    overrides: [][slots.max_value]u8,
     override_lens: []?usize,
     override_literal: []bool = &.{},
     clock_next_ms: ?i64 = null,
@@ -67,7 +67,7 @@ pub const Source = struct {
         }
         var content = try bar.Content.init(gpa, lines);
         errdefer content.deinit();
-        const overrides = try gpa.alloc([output.max_value]u8, @as(usize, lines) * 2);
+        const overrides = try gpa.alloc([slots.max_value]u8, @as(usize, lines) * 2);
         errdefer gpa.free(overrides);
         const override_lens = try gpa.alloc(?usize, @as(usize, lines) * 2);
         errdefer gpa.free(override_lens);
@@ -138,10 +138,10 @@ pub const Source = struct {
     }
 
     pub fn setOverrideMode(self: *Source, n: usize, value: []const u8, literal: bool) void {
-        if (n >= self.override_lens.len or value.len > output.max_value) return;
+        if (n >= self.override_lens.len or value.len > slots.max_value) return;
         const trimmed = std.mem.trim(u8, value, "\r\n");
         const old = self.override(n);
-        var normalized: [output.max_value]u8 = undefined;
+        var normalized: [slots.max_value]u8 = undefined;
         copyOnOneLine(normalized[0..trimmed.len], trimmed);
         const next: ?[]const u8 = if (trimmed.len == 0) null else normalized[0..trimmed.len];
         const old_literal = self.override_literal.len > n and self.override_literal[n];
@@ -573,7 +573,7 @@ test "tracked slots need ready commands and suppress baseline-only results" {
     defer cfg.deinit();
     var content = try bar.Content.init(std.testing.allocator, 2);
     defer content.deinit();
-    var overrides: [4][output.max_value]u8 = undefined;
+    var overrides: [4][slots.max_value]u8 = undefined;
     var override_lens: [4]?usize = @splat(null);
     var source: Source = .{ .gpa = std.testing.allocator, .io = std.testing.io, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &override_lens };
     _ = source.keepFirstLine(0, "");
@@ -600,7 +600,7 @@ test "source sidecars retain empty and truncated regions and exclude dynamic mar
     defer cfg.deinit();
     var content = try bar.Content.init(std.testing.allocator, 1);
     defer content.deinit();
-    var overrides: [2][output.max_value]u8 = undefined;
+    var overrides: [2][slots.max_value]u8 = undefined;
     var lens: [2]?usize = @splat(null);
     var source: Source = .{ .gpa = std.testing.allocator, .io = std.testing.io, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &lens };
     _ = source.rebuild();
@@ -638,7 +638,7 @@ test "slot mode changes invalidate equal text and clearing restores templates" {
     defer cfg.deinit();
     var content = try bar.Content.init(std.testing.allocator, 1);
     defer content.deinit();
-    var overrides: [2][output.max_value]u8 = undefined;
+    var overrides: [2][slots.max_value]u8 = undefined;
     var lens: [2]?usize = @splat(null);
     var literal: [2]bool = .{ false, false };
     var source: Source = .{ .gpa = std.testing.allocator, .io = std.testing.io, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &lens, .override_literal = &literal };
@@ -667,7 +667,7 @@ test "partial startup geometry and same-text overrides establish silent region b
     defer cfg.deinit();
     var content = try bar.Content.init(gpa, 1);
     defer content.deinit();
-    var overrides: [2][output.max_value]u8 = undefined;
+    var overrides: [2][slots.max_value]u8 = undefined;
     var lens: [2]?usize = @splat(null);
     var source: Source = .{ .gpa = gpa, .io = std.testing.io, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &lens };
     var r = try bar.Renderer.init(gpa);
@@ -731,7 +731,7 @@ test "override epochs cover high-numbered slots and coalesced same-text transiti
     defer cfg.deinit();
     var content = try bar.Content.init(gpa, 17);
     defer content.deinit();
-    var overrides: [34][output.max_value]u8 = undefined;
+    var overrides: [34][slots.max_value]u8 = undefined;
     var lens: [34]?usize = @splat(null);
     var source: Source = .{ .gpa = gpa, .io = std.testing.io, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &lens };
     _ = source.rebuild();
@@ -760,7 +760,7 @@ test "dirty dependencies format only affected command and clock rows" {
     defer cfg.deinit();
     var content = try bar.Content.init(gpa, 2);
     defer content.deinit();
-    var overrides: [4][output.max_value]u8 = undefined;
+    var overrides: [4][slots.max_value]u8 = undefined;
     var lens: [4]?usize = @splat(null);
     var dependencies = [_]Source.Dependency{
         .{ .commands = .{ 1, 0 } },

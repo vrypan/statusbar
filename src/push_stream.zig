@@ -4,7 +4,7 @@ const Io = std.Io;
 const posix = std.posix;
 const zunic = @import("zunic");
 const sys = @import("sys.zig");
-const max_value = @import("output.zig").max_value;
+const max_value = @import("pushed_rows.zig").max_text;
 const push_protocol = @import("push_protocol.zig");
 const control = @import("session_control.zig");
 
