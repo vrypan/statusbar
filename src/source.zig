@@ -367,17 +367,18 @@ fn writeLiteralMarkup(w: *std.Io.Writer, value: []const u8) void {
         if (value[i] == 0x1b and i + 1 < value.len) {
             if (value[i + 1] == ']') {
                 var end = i + 2;
-                while (end < value.len) : (end += 1) {
+                const terminated = while (end < value.len) : (end += 1) {
                     if (value[end] == 0x07) {
                         end += 1;
-                        break;
+                        break true;
                     }
                     if (value[end] == 0x1b and end + 1 < value.len and value[end + 1] == '\\') {
                         end += 2;
-                        break;
+                        break true;
                     }
-                }
-                if (end <= value.len) {
+                } else false;
+                // An unterminated OSC is ordinary text, so its markup stays escaped.
+                if (terminated) {
                     w.writeAll(value[i..end]) catch return;
                     i = end;
                     continue;
@@ -403,6 +404,13 @@ test "pushed values escape markup without changing ANSI hyperlinks" {
     var writer: std.Io.Writer = .fixed(&buf);
     writeLiteralMarkup(&writer, "#[bold] \x1b[31mred\x1b]8;;https://example.com/#part\x1b\\link\x1b]8;;\x1b\\");
     try std.testing.expectEqualStrings("##[bold] \x1b[31mred\x1b]8;;https://example.com/#part\x1b\\link\x1b]8;;\x1b\\", writer.buffered());
+}
+
+test "an unterminated OSC does not unescape the markup after it" {
+    var buf: [64]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    writeLiteralMarkup(&writer, "\x1b]x #[reverse]boom");
+    try std.testing.expectEqualStrings("\x1b]x ##[reverse]boom", writer.buffered());
 }
 
 /// A tab in a value would start a new slot in the middle of it, and a line
