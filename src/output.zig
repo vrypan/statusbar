@@ -67,6 +67,9 @@ pub const Output = struct {
     /// DECAWM as the child last set it. The paint turns wrapping off and
     /// needs to know what to put back.
     autowrap: bool = true,
+    /// SGR-Pixels mouse mode (1016): the terminal reports mouse positions
+    /// in pixels, which `Input` must compare against the child's pixel height.
+    sgr_pixels: bool = false,
 
     osc_len: usize = 0,
     osc_probe: [user_var_prefix.len]u8 = undefined,
@@ -530,6 +533,7 @@ pub const Output = struct {
     fn hardReset(self: *Output, sink: anytype) void {
         self.origin_mode = false;
         self.autowrap = true;
+        self.sgr_pixels = false;
         self.cursor_saved = false;
         self.top = 0;
         self.bottom = 0;
@@ -611,6 +615,7 @@ pub const Output = struct {
             for (params[0..count]) |mode| switch (mode) {
                 7 => self.autowrap = final == 'h',
                 6 => self.origin_mode = final == 'h',
+                1016 => self.sgr_pixels = final == 'h',
                 47, 1047, 1049 => switched = true,
                 else => {},
             };
@@ -844,6 +849,19 @@ test "erasures that reach the bar and resets damage it" {
     defer std.testing.allocator.free(got);
     try std.testing.expectEqualStrings("\x1bc\x1b[1;10r", got);
     try std.testing.expect(reset.damaged and !reset.origin_mode and reset.top == 0);
+}
+
+test "SGR-Pixels mouse mode is tracked for input translation" {
+    var out: Output = .{ .bar = 1, .rows = 10 };
+    for ([_]struct { input: []const u8, pixels: bool }{
+        .{ .input = "\x1b[?1006;1016h", .pixels = true },
+        .{ .input = "\x1b[?1016l", .pixels = false },
+        .{ .input = "\x1b[?1016h\x1bc", .pixels = false },
+    }) |case| {
+        const got = try translate(&out, case.input, 64);
+        defer std.testing.allocator.free(got);
+        try std.testing.expectEqual(case.pixels, out.sgr_pixels);
+    }
 }
 
 test "no bar means no rewriting" {

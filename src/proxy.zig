@@ -154,7 +154,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         .master = pty.master,
         .layout = layout,
         .output = .{ .bar = layout.bar, .rows = layout.child.row, .max_slot = @as(usize, runtime.lines) * 2, .update_handler = .{ .context = &runtime.source, .callback = receiveSlotUpdate } },
-        .input = .{ .bar = layout.bar, .rows = layout.child.row },
+        .input = .{ .bar = layout.bar, .rows = layout.child.row, .pixel_rows = layout.child.ypixel },
         .runtime = &runtime,
         .renderer = &runtime.renderer,
         .session_state = &session_state,
@@ -487,7 +487,15 @@ const Proxy = struct {
         return null;
     }
 
+    fn setInputGeometry(self: *Proxy, layout: Layout) void {
+        self.input.bar = layout.bar;
+        self.input.rows = layout.child.row;
+        self.input.pixel_rows = layout.child.ypixel;
+    }
+
     fn feedTerminalInput(self: *Proxy, bytes: []const u8) void {
+        // Mouse reports arrive in whichever encoding the child last chose.
+        self.input.sgr_pixels = self.output.sgr_pixels;
         var translated: [4096 + input_headroom]u8 = undefined;
         var translated_writer = std.Io.Writer.fixed(&translated);
         if (self.palette_probe.bypassable()) {
@@ -510,6 +518,7 @@ const Proxy = struct {
         var writer = std.Io.Writer.fixed(&buf);
         const sink = WriterSink{ .w = &writer };
         if (stop) self.palette_probe.stop(&sink) else self.palette_probe.flush(&sink);
+        self.input.sgr_pixels = self.output.sgr_pixels;
         var translated: [128 + input_headroom]u8 = undefined;
         var translated_writer = std.Io.Writer.fixed(&translated);
         self.input.feed(writer.buffered(), &WriterSink{ .w = &translated_writer });
@@ -557,8 +566,7 @@ const Proxy = struct {
         self.layout = next;
         try sys.setWinsize(self.master, &next.child);
         self.output.resize(next.bar, next.child.row);
-        self.input.bar = next.bar;
-        self.input.rows = next.child.row;
+        self.setInputGeometry(next);
         self.output.damaged = true;
         self.requestPaint(now_ms);
     }
@@ -701,8 +709,7 @@ const Proxy = struct {
         self.terminal.write("\x1b8");
         self.output.max_slot = @as(usize, self.runtime.lines) * 2;
         self.output.update_handler.?.context = &self.runtime.source;
-        self.input.bar = new_layout.bar;
-        self.input.rows = new_layout.child.row;
+        self.setInputGeometry(new_layout);
         self.runtime.source.refreshNow(now_ms);
         self.output.damaged = true;
         self.requestPaint(now_ms);
@@ -1009,8 +1016,7 @@ const Proxy = struct {
         self.layout = Layout.of(ws, @intCast(@as(usize, self.runtime.lines) + self.pushed.items.items.len));
         sys.setWinsize(self.master, &self.layout.child) catch {};
         self.output.resize(self.layout.bar, self.layout.child.row);
-        self.input.bar = self.layout.bar;
-        self.input.rows = self.layout.child.row;
+        self.setInputGeometry(self.layout);
         if (width_changed) {
             self.runtime.source.setColumns(ws.col);
             self.runtime.source.refreshGeometry(now_ms);

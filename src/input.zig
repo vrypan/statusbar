@@ -26,6 +26,11 @@ pub const Input = struct {
     /// Bar rows below the child's `rows`.
     bar: u16,
     rows: u16,
+    /// The child's height in pixels, or zero when the terminal reports none.
+    pixel_rows: u16 = 0,
+    /// SGR-Pixels (1016) as the child last set it: SGR mouse positions are
+    /// pixels rather than cells.
+    sgr_pixels: bool = false,
 
     state: State = .ground,
     seq: [max_seq]u8 = undefined,
@@ -160,9 +165,14 @@ pub const Input = struct {
 
         switch (final) {
             'M', 'm' => {
-                if (marker != '<' or count != 3 or !self.onBar(params[2])) return sink.write(seq);
+                if (marker != '<' or count != 3) return sink.write(seq);
+                // Without a known pixel height there is no way to tell where
+                // the bar starts, so pixel reports pass through as they are.
+                if (self.sgr_pixels and self.pixel_rows == 0) return sink.write(seq);
+                const last: u32 = if (self.sgr_pixels) self.pixel_rows else self.rows;
+                if (self.bar == 0 or params[2] <= last) return sink.write(seq);
                 if (final == 'M' and params[0] & mouse_motion == 0) return;
-                params[2] = self.rows;
+                params[2] = last;
             },
             't' => {
                 if (marker != 0 or count != 3 or params[0] != 8 or self.bar == 0 or params[1] <= self.bar) return sink.write(seq);
@@ -278,6 +288,25 @@ test "a drag that ends on the bar ends on the child's last row" {
     );
     // X10: motion with button 1 held, then a release.
     try expectTranslation("\x1b[M@!\x37\x1b[M#\"\x38", "\x1b[M@!\x36\x1b[M#\"\x36");
+}
+
+test "pixel mouse reports compare against the child's pixel height" {
+    const Case = struct { pixel_rows: u16, input: []const u8, expected: []const u8 };
+    for ([_]Case{
+        // 22 child rows of 20 pixels, the bar below them.
+        .{ .pixel_rows = 440, .input = "\x1b[<0;50;430M\x1b[<0;50;430m", .expected = "\x1b[<0;50;430M\x1b[<0;50;430m" },
+        .{ .pixel_rows = 440, .input = "x\x1b[<0;50;450My", .expected = "xy" },
+        .{ .pixel_rows = 440, .input = "\x1b[<32;5;460M\x1b[<0;6;470m", .expected = "\x1b[<32;5;440M\x1b[<0;6;440m" },
+        // An unknown pixel height leaves reports alone rather than guess.
+        .{ .pixel_rows = 0, .input = "\x1b[<0;50;450M", .expected = "\x1b[<0;50;450M" },
+    }) |case| {
+        var in: Input = .{ .bar = 2, .rows = 22, .pixel_rows = case.pixel_rows, .sgr_pixels = true };
+        var collector: Collector = .{};
+        defer collector.bytes.deinit(std.testing.allocator);
+        in.feed(case.input, &collector);
+        try std.testing.expect(!in.holding());
+        try std.testing.expectEqualStrings(case.expected, collector.bytes.items);
+    }
 }
 
 test "a lone escape key is not held" {

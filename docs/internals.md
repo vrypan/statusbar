@@ -26,7 +26,9 @@ shell
 - Cursor position reports pass through unchanged, since the child's rows are
   numbered the same on both sides. The text-area size report (XTWINOPS 18)
   leaves out the bar's rows, and mouse reports aimed at the bar are not sent
-  to the child. Terminal UI actions such as opening an OSC 8 link still work.
+  to the child. SGR-Pixels reports are measured against the child's pixel
+  height, and pass through unchanged when the terminal reports no pixel size.
+  Terminal UI actions such as opening an OSC 8 link still work.
 - Bounded OSC 7 working-directory reports are observed while remaining
   byte-for-byte visible to the terminal. A valid `file://` or
   `kitty-shell-cwd://` URI is decoded into a safe OSC 2 terminal title and
