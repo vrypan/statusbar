@@ -1,18 +1,24 @@
 # Changelog
 
-Changes are grouped by version, newest first. Unreleased contains commits since
-the latest version tag. Entries preserve commit subjects verbatim.
+Changes are grouped by version, newest first. Each section summarizes changes
+since the previous version.
 
-## Unreleased
+## v0.4.0
 
-- Add tags to pushed rows
-- Place pushed row IDs on the right
-- Add configurable style for pushed rows
-- Allow pop to remove latest pushed row
-- Remove streaming mode from set
-- Add dynamic push and pop rows with command streaming
+- Add dynamic pushed rows with command streaming, tags, stable IDs, and optional latest-row pop
+- Make pushed-row slots and styling configurable with templates for stream text, tag, and ID
+- Update pushed streams without reformatting every bar row
+- Keep push and pop responsive when a child leaves its cursor saved
+- Validate pushed-row socket senders and centralize request and reply handling
+- Repaint after selective erase and keep oversized CSI sequences out of the bar
+- Map pixel mouse reports to the child's pixel height
+- Reject C1 controls in directory titles and keep markup escaped after incomplete OSC sequences
+- Fix quoted config header detection and resolve config paths without parsing their contents
+- Split CLI, proxy, and renderer code into layer modules; share parsing and row composition code
+- Use zunic for UTF-8 iteration and decoding where it simplifies text handling
+- Make `push` the streaming command and keep `set` for direct slot updates
+- Remove the stale `STATUSBAR_LINES` variable and require session state for `set`
 - Use session state for shell integration detection
-- Stream stdin into slots with literal progress updates
 - Document how I use statusbar
 
 ## v0.3.1
