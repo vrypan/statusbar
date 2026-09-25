@@ -244,7 +244,7 @@ layer or the layers above it in this list:
 | `session/` | The control socket, the session state file, and pushed rows |
 | `model/` | Config parsing, status commands, and the content they produce |
 | `proxy/` | The event loop that connects everything |
-| `cli/` | Subcommands; `main.zig` stays at the root of `src/` |
+| `cli/` | One file per subcommand in `commands/`, shell integration scripts in `shell/`; `main.zig` stays at the root of `src/` |
 
 `terminal/` and `render/` are independent of each other, as are `shared/` and
 `platform/`. `src/bench_internals.zig` exports what `src/tools/bench.zig`
