@@ -7,12 +7,12 @@ numbered slot in your config:
 tail -n 0 -f app.log | statusbar push &
 ```
 
-The row appears below configured rows. Its left slot shows a session-local ID;
-the right slot shows the latest stream value:
+The row appears below configured rows. Its left slot shows the latest stream
+value; the right slot shows a session-local ID:
 
 ```text
-[1]                         Starting…
-[1]                       Server ready
+Starting…                         [1]
+Server ready                       [1]
 ```
 
 Set the base style of pushed rows with `[line.push]` in the config. It applies
@@ -30,10 +30,11 @@ statusbar push -- curl --progress-bar --limit-rate 1M \
   -o /dev/null https://proof.ovh.net/files/100Mb.dat &
 ```
 
-`push` sets the command's `COLUMNS` to the terminal width minus the `[ID] `
-prefix. It captures both stdout and stderr, so curl's progress output reaches
-the row. The width is measured when the command starts; resizing the terminal
-does not change the running command's `COLUMNS`. The command's exit status is
+`push` sets the command's `COLUMNS` to the terminal width minus the right-hand
+`[ID]` and one separating column. It captures both stdout and stderr, so
+curl's progress output reaches the row. The width is measured when the command
+starts; resizing the terminal does not change the running command's `COLUMNS`.
+The command's exit status is
 returned by `push` after it prints the row ID. Output files should be specified
 for commands whose stdout is data rather than status text.
 
@@ -78,6 +79,6 @@ and reappear when there is room. A push may therefore succeed while its row is
 hidden.
 
 If `push` loses its input or exits unexpectedly, the last value accepted by
-the running bar stays visible; its ID remains in the row prefix. Neither `push`
+the running bar stays visible; its ID remains at the right edge. Neither `push`
 nor `pop` works outside a live statusbar session. A missing, stale, or
 incompatible session is reported as an error.

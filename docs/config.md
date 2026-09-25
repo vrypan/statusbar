@@ -116,7 +116,7 @@ Use `style` to set the base style of every row created by `statusbar push`:
 style = fg=accent,bg=#1e1e2e
 ```
 
-The style covers the whole row, including its `[ID]` prefix. It accepts the
+The style covers the whole row, including its right-aligned `[ID]`. It accepts the
 same attributes and named colors as `[line.N]` styles. If omitted, pushed rows
 inherit the top-level `style`. This section does not reserve a row or change
 numbered slots. Reloading the config restyles pushed rows that are already

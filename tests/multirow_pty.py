@@ -1259,6 +1259,12 @@ print('PUSH_POP_OK', flush=True)
                                   '-c', child, binary], timeout=12)
         assert code == 0 and b'PUSH_POP_OK' in data, data[-2500:]
         assert b'[1]' in data and b'first final' in data, data[-2500:]
+        painted = re.findall(rb'\x1b\[24;1H(.*?)(?=\x1b8)', data, re.S)
+        plain = [re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'',
+                        re.sub(rb'\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)', b'', row))
+                 for row in painted]
+        assert any(row.startswith(b'first final') and row.endswith(b'[1]')
+                   for row in plain), plain[-4:]
         assert b'[2]' in data and 'Καλημέρα ## #[bold]'.encode() in data, data[-2500:]
         assert b'\x1b[0;38;2;18;52;86m' in data, data[-2500:]
         assert b'\x1b[0;38;2;101;67;33m' in data, data[-2500:]

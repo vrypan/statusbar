@@ -18,12 +18,14 @@ pub const Tracks = struct {
     spans: [32]TrackSpan = undefined,
     len: usize = 0,
     literal: [2]bool = .{ false, false },
+    /// Pushed rows keep their right-hand ID visible when the text is too long.
+    right_priority: bool = false,
     override_epoch: [2]u64 = .{ 0, 0 },
     pub fn items(self: *const Tracks) []const TrackSpan {
         return self.spans[0..self.len];
     }
     pub fn eql(a: Tracks, b: Tracks) bool {
-        if (a.len != b.len or !std.meta.eql(a.override_epoch, b.override_epoch) or !std.meta.eql(a.literal, b.literal)) return false;
+        if (a.len != b.len or !std.meta.eql(a.override_epoch, b.override_epoch) or !std.meta.eql(a.literal, b.literal) or a.right_priority != b.right_priority) return false;
         for (a.items(), b.items()) |x, y| if (!std.meta.eql(x, y)) return false;
         return true;
     }
@@ -374,7 +376,9 @@ pub const Renderer = struct {
             try self.semantic_staging[side].reset(self.budget.allocator(), width, base);
             _ = place(&self.semantic_staging[side], self.scratch, 0, width, owner);
         }
-        const left_width = rowFitting(self.semantic_staging[0], self.cols);
+        const reserved_right = if (tracks.right_priority) rowFitting(self.semantic_staging[1], self.cols) else 0;
+        const reserved_gap: usize = if (reserved_right > 0 and self.semantic_staging[0].cells.items.len > 0) 1 else 0;
+        const left_width = rowFitting(self.semantic_staging[0], self.cols -| (reserved_right + reserved_gap));
         placeSnapshot(row, self.semantic_staging[0], 0, left_width);
         const gap: usize = if (left_width > 0) 1 else 0;
         const right_width = rowFitting(self.semantic_staging[1], self.cols -| (left_width + gap));
@@ -849,6 +853,26 @@ test "literal and markup slots preserve independent hash widths" {
     try std.testing.expectEqual(styled.Color{ .indexed = 1 }, colored.cells.items[0].style.fg);
     try std.testing.expectEqual(@as(usize, 1), r.rows[0].semantic[1].cells.items.len);
     try std.testing.expect(r.rows[0].semantic[1].cells.items[0].style.bold);
+}
+
+test "pushed row keeps its right-hand ID beside overlong text" {
+    const gpa = std.testing.allocator;
+    var content = try Content.init(gpa, 1);
+    defer content.deinit();
+    _ = content.setTrackedLine(0, "x" ** 80 ++ "\t[7]", .{ .literal = .{ true, true }, .right_priority = true });
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{null};
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var renderer = try Renderer.init(gpa);
+    defer renderer.deinit();
+    try renderer.resize(1, 80);
+    try renderer.prepare(&content, &look, true);
+    const row = renderer.rows[0].base;
+    try std.testing.expectEqualStrings("x", row.cells.items[75].glyph.get(row.data.items));
+    try std.testing.expectEqual(.blank, row.cells.items[76].kind);
+    try std.testing.expectEqualStrings("[", row.cells.items[77].glyph.get(row.data.items));
+    try std.testing.expectEqualStrings("7", row.cells.items[78].glyph.get(row.data.items));
+    try std.testing.expectEqualStrings("]", row.cells.items[79].glyph.get(row.data.items));
 }
 
 test "text presentation progress squares leave the right slot aligned" {

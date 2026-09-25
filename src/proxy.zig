@@ -540,16 +540,16 @@ const Proxy = struct {
         }
         for (self.pushed.items.items[0..pushed_visible], configured..) |*row, n| {
             var text: [bar.max_line_bytes]u8 = undefined;
-            const prefix = try std.fmt.bufPrint(&text, "[{d}]\t", .{row.id});
-            var rest = row.value();
-            if (rest.len > text.len - prefix.len) {
-                rest = rest[rest.len - (text.len - prefix.len) ..];
-                while (rest.len > 0 and rest[0] & 0xc0 == 0x80) rest = rest[1..];
-            }
-            @memcpy(text[prefix.len..][0..rest.len], rest);
-            var len = prefix.len + rest.len;
-            while (!std.unicode.utf8ValidateSlice(text[0..len]) and len > prefix.len) : (len -= 1) {}
-            _ = content.setTrackedLine(n, text[0..len], .{ .literal = .{ true, true } });
+            var id_buf: [22]u8 = undefined;
+            const label = try std.fmt.bufPrint(&id_buf, "[{d}]", .{row.id});
+            const value = row.value();
+            var value_len = @min(value.len, text.len - label.len - 1);
+            while (value_len > 0 and !std.unicode.utf8ValidateSlice(value[0..value_len])) : (value_len -= 1) {}
+            @memcpy(text[0..value_len], value[0..value_len]);
+            text[value_len] = '\t';
+            @memcpy(text[value_len + 1 ..][0..label.len], label);
+            const len = value_len + 1 + label.len;
+            _ = content.setTrackedLine(n, text[0..len], .{ .literal = .{ true, true }, .right_priority = true });
             styles[n] = pushed_style;
             rules[n] = null;
         }

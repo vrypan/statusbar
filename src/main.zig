@@ -319,8 +319,8 @@ fn pushRow(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
             return 1;
         };
         var width_buf: [20]u8 = undefined;
-        const prefix_width = std.fmt.count("[{d}] ", .{id});
-        const available = @max(1, @as(usize, size.col) -| prefix_width);
+        const id_and_gap_width = std.fmt.count("[{d}] ", .{id});
+        const available = @max(1, @as(usize, size.col) -| id_and_gap_width);
         const width = try std.fmt.bufPrint(&width_buf, "{d}", .{available});
         var child_env = try sys.environMap().clone(arena);
         defer child_env.deinit();
