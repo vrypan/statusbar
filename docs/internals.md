@@ -240,7 +240,7 @@ layer or the layers above it in this list:
 | `shared/` | Leaf types used across layers: slot limits and terminal colors |
 | `platform/` | System calls, raw mode, process execution, the log file |
 | `terminal/` | Byte-stream filters between the terminal and the child, the palette probe, OSC 3110 framing |
-| `render/` | Markup, styled text, the cell grid, highlight effects, and bar painting |
+| `render/` | Markup, styled text, the cell grid, and the `Renderer` in `bar.zig`, with row content in `content.zig`, layout in `row_layout.zig`, highlight scheduling in `effects.zig` and paint bytes in `serialize.zig` |
 | `session/` | The control socket, the session state file, and pushed rows |
 | `model/` | Config parsing, status commands, and the content they produce |
 | `proxy/` | Session setup and the `Proxy` state in `proxy.zig`; its methods grouped by concern in `loop.zig`, `rows.zig`, `terminal_input.zig` and `reload.zig` |
