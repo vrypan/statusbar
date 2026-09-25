@@ -220,8 +220,10 @@ pub const Output = struct {
                         },
                         0x20...0x3f => {
                             if (self.seq_len == max_seq - 1) {
-                                sink.write(self.seq[0..self.seq_len]);
-                                sink.write(&.{b});
+                                // ESC [ has already reached the terminal. CAN
+                                // cancels that incomplete CSI before its
+                                // unbounded parameters can address bar rows.
+                                sink.write("\x18");
                                 self.state = .csi_ignore;
                             } else {
                                 self.seq[self.seq_len] = b;
@@ -243,11 +245,10 @@ pub const Output = struct {
                 },
                 .csi_ignore => {
                     i += 1;
+                    run = i;
                     switch (b) {
                         0x40...0x7e, 0x18, 0x1a => self.state = .ground,
                         esc => {
-                            sink.write(bytes[run .. i - 1]);
-                            run = i;
                             self.state = .esc;
                         },
                         else => {},
@@ -561,7 +562,11 @@ pub const Output = struct {
         }
 
         var params: [max_params]u32 = undefined;
-        const count = parseParams(params_text, &params) orelse return sink.write(seq);
+        const count = parseParams(params_text, &params) orelse {
+            // A protected CSI with too many or invalid parameters must not
+            // bypass the row clamp. Cancel the ESC [ already sent.
+            return sink.write("\x18");
+        };
 
         if (marker == 0 and intermediates.len == 0) {
             switch (final) {
@@ -798,6 +803,14 @@ test "rows past the child's screen are clamped off the bar" {
     try expectTranslation("\x1b[99;1H\x1b[24d\x1b[23;4f", "\x1b[22;1H\x1b[22d\x1b[22;4f");
 }
 
+test "unbounded or unparseable CSI cannot address bar rows" {
+    try expectTranslation("\x1b[" ++ ("9" ** 64) ++ "Hsafe", "\x1b[\x18safe");
+    try expectTranslation("\x1b[" ++ ("9" ** 64) ++ "rtext", "\x1b[\x18text");
+    try expectTranslation("\x1b[" ++ ("9" ** 64) ++ "\x1b[99H", "\x1b[\x18\x1b[22H");
+    try expectTranslation("\x1b[" ++ ("1;" ** 16) ++ "99Hsafe", "\x1b[\x18safe");
+    try expectTranslation("\x1b[" ++ ("1;" ** 16) ++ "99rtext", "\x1b[\x18text");
+}
+
 test "margins are kept off the bar" {
     try expectTranslation("\x1b[r", "\x1b[1;22r");
     try expectTranslation("\x1b[5;10r", "\x1b[5;10r");
@@ -910,9 +923,9 @@ test "UTF-8 pending state handles continuation chunks and recovery" {
     try std.testing.expect(out.atBoundary());
 }
 
-test "oversized sequences are forwarded untouched" {
+test "oversized sequences are cancelled" {
     const input = "\x1b[" ++ "1;" ** 40 ++ "H";
-    try expectTranslation(input, input);
+    try expectTranslation(input, "\x1b[\x18");
 }
 
 test "an unrestored cursor save is tracked" {
