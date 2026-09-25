@@ -705,7 +705,7 @@ const Proxy = struct {
             var from: control.Address = undefined;
             var from_len: c.socklen_t = undefined;
             const message = self.control_endpoint.receive(&packet, &from, &from_len) orelse break;
-            const owner = std.mem.sliceTo(&from.path, 0);
+            const owner = control.senderPath(&from, from_len) orelse continue;
             const reply = self.controlRequest(message, owner, now_ms);
             // Updates do not need responses. Acknowledged operations do.
             if (std.mem.indexOf(u8, message, "|U|") == null) self.control_endpoint.reply(&from, from_len, reply);

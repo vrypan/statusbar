@@ -9,6 +9,17 @@ extern "c" fn socket(domain: c_int, sock_type: c_int, protocol: c_int) c_int;
 pub const max_packet = 1536;
 pub const Address = c.sockaddr.un;
 
+/// recvfrom may return a short or unterminated address. Only a complete
+/// pathname can identify the owner of a pushed row.
+pub fn senderPath(from: *const Address, from_len: c.socklen_t) ?[]const u8 {
+    const offset = @offsetOf(Address, "path");
+    if (from_len <= offset or from.family != c.AF.UNIX) return null;
+    const available = @min(@as(usize, from_len) - offset, from.path.len);
+    const end = std.mem.indexOfScalar(u8, from.path[0..available], 0) orelse return null;
+    if (end == 0) return null;
+    return from.path[0..end];
+}
+
 fn address(path: []const u8) !Address {
     var addr: Address = std.mem.zeroes(Address);
     addr.family = c.AF.UNIX;
@@ -96,3 +107,14 @@ pub const Client = struct {
         return result[0..@intCast(n)];
     }
 };
+
+test "sender path stays within returned socket address length" {
+    var addr = try address("/tmp/statusbar-client-test.sock");
+    const offset = @offsetOf(Address, "path");
+    try std.testing.expectEqualStrings("/tmp/statusbar-client-test.sock", senderPath(&addr, @sizeOf(Address)).?);
+    try std.testing.expect(senderPath(&addr, @intCast(offset)) == null);
+    try std.testing.expect(senderPath(&addr, @intCast(offset + 4)) == null);
+    try std.testing.expectEqualStrings("/tmp/statusbar-client-test.sock", senderPath(&addr, @intCast(offset + "/tmp/statusbar-client-test.sock".len + 1)).?);
+    addr.path[0] = 0;
+    try std.testing.expect(senderPath(&addr, @sizeOf(Address)) == null);
+}
