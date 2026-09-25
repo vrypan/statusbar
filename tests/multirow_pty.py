@@ -131,196 +131,21 @@ def osc_value(data, slot):
     return base64.b64decode(data[start:end])
 
 
-def check_slot_stream(binary):
-    """A piped sender writes successive OSC values to its controlling tty."""
+def check_set_dash(binary):
     env = os.environ.copy()
     env.pop("STATUSBAR_STATE", None)
-    env.pop("STATUSBAR_SESSION_ID", None)
     env["STATUSBAR_LINES"] = "2"
-    input_r, input_w = os.pipe()
-    output_r, output_w = os.pipe()
-    pid, master = pty.fork()
-    if pid == 0:
-        os.close(input_w)
-        os.close(output_r)
-        os.dup2(input_r, 0)
-        os.dup2(output_w, 1)
-        os.close(input_r)
-        os.close(output_w)
-        os.execve(binary, [binary, "set", "4", "-"], env)
-    os.close(input_r)
-    os.close(output_w)
-
-    def frame(value):
-        return (b"\x1b]1337;SetUserVar=StatusBarSlotLiteral4=" +
-                base64.b64encode(value) + b"\x07")
-
-    data = b""
-    try:
-        os.write(input_w, b"part")
-        data = read_until(master, data, frame(b"part"))
-        os.write(input_w, b"ial")
-        data = read_until(master, data, frame(b"partial"))
-        prefix = b"\x1b]1337;SetUserVar=StatusBarSlotLiteral4="
-        frames_before = data.count(prefix)
-        time.sleep(0.1)
-        os.write(input_w, b"\rpartial")
-        time.sleep(0.15)
-        while select.select([master], [], [], 0)[0]:
-            data += os.read(master, 65536)
-        assert data.count(prefix) == frames_before, "identical CR rewrite emitted a slot update"
-        os.write(input_w, b"\r10%\r20%\n")
-        data = read_until(master, data, frame(b"20%"))
-        os.write(input_w, b"e")
-        data = read_until(master, data, frame(b"e"))
-        os.write(input_w, b"\xcc")
-        # The pending complete scalar publishes while the next is incomplete.
-        os.write(input_w, b"\x81")
-        data = read_until(master, data, frame("e\u0301".encode()))
-        os.write(input_w, b"\nslow\xe7")
-        data = read_until(master, data, frame(b"slow"))
-        os.write(input_w, b"\x95\x8c")
-        data = read_until(master, data, frame("slow界".encode()))
-        os.write(input_w, b"\n" + b"x" * 1023 + "界".encode() + b"y")
-        data = read_until(master, data, frame(b"x" * 1023))
-        os.write(input_w, b"\nOK")
-        data = read_until(master, data, frame(b"OK"))
-        os.write(input_w, b"\n\xffbad\nrecovered")
-        data = read_until(master, data, frame(b"recovered"))
-        before = data.count(prefix)
-        os.write(input_w, b"\nincomplete\xe7\nnext")
-        data = read_until(master, data, frame(b"next"))
-        recent = [base64.b64decode(value) for value in
-                  re.findall(re.escape(prefix) + rb"([^\x07]*)\x07", data)][before:]
-        assert all(b"\xe7" not in value for value in recent), recent
-        report = b"#" * 12 + b" " * 61 + b" 15.6%"
-        before = data.count(prefix)
-        os.write(input_w, b"\r" + report[:-6])
-        os.write(input_w, report[-6:])
-        data = read_until(master, data, frame(report))
-        time.sleep(0.08)
-        while select.select([master], [], [], 0)[0]:
-            data += os.read(master, 65536)
-        updates = [base64.b64decode(value) for value in
-                   re.findall(re.escape(prefix) + rb"([^\x07]*)\x07", data)]
-        assert updates[before:] == [report], updates[before:]
-        for _ in range(3):
-            os.write(input_w, b"\r" + report[:-6])
-            os.write(input_w, report[-6:])
-            time.sleep(0.08)
-        while select.select([master], [], [], 0)[0]:
-            data += os.read(master, 65536)
-        assert data.count(prefix) == before + 1, "identical curl-shaped reports republished a prefix"
-        os.close(input_w)
-        input_w = -1
-        status = os.waitpid(pid, 0)[1]
-        pid = None
-        assert os.waitstatus_to_exitcode(status) == 0, data[-500:]
-        assert os.read(output_r, 1) == b"", "stream wrote to stdout"
-    finally:
-        if input_w >= 0:
-            os.close(input_w)
-        os.close(output_r)
-        if pid is not None:
-            stop(pid, master)
-        else:
-            os.close(master)
-
-    for args, value in ((["4", "--", "-"], b"-"),
+    for args, value in ((["4", "-"], b"-"),
+                        (["4", "--", "-"], b"-"),
                         (["--", "4", "-"], b"-"),
                         (["4", "-", "extra"], b"- extra")):
         code, data = capture_pty([binary, "set", *args], env)
         assert code == 0 and osc_value(data, 4) == value, data
 
-    code, data = capture_pty([binary, "set", "4", "-"], env)
-    assert code == 2 and b"pipe or file" in data, data
-
-    no_tty = subprocess.run([binary, "set", "4", "-"], input=b"hi", env=env,
-                            capture_output=True, start_new_session=True, timeout=3)
-    assert no_tty.returncode == 1 and b"cannot open /dev/tty" in no_tty.stderr, no_tty
-
-    code, data = capture_pty(
-        ["/bin/sh", "-c", f"printf '' | {shlex.quote(binary)} set 4 -"], env,
-    )
-    assert code == 0 and b"SetUserVar=StatusBarSlotLiteral4=" not in data, data
-    code, data = capture_pty([binary, "set", "4"], env)
-    assert code == 0 and osc_value(data, 4) == b"", data
-
-    no_session = env.copy()
-    no_session.pop("STATUSBAR_LINES")
-    no_session.pop("STATUSBAR_STATE", None)
-    result = subprocess.run([binary, "set", "4", "-"], input=b"ignored",
-                            env=no_session, capture_output=True, timeout=3)
-    assert result.returncode == 0 and not result.stdout, result
-
-    invalid = env.copy()
-    invalid["STATUSBAR_LINES"] = "1"
-    result = subprocess.run([binary, "set", "4", "-"], input=b"ignored",
-                            env=invalid, capture_output=True, timeout=3)
-    assert result.returncode == 2 and b"does not exist" in result.stderr, result
-
-    with tempfile.NamedTemporaryFile("w", delete=False) as cfg:
-        cfg.write("[line.1]\nleft = static\n[line.2]\nright = waiting\n")
-        cfg_path = cfg.name
-    try:
-        child = 'printf "child-output\\n"; printf "stream-visible" | "$1" set 4 -; sleep 0.2'
-        code, painted = capture_pty(
-            [binary, "--config", cfg_path, "--", "/bin/sh", "-c", child, "sh", binary],
-            timeout=6,
-        )
-        assert code == 0 and b"child-output" in painted and b"stream-visible" in painted, painted[-800:]
-    finally:
-        os.unlink(cfg_path)
-
-    def painted_progress(slot, left, report):
-        with tempfile.NamedTemporaryFile("w", delete=False) as cfg:
-            cfg.write(f'[line.1]\nleft = static\n[line.2]\nleft = "{left}"\nright = ""\n')
-            cfg_path = cfg.name
-        try:
-            producer = ('import os,time; '
-                        f'os.write(1,{report!r}); time.sleep(.15)')
-            child = '"$1" -c "$2" | "$3" set "$4" -; sleep .2'
-            code, painted = capture_pty(
-                [binary, "--config", cfg_path, "--", "/bin/sh", "-c",
-                 child, "sh", sys.executable, producer, binary, str(slot)],
-                timeout=6,
-            )
-            assert code == 0, painted[-500:]
-            rows = re.findall(rb"\x1b\[24;1H(.*?)(?=\x1b8)", painted, re.S)
-            for row in rows:
-                plain = re.sub(rb"\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)", b"", row)
-                plain = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", plain)
-                if b"%" in plain:
-                    assert plain.count(b"#") == report.count(b"#"), plain
-                    assert plain.index(b"%") == (len(report) - 1 if slot == 3 else 79), plain
-                    return
-            raise AssertionError(f"no painted progress row: {painted[-800:]!r}")
-        finally:
-            os.unlink(cfg_path)
-
-    painted_progress(3, "", b"#" * 12 + b" " * 61 + b" 15.6%")
-    painted_progress(4, "LEFT", b"#" * 6 + b" " * 15 + b" 4.7%")
-
-    with tempfile.TemporaryDirectory() as directory:
-        log_path = os.path.join(directory, "app.log")
-        open(log_path, "wb").close()
-        script = 'printf "TAIL_READY\\n"; tail -n 0 -f "$1" | "$2" set 4 -'
-        tail_pid, tail_master = spawn(
-            ["/bin/sh", "-c", script, "sh", log_path, binary], env=env,
-        )
-        try:
-            read_until(tail_master, b"", b"TAIL_READY")
-            time.sleep(0.2)  # let tail open the file before appending
-            with open(log_path, "ab", buffering=0) as log:
-                log.write(b"tail-followed\n")
-            read_until(tail_master, b"", frame(b"tail-followed"), timeout=6)
-        finally:
-            os.killpg(tail_pid, signal.SIGKILL)
-            os.waitpid(tail_pid, 0)
-            os.close(tail_master)
-    print("slot stream PTY checks passed")
-
-
+    command = f"printf 'ignored' | {shlex.quote(binary)} set 4 -"
+    code, data = capture_pty(["/bin/sh", "-c", command], env)
+    assert code == 0 and osc_value(data, 4) == b"-", data
+    print("set treats a sole dash as literal text")
 def check_init_invocation(binary):
     env = os.environ.copy()
     env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
@@ -1440,7 +1265,7 @@ def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: multirow_pty.py STATUSBAR")
     binary = os.path.abspath(sys.argv[1])
-    check_slot_stream(binary)
+    check_set_dash(binary)
 
     env = os.environ.copy()
     env["STATUSBAR_LINES"] = "1"

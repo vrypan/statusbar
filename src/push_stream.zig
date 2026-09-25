@@ -1,4 +1,4 @@
-//! Bounded latest-line state and publication pacing for `set SLOT -`.
+//! Bounded latest-line state and publication pacing for pushed rows.
 const std = @import("std");
 const Io = std.Io;
 const posix = std.posix;
@@ -92,10 +92,10 @@ pub const State = struct {
 
 const Sender = struct {
     io: Io,
-    tty: Io.File,
-    slot: usize,
+    client: *control.Client,
+    token: []const u8,
+    id: u64,
     input_fd: sys.Fd = 0,
-    pushed: ?struct { client: *control.Client, token: []const u8, id: u64 } = null,
     state: State = .{},
     reader: Io.Reader,
     input: [4096]u8 = undefined,
@@ -115,13 +115,8 @@ const Sender = struct {
         var encoded: [encoder.calcSize(max_value)]u8 = undefined;
         _ = encoder.encode(encoded[0..encoder.calcSize(value.len)], value);
         var frame: [1500]u8 = undefined;
-        if (self.pushed) |push| {
-            const sequence = std.fmt.bufPrint(&frame, "1|{s}|U|{d}|{s}", .{ push.token, push.id, encoded[0..encoder.calcSize(value.len)] }) catch return error.Stream;
-            push.client.send(sequence) catch return error.Stream;
-        } else {
-            const sequence = std.fmt.bufPrint(&frame, "\x1b]1337;SetUserVar=StatusBarSlotLiteral{d}={s}\x07", .{ self.slot, encoded[0..encoder.calcSize(value.len)] }) catch return error.Stream;
-            self.tty.writeStreamingAll(self.io, sequence) catch return error.Stream;
-        }
+        const sequence = std.fmt.bufPrint(&frame, "1|{s}|U|{d}|{s}", .{ self.token, self.id, encoded[0..encoder.calcSize(value.len)] }) catch return error.Stream;
+        self.client.send(sequence) catch return error.Stream;
         self.state.markSent(now_ms);
     }
 
@@ -167,23 +162,13 @@ const Sender = struct {
     }
 };
 
-pub fn run(io: Io, tty: Io.File, slot: usize) error{Stream}!void {
+pub fn run(io: Io, client: *control.Client, token: []const u8, id: u64, input_fd: sys.Fd) error{Stream}!void {
     var sender: Sender = .{
         .io = io,
-        .tty = tty,
-        .slot = slot,
-        .reader = .{ .vtable = &.{ .stream = Sender.stream }, .buffer = undefined, .seek = 0, .end = 0 },
-    };
-    try runSender(&sender);
-}
-
-pub fn runPush(io: Io, client: *control.Client, token: []const u8, id: u64, input_fd: sys.Fd) error{Stream}!void {
-    var sender: Sender = .{
-        .io = io,
-        .tty = undefined,
-        .slot = 0,
+        .client = client,
+        .token = token,
+        .id = id,
         .input_fd = input_fd,
-        .pushed = .{ .client = client, .token = token, .id = id },
         .reader = .{ .vtable = &.{ .stream = Sender.stream }, .buffer = undefined, .seek = 0, .end = 0 },
     };
     try runSender(&sender);

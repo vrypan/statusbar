@@ -34,10 +34,13 @@ returned by `push` after it prints the row ID. Output files should be specified
 for commands whose stdout is data rather than status text.
 
 `push` reads a pipe or file. It displays the latest line as it arrives,
-including partial lines and `\r` progress updates, with the same stream rules
-as [`set SLOT -`](set.md#stream-the-latest-line). Stream text is literal:
-`##` and `#[bold]` display as written. The final value remains on screen when
-input ends. At EOF, `push` prints the ID to stdout and exits:
+including partial lines and `\r` progress updates. Short input bursts are
+combined; updates are sent at most every 50 ms, plus a final update at EOF.
+Identical redraws are skipped. Each line is limited to 1024 bytes without
+splitting a UTF-8 character. Stream text is literal: `##` and `#[bold]`
+display as written. ANSI colors and hyperlinks work, while cursor movement
+and backspace editing are not interpreted. The final value remains on screen
+when input ends. At EOF, `push` prints the ID to stdout and exits:
 
 ```sh
 id=$(printf 'Build complete\n' | statusbar push)

@@ -61,13 +61,9 @@ statusbar set 1 'Build passed'
 statusbar set 1
 ```
 
-Use `statusbar set SLOT -` to display the latest line from a pipe or file as
-it arrives, for example `tail -n 0 -f app.log | statusbar set 4 -`. Use
-`statusbar set 4 -- -` for a literal dash. Streamed hash marks and markup-looking
-text display literally; one-shot TEXT supports statusbar markup. See [set.md](set.md#stream-the-latest-line)
-for line boundaries, pacing, and progress examples.
-
-See [set.md](set.md) for formatting and more examples.
+`statusbar set 4 -` displays a literal dash. Text supports statusbar markup;
+see [set.md](set.md) for formatting and more examples. To stream the latest
+line of output, use `statusbar push`.
 
 ## `push` and `pop`
 

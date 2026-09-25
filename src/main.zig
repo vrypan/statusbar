@@ -59,7 +59,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     return switch (try command.as(cli.CommandName)) {
         .run => runSession(arena, init.io, command, stderr),
-        .set => setSlot(arena, init.io, args[1..], command, stderr),
+        .set => setSlot(arena, init.io, command, stderr),
         .push => pushRow(arena, init.io, command, stdout, stderr),
         .pop => popRow(init.io, command, stderr),
         .init => shellInit(arena, init.io, args[0], command, stdout, stderr),
@@ -235,20 +235,17 @@ fn printCompletion(command: *const zecli.Command, stdout: *Io.Writer, stderr: *I
 /// terminal of the statusbar session this runs in. Words are joined with
 /// spaces, as `echo` would. It writes to /dev/tty rather than stdout, so a
 /// prompt tool capturing stdout never gets the sequence in its prompt.
-fn setSlot(arena: std.mem.Allocator, io: Io, raw_args: []const []const u8, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
+fn setSlot(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
     const args = command.positionals();
     const slot = parseSlot(args[0]) orelse return usageError(stderr, command, "SLOT must be a positive decimal integer");
-    const stream = streamSlotMode(raw_args, args);
 
     var text: std.ArrayList(u8) = .empty;
-    if (!stream) {
-        for (args[1..], 0..) |word, n| {
-            if (n > 0) try text.append(arena, ' ');
-            try text.appendSlice(arena, word);
-        }
-        text.items.len = normalizeSlotText(text.items).len;
-        if (text.items.len > @import("output.zig").max_value) return usageError(stderr, command, "TEXT must be at most 1024 bytes");
+    for (args[1..], 0..) |word, n| {
+        if (n > 0) try text.append(arena, ' ');
+        try text.appendSlice(arena, word);
     }
+    text.items.len = normalizeSlotText(text.items).len;
+    if (text.items.len > @import("output.zig").max_value) return usageError(stderr, command, "TEXT must be at most 1024 bytes");
 
     // Outside a session there is no bar to update, and nothing is written.
     const env = @import("environment.zig");
@@ -261,21 +258,6 @@ fn setSlot(arena: std.mem.Allocator, io: Io, raw_args: []const []const u8, comma
     };
     const max_slot = std.math.mul(usize, line_count, 2) catch return usageError(stderr, command, "STATUSBAR_LINES is malformed");
     if (slot > max_slot) return usageError(stderr, command, "SLOT does not exist in this session");
-    if (stream) {
-        if (Io.File.stdin().isTty(io) catch false) return usageError(stderr, command, "stream input must be a pipe or file");
-        const tty = Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .write_only }) catch {
-            try stderr.writeAll("error: cannot open /dev/tty for slot stream\n");
-            try stderr.flush();
-            return 1;
-        };
-        defer tty.close(io);
-        slot_stream.run(io, tty, slot) catch {
-            try stderr.writeAll("error: slot stream input or terminal write failed\n");
-            try stderr.flush();
-            return 1;
-        };
-        return 0;
-    }
     const encoder = std.base64.standard.Encoder;
     const encoded = try arena.alloc(u8, encoder.calcSize(text.items.len));
     _ = encoder.encode(encoded, text.items);
@@ -287,7 +269,7 @@ fn setSlot(arena: std.mem.Allocator, io: Io, raw_args: []const []const u8, comma
     return 0;
 }
 
-const slot_stream = @import("slot_stream.zig");
+const push_stream = @import("push_stream.zig");
 const control = @import("session_control.zig");
 
 fn sessionClient(io: Io, path_buf: *[96]u8) !control.Client {
@@ -362,7 +344,7 @@ fn pushRow(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         remove_on_start_failure = false;
     }
     defer if (child_pipe) |fd| @import("sys.zig").close(io, fd);
-    slot_stream.runPush(io, &client, token, id, child_pipe orelse 0) catch |err| {
+    push_stream.run(io, &client, token, id, child_pipe orelse 0) catch |err| {
         if (child) |*process| process.kill(io);
         try stderr.print("statusbar: push stream failed: {t}\n", .{err});
         try stderr.flush();
@@ -406,12 +388,6 @@ fn popRow(io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
     };
     if (!std.mem.eql(u8, answer, "OK")) return usageError(stderr, command, "ID does not belong to this session");
     return 0;
-}
-
-fn streamSlotMode(raw_args: []const []const u8, args: []const []const u8) bool {
-    if (args.len != 2 or !std.mem.eql(u8, args[1], "-")) return false;
-    for (raw_args) |arg| if (std.mem.eql(u8, arg, "--")) return false;
-    return true;
 }
 
 /// `statusbar init zsh|fish`: prints the shell integration. Outside a session it
@@ -678,7 +654,7 @@ fn usageError(stderr: *Io.Writer, command: *const zecli.Command, message: []cons
 }
 
 test {
-    _ = slot_stream;
+    _ = push_stream;
     _ = @import("output.zig");
     _ = @import("input.zig");
     _ = @import("session_state.zig");
