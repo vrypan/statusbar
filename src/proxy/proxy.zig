@@ -17,23 +17,23 @@
 const std = @import("std");
 const posix = std.posix;
 const c = std.c;
-const sys = @import("sys.zig");
-const tty = @import("tty.zig");
-const osc7 = @import("osc7.zig");
-const Output = @import("output.zig").Output;
-const Input = @import("input.zig").Input;
-const bar = @import("bar.zig");
-const config = @import("config.zig");
-const Source = @import("source.zig").Source;
-const Runtime = @import("runtime_config.zig").Runtime;
-const config_protocol = @import("config_protocol.zig");
-const SessionState = @import("session_state.zig").State;
-const PaletteProbe = @import("terminal_palette.zig").Probe;
-const PushedRows = @import("pushed_rows.zig").Rows;
-const PushedRow = @import("pushed_rows.zig").Row;
-const pushed_rows = @import("pushed_rows.zig");
-const push_protocol = @import("push_protocol.zig");
-const control = @import("session_control.zig");
+const sys = @import("../platform/sys.zig");
+const tty = @import("../platform/tty.zig");
+const osc7 = @import("../terminal/osc7.zig");
+const Output = @import("../terminal/output.zig").Output;
+const Input = @import("../terminal/input.zig").Input;
+const bar = @import("../render/bar.zig");
+const config = @import("../model/config.zig");
+const Source = @import("../model/source.zig").Source;
+const Runtime = @import("../model/runtime_config.zig").Runtime;
+const config_protocol = @import("../terminal/config_protocol.zig");
+const SessionState = @import("../session/session_state.zig").State;
+const PaletteProbe = @import("../terminal/terminal_palette.zig").Probe;
+const PushedRows = @import("../session/pushed_rows.zig").Rows;
+const PushedRow = @import("../session/pushed_rows.zig").Row;
+const pushed_rows = @import("../session/pushed_rows.zig");
+const push_protocol = @import("../session/push_protocol.zig");
+const control = @import("../session/session_control.zig");
 
 const io_buf_size = 64 * 1024;
 const pending_input_capacity = 64 * 1024;
@@ -87,7 +87,7 @@ pub fn restoreOnPanic() void {
 }
 
 pub const Options = struct {
-    log: ?*@import("log.zig").Log = null,
+    log: ?*@import("../platform/log.zig").Log = null,
     argv: []const []const u8 = &.{},
     cfg: *const config.Config,
     config_text: []const u8,
@@ -376,7 +376,7 @@ test "input readiness is refreshed after another reader consumes input" {
 }
 
 const Proxy = struct {
-    log: ?*@import("log.zig").Log = null,
+    log: ?*@import("../platform/log.zig").Log = null,
     gpa: std.mem.Allocator,
     io: std.Io,
     master: sys.Fd,
@@ -1029,7 +1029,7 @@ const Proxy = struct {
     }
 };
 
-fn receiveSlotUpdate(context: *anyopaque, slot: usize, value: []const u8, mode: @import("slots.zig").SlotMode) void {
+fn receiveSlotUpdate(context: *anyopaque, slot: usize, value: []const u8, mode: @import("../shared/slots.zig").SlotMode) void {
     const source: *Source = @ptrCast(@alignCast(context));
     source.setOverrideMode(slot, value, mode == .literal);
 }
@@ -1081,7 +1081,7 @@ test "a status command that exits after closing stdout wakes the loop" {
     sig_pipe_w.store(sig_fds[1], .monotonic);
     installChildHandler();
 
-    const Command = @import("status.zig").Command;
+    const Command = @import("../model/status.zig").Command;
     var command = try Command.init(std.testing.allocator, io, "exec >&-; sleep 0.2", 1000, 1, 80);
     defer command.deinit(io);
     command.tick(io, 0);
@@ -1121,7 +1121,7 @@ test "palette filtering preserves CSI translation across fragmented input" {
     proxy.feedTerminalInput("[8;24;80t\x1b]11;rgb:1111/2222/3333\x1b");
     proxy.feedTerminalInput("\\keys\x1b[<0;3;24M");
     try std.testing.expectEqualStrings("\x1b[8;22;80tkeys", proxy.pending_input.pending());
-    try std.testing.expectEqualDeep(@import("color.zig").Rgb{ 17, 34, 51 }, renderer.palette.background.?);
+    try std.testing.expectEqualDeep(@import("../shared/color.zig").Rgb{ 17, 34, 51 }, renderer.palette.background.?);
 }
 
 test "completed palette discovery bypasses its copy stage" {

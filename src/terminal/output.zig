@@ -28,7 +28,7 @@ const max_params = 16;
 ///
 ///     ESC ] 1337 ; SetUserVar=StatusBarSlot3=<base64> BEL
 const user_var_prefix = "1337;SetUserVar=StatusBar";
-const slot_values = @import("slots.zig");
+const slot_values = @import("../shared/slots.zig");
 const max_value = slot_values.max_value;
 const SlotMode = slot_values.SlotMode;
 

@@ -34,7 +34,7 @@
 //! slice is allocator-owned and must be released with `deinit`.
 
 const std = @import("std");
-const markup = @import("markup.zig");
+const markup = @import("../render/markup.zig");
 
 pub const max_lines = 65533;
 pub const max_commands = 16;

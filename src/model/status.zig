@@ -9,7 +9,7 @@
 const std = @import("std");
 const posix = std.posix;
 const c = std.c;
-const sys = @import("sys.zig");
+const sys = @import("../platform/sys.zig");
 const display = @import("display.zig");
 
 const max_output = 8192;

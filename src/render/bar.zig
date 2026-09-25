@@ -102,7 +102,7 @@ pub const Look = struct {
 pub const cells = @import("cells.zig");
 const styled = @import("styled_text.zig");
 const relative_highlight = @import("relative_highlight.zig");
-const color = @import("color.zig");
+const color = @import("../shared/color.zig");
 
 pub const State = struct {
     base: cells.Row = .{},

@@ -11,10 +11,10 @@
 const std = @import("std");
 const posix = std.posix;
 const c = std.c;
-const bar = @import("bar.zig");
+const bar = @import("../render/bar.zig");
 const config = @import("config.zig");
 const status = @import("status.zig");
-const slots = @import("slots.zig");
+const slots = @import("../shared/slots.zig");
 
 const max_output_line = 512;
 

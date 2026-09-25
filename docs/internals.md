@@ -230,6 +230,26 @@ packaging, never against a cross-compiled artifact. The standalone Python entry
 point remains useful when testing a specific native binary. Shell-specific
 checks explicitly skip missing zsh/fish locally; release CI installs both.
 
+## Source layout
+
+Each directory under `src/` is one layer. A file imports only from its own
+layer or the layers above it in this list:
+
+| Directory | Contents |
+|---|---|
+| `shared/` | Leaf types used across layers: slot limits and terminal colors |
+| `platform/` | System calls, raw mode, process execution, the log file |
+| `terminal/` | Byte-stream filters between the terminal and the child, the palette probe, OSC 3110 framing |
+| `render/` | Markup, styled text, the cell grid, highlight effects, and bar painting |
+| `session/` | The control socket, the session state file, and pushed rows |
+| `model/` | Config parsing, status commands, and the content they produce |
+| `proxy/` | The event loop that connects everything |
+| `cli/` | Subcommands; `main.zig` stays at the root of `src/` |
+
+`terminal/` and `render/` are independent of each other, as are `shared/` and
+`platform/`. `src/bench_internals.zig` exports what `src/tools/bench.zig`
+measures.
+
 ## Limitations
 
 - Repaints, config replacement, and pushed-row creation and removal save and

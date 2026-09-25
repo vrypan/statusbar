@@ -3,9 +3,9 @@ const Io = std.Io;
 const build_options = @import("build_options");
 const zecli = @import("zecli");
 const completion = @import("completion");
-const cli = @import("cli.zig");
-const proxy = @import("proxy.zig");
-const config = @import("config.zig");
+const cli = @import("cli/cli.zig");
+const proxy = @import("proxy/proxy.zig");
+const config = @import("model/config.zig");
 
 pub const panic = std.debug.FullPanic(struct {
     fn restoreThenPanic(msg: []const u8, first_trace_addr: ?usize) noreturn {
@@ -15,7 +15,7 @@ pub const panic = std.debug.FullPanic(struct {
 }.restoreThenPanic);
 
 pub fn main(init: std.process.Init) !u8 {
-    @import("environment.zig").init(init.environ_map);
+    @import("platform/environment.zig").init(init.environ_map);
     const arena = init.arena.allocator();
     const args = try init.minimal.args.toSlice(arena);
 
@@ -79,9 +79,9 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
     const child = command.passthrough() orelse &.{};
     const argv = try arena.alloc([]const u8, child.len);
     for (child, argv) |arg, *slot| slot.* = arg;
-    var log: @import("log.zig").Log = .{ .io = io };
+    var log: @import("platform/log.zig").Log = .{ .io = io };
     if (command.getValue([]const u8, "log")) |path| {
-        log = @import("log.zig").Log.open(io, path) catch |err| {
+        log = @import("platform/log.zig").Log.open(io, path) catch |err| {
             try stderr.print("statusbar: cannot open log file '{s}': {t}\n", .{ path, err });
             try stderr.flush();
             return 1;
@@ -102,7 +102,7 @@ fn runSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
     // The config pipe is consumed before terminal setup. Reconnect stdin only
     // for this explicit mode so ordinary redirected input remains an error.
     if (loaded.from_stdin) {
-        const tty = @import("sys.zig").openInputTty(io) catch |err| {
+        const tty = @import("platform/sys.zig").openInputTty(io) catch |err| {
             if (err == error.NotATerminal) {
                 try stderr.writeAll("statusbar: stdin and stdout must be a terminal\n");
             } else {
@@ -170,10 +170,10 @@ fn printConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, 
         if (std.mem.eql(u8, selection, "default")) {
             try stdout.writeAll(default_config);
         } else {
-            const state = @import("session_state.zig");
+            const state = @import("session/session_state.zig");
             const selected = std.meta.stringToEnum(state.Selection, selection) orelse
                 return usageError(stderr, command, "--print expects default, startup, or current");
-            const env = @import("environment.zig");
+            const env = @import("platform/environment.zig");
             const state_path = env.get("STATUSBAR_STATE") orelse return usageError(stderr, command, "--print startup/current requires a running statusbar session");
             const token = env.get("STATUSBAR_SESSION_ID") orelse return usageError(stderr, command, "--print startup/current requires a running statusbar session");
             const text = state.readConfig(arena, io, state_path, token, selected) catch |err| {
@@ -189,8 +189,8 @@ fn printConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, 
 }
 
 fn sendConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
-    const protocol = @import("config_protocol.zig");
-    const token = @import("environment.zig").get("STATUSBAR_SESSION_ID") orelse
+    const protocol = @import("terminal/config_protocol.zig");
+    const token = @import("platform/environment.zig").get("STATUSBAR_SESSION_ID") orelse
         return usageError(stderr, command, "not inside a compatible statusbar session");
     if (!protocol.validToken(token)) return usageError(stderr, command, "STATUSBAR_SESSION_ID is malformed");
     var buffer: [4096]u8 = undefined;
@@ -258,12 +258,12 @@ fn setSlot(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stde
         try text.appendSlice(arena, word);
     }
     text.items.len = normalizeSlotText(text.items).len;
-    if (text.items.len > @import("slots.zig").max_value) return usageError(stderr, command, "TEXT must be at most 1024 bytes");
+    if (text.items.len > @import("shared/slots.zig").max_value) return usageError(stderr, command, "TEXT must be at most 1024 bytes");
 
     // Outside a session there is no bar to update, and nothing is written.
-    const env = @import("environment.zig");
+    const env = @import("platform/environment.zig");
     const line_count = if (env.get("STATUSBAR_STATE")) |state_path|
-        @import("session_state.zig").readLines(io, state_path) catch
+        @import("session/session_state.zig").readLines(io, state_path) catch
             return usageError(stderr, command, "STATUSBAR_STATE is unavailable or malformed")
     else blk: {
         const line_text = env.get("STATUSBAR_LINES") orelse return 0;
@@ -282,22 +282,22 @@ fn setSlot(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stde
     return 0;
 }
 
-const push_stream = @import("push_stream.zig");
-const push_protocol = @import("push_protocol.zig");
-const control = @import("session_control.zig");
+const push_stream = @import("session/push_stream.zig");
+const push_protocol = @import("session/push_protocol.zig");
+const control = @import("session/session_control.zig");
 
 fn sessionClient(io: Io, path_buf: *[96]u8) !control.Client {
-    const path = @import("environment.zig").get("STATUSBAR_STATE") orelse return error.NoSession;
+    const path = @import("platform/environment.zig").get("STATUSBAR_STATE") orelse return error.NoSession;
     return control.Client.init(io, path, path_buf);
 }
 
 fn pushRow(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
     if (command.positionals().len != 0) return usageError(stderr, command, "use -- before a push command");
     const tag = command.getValue([]const u8, "tag") orelse "";
-    if (!@import("pushed_rows.zig").validTag(tag)) return usageError(stderr, command, "tag must be plain UTF-8 text of at most 128 bytes");
+    if (!@import("session/pushed_rows.zig").validTag(tag)) return usageError(stderr, command, "tag must be plain UTF-8 text of at most 128 bytes");
     const child_argv = command.passthrough() orelse &.{};
     if (child_argv.len == 0 and (Io.File.stdin().isTty(io) catch false)) return usageError(stderr, command, "push input must be a pipe, file, or command after --");
-    const token = @import("environment.zig").get("STATUSBAR_SESSION_ID") orelse return usageError(stderr, command, "push requires a running statusbar session");
+    const token = @import("platform/environment.zig").get("STATUSBAR_SESSION_ID") orelse return usageError(stderr, command, "push requires a running statusbar session");
     var path_buf: [96]u8 = undefined;
     var client = sessionClient(io, &path_buf) catch |err| {
         try stderr.print("statusbar: cannot connect to session: {t}\n", .{err});
@@ -322,10 +322,10 @@ fn pushRow(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         const request = push_protocol.encode(&packet, token, .{ .pop = id }) catch "";
         if (request.len > 0) _ = client.request(request, &reply) catch {};
     };
-    var child_pipe: ?@import("sys.zig").Fd = null;
+    var child_pipe: ?@import("platform/sys.zig").Fd = null;
     var child: ?std.process.Child = null;
     if (child_argv.len > 0) {
-        const sys = @import("sys.zig");
+        const sys = @import("platform/sys.zig");
         var width_buf: [20]u8 = undefined;
         const width = try std.fmt.bufPrint(&width_buf, "{d}", .{command_columns});
         var child_env = try sys.environMap().clone(arena);
@@ -349,7 +349,7 @@ fn pushRow(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         child_pipe = pipe[0];
         remove_on_start_failure = false;
     }
-    defer if (child_pipe) |fd| @import("sys.zig").close(io, fd);
+    defer if (child_pipe) |fd| @import("platform/sys.zig").close(io, fd);
     push_stream.run(io, &client, token, id, child_pipe orelse 0) catch |err| {
         if (child) |*process| process.kill(io);
         try stderr.print("statusbar: push stream failed: {t}\n", .{err});
@@ -381,7 +381,7 @@ fn popRow(io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
         parseSlot(command.positionals()[0]) orelse return usageError(stderr, command, "ID must be a positive decimal integer")
     else
         null;
-    const token = @import("environment.zig").get("STATUSBAR_SESSION_ID") orelse return usageError(stderr, command, "pop requires a running statusbar session");
+    const token = @import("platform/environment.zig").get("STATUSBAR_SESSION_ID") orelse return usageError(stderr, command, "pop requires a running statusbar session");
     var path_buf: [96]u8 = undefined;
     var client = sessionClient(io, &path_buf) catch |err| {
         try stderr.print("statusbar: cannot connect to session: {t}\n", .{err});
@@ -419,7 +419,7 @@ fn shellInit(arena: std.mem.Allocator, io: Io, invoked_as: []const u8, command: 
         parseSlot(raw) orelse return usageError(stderr, command, "--starship-slot must be a positive decimal integer")
     else
         3;
-    _ = @import("environment.zig").get("STATUSBAR_STATE") orelse return 0;
+    _ = @import("platform/environment.zig").get("STATUSBAR_STATE") orelse return 0;
     if (!starship and !report_cwd) return 0;
     if (report_cwd) try stdout.writeAll(if (std.mem.eql(u8, args[0], "zsh")) zsh_cwd_init else fish_cwd_init);
     if (!starship) {
@@ -612,7 +612,7 @@ const SelectedConfigPath = struct {
 };
 
 fn selectConfigPath(arena: std.mem.Allocator, flag: ?[]const u8) !SelectedConfigPath {
-    const env = @import("environment.zig");
+    const env = @import("platform/environment.zig");
     if (flag) |value| return .{ .path = value, .explicit = true, .from_stdin = std.mem.eql(u8, value, "-") };
     if (env.get("STATUSBAR_CONFIG")) |value| return .{ .path = value, .explicit = true, .from_stdin = false };
     if (env.get("XDG_CONFIG_HOME")) |xdg| return .{ .path = try std.fmt.allocPrint(arena, "{s}/statusbar/config", .{xdg}), .explicit = false, .from_stdin = false };
@@ -682,17 +682,17 @@ fn usageError(stderr: *Io.Writer, command: *const zecli.Command, message: []cons
 
 test {
     _ = push_stream;
-    _ = @import("output.zig");
-    _ = @import("input.zig");
-    _ = @import("session_state.zig");
-    _ = @import("bar.zig");
-    _ = @import("markup.zig");
-    _ = @import("config.zig");
+    _ = @import("terminal/output.zig");
+    _ = @import("terminal/input.zig");
+    _ = @import("session/session_state.zig");
+    _ = @import("render/bar.zig");
+    _ = @import("render/markup.zig");
+    _ = @import("model/config.zig");
     _ = cli;
-    _ = @import("source.zig");
-    _ = @import("child.zig");
-    _ = @import("status.zig");
-    _ = @import("config_protocol.zig");
+    _ = @import("model/source.zig");
+    _ = @import("platform/child.zig");
+    _ = @import("model/status.zig");
+    _ = @import("terminal/config_protocol.zig");
     _ = proxy;
 }
 

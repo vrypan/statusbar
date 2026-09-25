@@ -43,16 +43,14 @@ pub fn build(b: *std.Build) void {
     });
     const benchmark_metrics = b.addOptions();
     benchmark_metrics.addOption(bool, "enabled", true);
-    for ([_][]const u8{ "output", "input", "bar", "display" }) |name| {
-        const dependency = b.createModule(.{
-            .root_source_file = b.path(b.fmt("src/{s}.zig", .{name})),
-            .target = target,
-            .optimize = optimize,
-        });
-        dependency.addImport("zunic", zunic);
-        dependency.addOptions("measurement_options", benchmark_metrics);
-        bench_mod.addImport(name, dependency);
-    }
+    const internals = b.createModule(.{
+        .root_source_file = b.path("src/bench_internals.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    internals.addImport("zunic", zunic);
+    internals.addOptions("measurement_options", benchmark_metrics);
+    bench_mod.addImport("internals", internals);
     const bench = b.addExecutable(.{ .name = "statusbar-bench", .root_module = bench_mod });
     b.step("bench", "Benchmark the translators").dependOn(&b.addRunArtifact(bench).step);
 

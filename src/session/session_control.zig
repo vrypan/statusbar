@@ -2,7 +2,7 @@
 const std = @import("std");
 const c = std.c;
 const posix = std.posix;
-const sys = @import("sys.zig");
+const sys = @import("../platform/sys.zig");
 
 extern "c" fn socket(domain: c_int, sock_type: c_int, protocol: c_int) c_int;
 
