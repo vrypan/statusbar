@@ -1,5 +1,6 @@
 //! Owns the formatted rows passed from configured sources and pushed streams to the renderer.
 const std = @import("std");
+const zunic = @import("zunic");
 const bar = @import("bar.zig");
 const config = @import("config.zig");
 const markup = @import("markup.zig");
@@ -97,8 +98,11 @@ pub const Composition = struct {
         var right_writer: std.Io.Writer = .fixed(&right_buf);
         source.writePushRight(&right_writer, &context, &tracks);
         const right = right_writer.buffered();
-        var left_len = @min(left.len, text.len - right.len - 1);
-        while (left_len > 0 and !std.unicode.utf8ValidateSlice(left[0..left_len])) : (left_len -= 1) {}
+        const limit = @min(left.len, text.len - right.len - 1);
+        var points = zunic.text(left[0..limit]).codepoints().iterator();
+        while (points.next() != null) {}
+        // Strict iteration stops before an invalid or truncated scalar.
+        const left_len = points.offset;
         @memcpy(text[0..left_len], left[0..left_len]);
         text[left_len] = '\t';
         @memcpy(text[left_len + 1 ..][0..right.len], right);
@@ -116,3 +120,29 @@ pub const Composition = struct {
         self.rules[n] = null;
     }
 };
+
+test "pushed rows clip at complete scalars and retain the right slot" {
+    const gpa = std.testing.allocator;
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(gpa, "[line.1]\n[line.push]\nleft = #(stream)\nright = end\n", &diag);
+    defer cfg.deinit();
+    var source = try Source.initConfig(gpa, std.testing.io, &cfg, 80);
+    defer source.deinit();
+    var composition = try Composition.init(gpa, &cfg);
+    defer composition.deinit();
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{null};
+    const look: bar.Look = .{ .styles = &styles, .rules = &rules };
+    var pushed = [_]Row{.{ .id = 1 }};
+    for ([_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "a" ** 1019 ++ "界!", .expected = "a" ** 1019 ++ "\tend" },
+        .{ .input = "a" ** 1017 ++ "界!", .expected = "a" ** 1017 ++ "界\tend" },
+        .{ .input = "ab\xffcd", .expected = "ab\tend" },
+        .{ .input = "a\xe2\x82", .expected = "a\tend" },
+    }) |case| {
+        @memcpy(pushed[0].text[0..case.input.len], case.input);
+        pushed[0].len = case.input.len;
+        try composition.rebuild(&source, &look, &pushed, 2);
+        try std.testing.expectEqualStrings(case.expected, composition.content.?.line(1));
+    }
+}

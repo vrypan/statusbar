@@ -207,15 +207,9 @@ pub fn escape(text: []const u8, start: usize) Escape {
     return .{ .end = i, .kind = .invalid };
 }
 fn safeLink(bytes: []const u8) bool {
-    var i: usize = 0;
-    while (i < bytes.len) {
-        const n = std.unicode.utf8ByteSequenceLength(bytes[i]) catch return false;
-        if (i + n > bytes.len) return false;
-        const cp = std.unicode.utf8Decode(bytes[i..][0..n]) catch return false;
-        if (control(cp)) return false;
-        i += n;
-    }
-    return true;
+    var points = zunic.text(bytes).codepoints().iterator();
+    while (points.next()) |cp| if (control(cp.value)) return false;
+    return points.err == null;
 }
 fn control(cp: u21) bool {
     return cp < 32 or (cp >= 0x7f and cp <= 0x9f) or cp == 0x2028 or cp == 0x2029;
@@ -297,20 +291,20 @@ pub const Scratch = struct {
                 i += 1;
                 continue;
             }
-            const n = std.unicode.utf8ByteSequenceLength(input[i]) catch {
-                i += 1;
-                continue;
-            };
-            if (i + n > input.len) break;
-            const cp = std.unicode.utf8Decode(input[i..][0..n]) catch {
-                i += 1;
+            const step = zunic.utf8.step(input[i..]);
+            const cp = step.cp orelse {
+                // Keep the existing stop-at-incomplete-tail policy. Zunic's
+                // tolerant step reports all malformed input as one byte.
+                const expected = std.unicode.utf8ByteSequenceLength(input[i]) catch 1;
+                if (expected > input.len - i) break;
+                i += step.len;
                 continue;
             };
             if (!control(cp)) {
-                @memcpy(plain[self.len..][0..n], input[i..][0..n]);
-                self.len += n;
+                @memcpy(plain[self.len..][0..step.len], input[i..][0..step.len]);
+                self.len += step.len;
             }
-            i += n;
+            i += step.len;
         }
     }
     pub fn iterator(self: *const Scratch) Iterator {
@@ -420,6 +414,13 @@ test "escape filtering retains complete SGR and OSC8 only" {
         .{ .input = "a\x1b]8;;unterminated\x1b[31mbcd", .plain = "abcd" },
         .{ .input = "a\tb\x08\r\xff\u{85}\u{2028}\u{2029}c", .plain = "a bc" },
         .{ .input = "abc\x1b[31", .plain = "abc" },
+        .{ .input = "a\xe2\x82", .plain = "a" },
+        .{ .input = "a\xe2b", .plain = "a" },
+        .{ .input = "a\xe2bc", .plain = "abc" },
+        .{ .input = "a\xf0bc", .plain = "a" },
+        .{ .input = "a\xf0bcd", .plain = "abcd" },
+        .{ .input = "a\xc0b", .plain = "ab" },
+        .{ .input = "a\xf5b", .plain = "a" },
     };
     for (cases) |c| {
         try scratch.parse(c.input, .{});
@@ -432,6 +433,12 @@ test "escape filtering retains complete SGR and OSC8 only" {
     try std.testing.expectEqualStrings("id=test", linked.link.params);
     try std.testing.expectEqualStrings("https://example.test", linked.link.uri);
     try std.testing.expectEqualStrings("", it.next().?.link.uri);
+}
+test "hyperlinks require complete UTF-8 without controls" {
+    try std.testing.expect(safeLink("https://example.test/Καλημέρα/界"));
+    for ([_][]const u8{ "bad\xff", "tail\xe2\x82", "\xed\xa0\x80", "\xf4\x90\x80\x80", "\u{85}", "\u{2028}", "\u{2029}", "\x1b" }) |bytes| {
+        try std.testing.expect(!safeLink(bytes));
+    }
 }
 test "multiple mid-grapheme events defer in order including reset" {
     const scratch = try std.testing.allocator.create(Scratch);
