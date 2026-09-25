@@ -58,7 +58,10 @@ pub const Composition = struct {
             self.styles[n] = configured_look.styles[n];
             self.rules[n] = configured_look.rules[n];
         }
-        for (pushed[0..visible], configured..) |*row, n| self.writePush(source, row, n);
+        if (visible > 0) {
+            const context = source.templateContext();
+            for (pushed[0..visible], configured..) |*row, n| self.writePush(source, &context, row, n);
+        }
         for (configured + visible..count) |n| {
             _ = self.content.?.setLine(n, "");
             self.styles[n] = self.push_style;
@@ -72,23 +75,27 @@ pub const Composition = struct {
         if (index >= count - configured) return false;
         if (self.content == null or self.content.?.lines.len != count) {
             try self.rebuild(source, configured_look, pushed, count);
-        } else self.writePush(source, &pushed[index], configured + index);
+        } else {
+            const context = source.templateContext();
+            self.writePush(source, &context, &pushed[index], configured + index);
+        }
         return true;
     }
 
-    fn writePush(self: *Composition, source: *const Source, row: *const Row, n: usize) void {
+    fn writePush(self: *Composition, source: *const Source, snapshot: *const Source.TemplateContext, row: *const Row, n: usize) void {
         var text: [bar.max_line_bytes]u8 = undefined;
         var id_text: [20]u8 = undefined;
         const number = std.fmt.bufPrint(&id_text, "{d}", .{row.id}) catch unreachable;
+        const context: Source.TemplateContext = .{ .time = snapshot.time, .tag = row.tag(), .id = number, .stream = row.value() };
         var tracks: bar.Tracks = .{ .right_priority = true };
         var left_buf: [2048]u8 = undefined;
         var left_writer: std.Io.Writer = .fixed(&left_buf);
-        source.writePushLeft(&left_writer, row.value(), row.tag(), number, &tracks);
+        source.writePushLeft(&left_writer, &context, &tracks);
         const left = left_writer.buffered();
         const right_spans_start = tracks.len;
         var right_buf: [512]u8 = undefined;
         var right_writer: std.Io.Writer = .fixed(&right_buf);
-        source.writePushRight(&right_writer, row.tag(), number, &tracks);
+        source.writePushRight(&right_writer, &context, &tracks);
         const right = right_writer.buffered();
         var left_len = @min(left.len, text.len - right.len - 1);
         while (left_len > 0 and !std.unicode.utf8ValidateSlice(left[0..left_len])) : (left_len -= 1) {}

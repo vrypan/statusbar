@@ -300,9 +300,21 @@ pub const Source = struct {
         return true;
     }
 
+    pub const TemplateContext = struct {
+        time: Tm,
+        tag: []const u8 = "",
+        id: []const u8 = "",
+        stream: []const u8 = "",
+    };
+
+    /// Capture once for every slot that belongs to the same composition.
+    pub fn templateContext(self: *const Source) TemplateContext {
+        return .{ .time = currentTime(self.io) };
+    }
+
     fn rebuild(self: *Source) bool {
         const cfg = self.cfg;
-        const now = currentTime(self.io);
+        const context = self.templateContext();
         var changed = false;
         for (cfg.line, 0..) |*line, n| {
             if (self.dirty_rows.len > 0 and !self.dirty_rows[n]) continue;
@@ -314,34 +326,32 @@ pub const Source = struct {
             if (self.override(n * 2)) |value| {
                 tracks.literal[0] = self.override_literal.len > n * 2 and self.override_literal[n * 2];
                 w.writeAll(value) catch {};
-            } else self.writeTemplate(&w, &line.left, &now, &tracks, .left, "", "", "");
+            } else self.writeTemplate(&w, &line.left, &context, &tracks, .left);
             w.writeByte('\t') catch {};
             if (self.override(n * 2 + 1)) |value| {
                 tracks.literal[1] = self.override_literal.len > n * 2 + 1 and self.override_literal[n * 2 + 1];
                 w.writeAll(value) catch {};
-            } else self.writeTemplate(&w, &line.right, &now, &tracks, .right, "", "", "");
+            } else self.writeTemplate(&w, &line.right, &context, &tracks, .right);
             changed = self.content.setTrackedLine(n, w.buffered(), tracks) or changed;
         }
         return changed;
     }
 
-    pub fn writePushLeft(self: *const Source, w: *std.Io.Writer, stream: []const u8, tag: []const u8, id: []const u8, tracks: *bar.Tracks) void {
-        const now = currentTime(self.io);
-        self.writeTemplate(w, &self.cfg.push_left, &now, tracks, .left, tag, id, stream);
+    pub fn writePushLeft(self: *const Source, w: *std.Io.Writer, context: *const TemplateContext, tracks: *bar.Tracks) void {
+        self.writeTemplate(w, &self.cfg.push_left, context, tracks, .left);
     }
 
-    pub fn writePushRight(self: *const Source, w: *std.Io.Writer, tag: []const u8, id: []const u8, tracks: *bar.Tracks) void {
-        const now = currentTime(self.io);
-        self.writeTemplate(w, &self.cfg.push_right, &now, tracks, .right, tag, id, "");
+    pub fn writePushRight(self: *const Source, w: *std.Io.Writer, context: *const TemplateContext, tracks: *bar.Tracks) void {
+        self.writeTemplate(w, &self.cfg.push_right, context, tracks, .right);
     }
 
-    fn writeTemplate(self: *const Source, w: *std.Io.Writer, template: *const config.Template, now: *const Tm, tracks: *bar.Tracks, owner: bar.cells.Owner, tag: []const u8, id: []const u8, stream: []const u8) void {
+    fn writeTemplate(self: *const Source, w: *std.Io.Writer, template: *const config.Template, context: *const TemplateContext, tracks: *bar.Tracks, owner: bar.cells.Owner) void {
         for (template.items()) |part| switch (part) {
-            .text => |text| formatTime(w, text, now),
+            .text => |text| formatTime(w, text, &context.time),
             .command => |n| writeOneLine(w, self.outputs[n][0..self.output_lens[n]]),
-            .tag => writeLiteralMarkup(w, tag),
-            .id => w.writeAll(id) catch {},
-            .stream => writeLiteralMarkup(w, stream),
+            .tag => writeLiteralMarkup(w, context.tag),
+            .id => w.writeAll(context.id) catch {},
+            .stream => writeLiteralMarkup(w, context.stream),
             .track_start => |region_id| {
                 tracks.spans[tracks.len] = .{ .owner = owner, .id = region_id, .start = @intCast(w.end), .end = @intCast(w.end) };
                 tracks.len += 1;
@@ -491,6 +501,25 @@ test "strftime conversions and literal percent signs" {
     w.end = 0;
     formatTime(&w, "first\n\tsecond", &tm);
     try std.testing.expectEqualStrings("first  second", w.buffered());
+}
+
+test "pushed slots use the supplied time and named template values" {
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(std.testing.allocator, "[line.1]\n[line.push]\nleft = %Y [#(id)] #(tag) #(stream)\nright = %Y #(tag)\n", &diag);
+    defer cfg.deinit();
+    var source = try Source.initConfig(std.testing.allocator, std.testing.io, &cfg, 80);
+    defer source.deinit();
+    const timestamp: c.time_t = 1577880000; // 2020-01-01 noon UTC, also 2020 in every timezone.
+    var context: Source.TemplateContext = .{ .time = undefined, .tag = "file", .id = "7", .stream = "50%" };
+    try std.testing.expect(localtime_r(&timestamp, &context.time) != null);
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    var tracks: bar.Tracks = .{};
+    source.writePushLeft(&writer, &context, &tracks);
+    try std.testing.expectEqualStrings("2020 [7] file 50%", writer.buffered());
+    writer.end = 0;
+    source.writePushRight(&writer, &context, &tracks);
+    try std.testing.expectEqualStrings("2020 file", writer.buffered());
 }
 
 test "values stay on one line in their slot" {
