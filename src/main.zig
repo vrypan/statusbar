@@ -147,11 +147,24 @@ fn printConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, 
         return 0;
     }
     if (path) {
-        const loaded = loadConfig(arena, io, null, stderr) catch |err| {
-            try stderr.flush();
-            return if (err == error.ReportedConfigError) 2 else err;
-        };
-        try stdout.print("{s}\n", .{loaded.path orelse "built-in"});
+        const selected = try selectConfigPath(arena, null);
+        if (selected.path.len == 0) {
+            try stdout.writeAll("built-in\n");
+        } else if (selected.explicit) {
+            try stdout.print("{s}\n", .{selected.path});
+        } else {
+            Io.Dir.cwd().access(io, selected.path, .{}) catch |err| {
+                if (err == error.FileNotFound) {
+                    try stdout.writeAll("built-in\n");
+                    try stdout.flush();
+                    return 0;
+                }
+                try stderr.print("statusbar: cannot read {s}: {t}\n", .{ selected.path, err });
+                try stderr.flush();
+                return 2;
+            };
+            try stdout.print("{s}\n", .{selected.path});
+        }
     } else {
         const selection = if (defaults) "default" else if (args.len > 0) args[0] else "current";
         if (std.mem.eql(u8, selection, "default")) {
@@ -598,6 +611,21 @@ const LoadedConfig = struct {
     config: *config.Config,
 };
 
+const SelectedConfigPath = struct {
+    path: []const u8,
+    explicit: bool,
+    from_stdin: bool,
+};
+
+fn selectConfigPath(arena: std.mem.Allocator, flag: ?[]const u8) !SelectedConfigPath {
+    const env = @import("environment.zig");
+    if (flag) |value| return .{ .path = value, .explicit = true, .from_stdin = std.mem.eql(u8, value, "-") };
+    if (env.get("STATUSBAR_CONFIG")) |value| return .{ .path = value, .explicit = true, .from_stdin = false };
+    if (env.get("XDG_CONFIG_HOME")) |xdg| return .{ .path = try std.fmt.allocPrint(arena, "{s}/statusbar/config", .{xdg}), .explicit = false, .from_stdin = false };
+    const home = env.get("HOME") orelse return .{ .path = "", .explicit = false, .from_stdin = false };
+    return .{ .path = try std.fmt.allocPrint(arena, "{s}/.config/statusbar/config", .{home}), .explicit = false, .from_stdin = false };
+}
+
 fn builtInConfig(arena: std.mem.Allocator) !LoadedConfig {
     const cfg = try arena.create(config.Config);
     var diag: config.Diagnostic = .{};
@@ -609,15 +637,10 @@ fn builtInConfig(arena: std.mem.Allocator) !LoadedConfig {
 /// location. Only a missing file at the default location is not an error;
 /// the built-in config takes its place.
 fn loadConfig(arena: std.mem.Allocator, io: Io, flag: ?[]const u8, stderr: *Io.Writer) !LoadedConfig {
-    const env = @import("environment.zig");
-    var explicit = true;
-    const path = flag orelse env.get("STATUSBAR_CONFIG") orelse blk: {
-        explicit = false;
-        if (env.get("XDG_CONFIG_HOME")) |xdg| break :blk try std.fmt.allocPrint(arena, "{s}/statusbar/config", .{xdg});
-        const home = env.get("HOME") orelse break :blk "";
-        break :blk try std.fmt.allocPrint(arena, "{s}/.config/statusbar/config", .{home});
-    };
-    const from_stdin = if (flag) |value| std.mem.eql(u8, value, "-") else false;
+    const selected = try selectConfigPath(arena, flag);
+    const path = selected.path;
+    const explicit = selected.explicit;
+    const from_stdin = selected.from_stdin;
     const label = if (from_stdin) "stdin" else path;
     var source: ?[]const u8 = path;
     const text = if (from_stdin) try readConfigStdin(arena, io, stderr) else if (path.len == 0) default_config else Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_config_bytes)) catch |err| text: {

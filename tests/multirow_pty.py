@@ -865,6 +865,19 @@ def check_config_snapshots(binary):
     builtin = subprocess.run([binary, "config", "--default"], env=clean_env, capture_output=True, check=True).stdout
     result = subprocess.run([binary, "config", "--print", "default"], input=b"invalid", env=clean_env, capture_output=True)
     assert result.returncode == 0 and result.stdout == builtin, result
+    with tempfile.TemporaryDirectory() as folder:
+        invalid_path = os.path.join(folder, "invalid.config")
+        with open(invalid_path, "wb") as config_file:
+            config_file.write(b"[broken\n")
+        path_env = clean_env.copy()
+        path_env["STATUSBAR_CONFIG"] = invalid_path
+        result = subprocess.run([binary, "config", "--path"], env=path_env, capture_output=True)
+        assert result.returncode == 0 and result.stdout == os.fsencode(invalid_path) + b"\n", result
+        assert result.stderr == b"", result
+        path_env.pop("STATUSBAR_CONFIG")
+        path_env["XDG_CONFIG_HOME"] = folder
+        result = subprocess.run([binary, "config", "--path"], env=path_env, capture_output=True)
+        assert result.returncode == 0 and result.stdout == b"built-in\n", result
     for args in (["--print"], ["--print", "current"], ["--print", "startup"]):
         result = subprocess.run([binary, "config", *args], env=clean_env, capture_output=True)
         assert result.returncode == 2 and not result.stdout and b"requires a running" in result.stderr, result
