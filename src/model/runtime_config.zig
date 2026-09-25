@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const bar = @import("render").bar;
+const Look = @import("render").content.Look;
 const config = @import("config.zig");
 const markup = @import("render").markup;
 const Composition = @import("composition.zig").Composition;
@@ -18,7 +19,7 @@ pub const Runtime = struct {
     styles: [][]const u8,
     rules: []?[]const u8,
     style_bufs: [][256]u8,
-    look: bar.Look,
+    look: Look,
     composition: Composition,
     renderer: bar.Renderer,
     /// The first accepted frame establishes tracking baselines silently.
@@ -58,7 +59,7 @@ pub const Runtime = struct {
         @memset(rules, null);
         const style_bufs = try gpa.alloc([256]u8, lines);
         errdefer gpa.free(style_bufs);
-        const look: bar.Look = .{ .styles = styles, .rules = rules, .palette = cfg.palette() };
+        const look: Look = .{ .styles = styles, .rules = rules, .palette = cfg.palette() };
         for (cfg.line, 0..) |line, n| {
             rules[n] = line.rule;
             styles[n] = markup.barStyle(line.style orelse cfg.style orelse "", look.palette, &style_bufs[n]);

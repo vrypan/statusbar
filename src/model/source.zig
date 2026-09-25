@@ -12,6 +12,10 @@ const std = @import("std");
 const posix = std.posix;
 const c = std.c;
 const bar = @import("render").bar;
+const Content = @import("render").content.Content;
+const Tracks = @import("render").content.Tracks;
+const Look = @import("render").content.Look;
+const cells = @import("render").cells;
 const config = @import("config.zig");
 const status = @import("status.zig");
 const slots = @import("shared").slots;
@@ -26,7 +30,7 @@ pub const Source = struct {
     output_lens: [config.max_commands]usize = @splat(0),
     output_seen: [config.max_commands]bool = @splat(false),
     cfg: *const config.Config,
-    content: bar.Content,
+    content: Content,
     overrides: [][slots.max_value]u8,
     override_lens: []?usize,
     override_literal: []bool = &.{},
@@ -65,7 +69,7 @@ pub const Source = struct {
             commands[n] = try status.Command.init(gpa, io, spec.run, cfg.commandInterval(n), lines, cols);
             started += 1;
         }
-        var content = try bar.Content.init(gpa, lines);
+        var content = try Content.init(gpa, lines);
         errdefer content.deinit();
         const overrides = try gpa.alloc([slots.max_value]u8, @as(usize, lines) * 2);
         errdefer gpa.free(overrides);
@@ -321,7 +325,7 @@ pub const Source = struct {
             if (self.dirty_rows.len > 0) self.dirty_rows[n] = false;
             self.rows_formatted += 1;
             var buf: [4096]u8 = undefined;
-            var tracks: bar.Tracks = .{ .override_epoch = self.content.tracks[n].override_epoch };
+            var tracks: Tracks = .{ .override_epoch = self.content.tracks[n].override_epoch };
             var w: std.Io.Writer = .fixed(&buf);
             if (self.override(n * 2)) |value| {
                 tracks.literal[0] = self.override_literal.len > n * 2 and self.override_literal[n * 2];
@@ -337,15 +341,15 @@ pub const Source = struct {
         return changed;
     }
 
-    pub fn writePushLeft(self: *const Source, w: *std.Io.Writer, context: *const TemplateContext, tracks: *bar.Tracks) void {
+    pub fn writePushLeft(self: *const Source, w: *std.Io.Writer, context: *const TemplateContext, tracks: *Tracks) void {
         self.writeTemplate(w, &self.cfg.push_left, context, tracks, .left);
     }
 
-    pub fn writePushRight(self: *const Source, w: *std.Io.Writer, context: *const TemplateContext, tracks: *bar.Tracks) void {
+    pub fn writePushRight(self: *const Source, w: *std.Io.Writer, context: *const TemplateContext, tracks: *Tracks) void {
         self.writeTemplate(w, &self.cfg.push_right, context, tracks, .right);
     }
 
-    fn writeTemplate(self: *const Source, w: *std.Io.Writer, template: *const config.Template, context: *const TemplateContext, tracks: *bar.Tracks, owner: bar.cells.Owner) void {
+    fn writeTemplate(self: *const Source, w: *std.Io.Writer, template: *const config.Template, context: *const TemplateContext, tracks: *Tracks, owner: cells.Owner) void {
         for (template.items()) |part| switch (part) {
             .text => |text| formatTime(w, text, &context.time),
             .command => |n| writeOneLine(w, self.outputs[n][0..self.output_lens[n]]),
@@ -522,7 +526,7 @@ test "pushed slots use the supplied time and named template values" {
     try std.testing.expect(localtime_r(&timestamp, &context.time) != null);
     var buf: [128]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buf);
-    var tracks: bar.Tracks = .{};
+    var tracks: Tracks = .{};
     source.writePushLeft(&writer, &context, &tracks);
     try std.testing.expectEqualStrings("2020 [7] file 50%", writer.buffered());
     writer.end = 0;
@@ -571,7 +575,7 @@ test "tracked slots need ready commands and suppress baseline-only results" {
         "[command.tracked]\nrun = echo x\n" ++
         "[command.plain]\nrun = echo y\n", &diag);
     defer cfg.deinit();
-    var content = try bar.Content.init(std.testing.allocator, 2);
+    var content = try Content.init(std.testing.allocator, 2);
     defer content.deinit();
     var overrides: [4][slots.max_value]u8 = undefined;
     var override_lens: [4]?usize = @splat(null);
@@ -598,7 +602,7 @@ test "source sidecars retain empty and truncated regions and exclude dynamic mar
     var cfg = try config.parse(std.testing.allocator, "[line.1]\nleft = P#[track]#(a)#[notrack] #[track]#(b)#[notrack]\nright = #[track]%M#[notrack]\n" ++
         "[command.a]\nrun = a\n[command.b]\nrun = b\n", &diag);
     defer cfg.deinit();
-    var content = try bar.Content.init(std.testing.allocator, 1);
+    var content = try Content.init(std.testing.allocator, 1);
     defer content.deinit();
     var overrides: [2][slots.max_value]u8 = undefined;
     var lens: [2]?usize = @splat(null);
@@ -625,7 +629,7 @@ test "source sidecars retain empty and truncated regions and exclude dynamic mar
     source.setOverride(0, "#[track]manual#[notrack]");
     _ = source.rebuild();
     try std.testing.expectEqual(@as(usize, 1), source.content.tracks[0].len);
-    try std.testing.expectEqual(bar.cells.Owner.right, source.content.tracks[0].spans[0].owner);
+    try std.testing.expectEqual(cells.Owner.right, source.content.tracks[0].spans[0].owner);
     source.setOverride(0, "");
     const result = source.update(&.{}, 0);
     try std.testing.expect(result.content_changed);
@@ -636,7 +640,7 @@ test "slot mode changes invalidate equal text and clearing restores templates" {
     var diag: config.Diagnostic = .{};
     var cfg = try config.parse(std.testing.allocator, "[line.1]\nleft = configured\nright = configured right\n", &diag);
     defer cfg.deinit();
-    var content = try bar.Content.init(std.testing.allocator, 1);
+    var content = try Content.init(std.testing.allocator, 1);
     defer content.deinit();
     var overrides: [2][slots.max_value]u8 = undefined;
     var lens: [2]?usize = @splat(null);
@@ -665,7 +669,7 @@ test "partial startup geometry and same-text overrides establish silent region b
     var cfg = try config.parse(gpa, "[line.1]\nleft = P #[track]#(a)#[notrack] #(b)\n" ++
         "[command.a]\nrun = a\n[command.b]\nrun = b\n", &diag);
     defer cfg.deinit();
-    var content = try bar.Content.init(gpa, 1);
+    var content = try Content.init(gpa, 1);
     defer content.deinit();
     var overrides: [2][slots.max_value]u8 = undefined;
     var lens: [2]?usize = @splat(null);
@@ -674,7 +678,7 @@ test "partial startup geometry and same-text overrides establish silent region b
     defer r.deinit();
     var styles = [_][]const u8{""};
     var rules = [_]?[]const u8{null};
-    const look: bar.Look = .{ .styles = &styles, .rules = &rules };
+    const look: Look = .{ .styles = &styles, .rules = &rules };
     try r.resize(1, 40);
     _ = source.rebuild();
     try r.relayout(&source.content, &look);
@@ -729,7 +733,7 @@ test "override epochs cover high-numbered slots and coalesced same-text transiti
     var diag: config.Diagnostic = .{};
     var cfg = try config.parse(gpa, text.written(), &diag);
     defer cfg.deinit();
-    var content = try bar.Content.init(gpa, 17);
+    var content = try Content.init(gpa, 17);
     defer content.deinit();
     var overrides: [34][slots.max_value]u8 = undefined;
     var lens: [34]?usize = @splat(null);
@@ -758,7 +762,7 @@ test "dirty dependencies format only affected command and clock rows" {
         &diag,
     );
     defer cfg.deinit();
-    var content = try bar.Content.init(gpa, 2);
+    var content = try Content.init(gpa, 2);
     defer content.deinit();
     var overrides: [4][slots.max_value]u8 = undefined;
     var lens: [4]?usize = @splat(null);

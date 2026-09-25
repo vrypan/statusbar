@@ -22,14 +22,11 @@ const regionVisible = @import("effects.zig").regionVisible;
 const rowFitting = @import("row_layout.zig").rowFitting;
 const setTestPair = @import("effects.zig").setTestPair;
 
-// The model builds rows with these; they live in content.zig.
-pub const max_line_bytes = @import("content.zig").max_line_bytes;
-pub const TrackSpan = @import("content.zig").TrackSpan;
-pub const Tracks = @import("content.zig").Tracks;
-pub const Content = @import("content.zig").Content;
-pub const Look = @import("content.zig").Look;
-pub const splitSlots = @import("content.zig").splitSlots;
-pub const cells = @import("cells.zig");
+const cells = @import("cells.zig");
+const Content = @import("content.zig").Content;
+const Tracks = @import("content.zig").Tracks;
+const Look = @import("content.zig").Look;
+const max_line_bytes = @import("content.zig").max_line_bytes;
 
 test {
     _ = @import("styled_text.zig");

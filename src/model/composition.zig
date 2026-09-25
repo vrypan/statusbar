@@ -1,7 +1,10 @@
 //! Owns the formatted rows passed from configured sources and pushed streams to the renderer.
 const std = @import("std");
 const zunic = @import("zunic");
-const bar = @import("render").bar;
+const Content = @import("render").content.Content;
+const Tracks = @import("render").content.Tracks;
+const Look = @import("render").content.Look;
+const max_line_bytes = @import("render").content.max_line_bytes;
 const config = @import("config.zig");
 const markup = @import("render").markup;
 const Source = @import("source.zig").Source;
@@ -10,7 +13,7 @@ const Row = @import("session").pushed_rows.Row;
 pub const Composition = struct {
     gpa: std.mem.Allocator,
     push_style: []u8,
-    content: ?bar.Content = null,
+    content: ?Content = null,
     styles: [][]const u8 = &.{},
     rules: []?[]const u8 = &.{},
 
@@ -35,7 +38,7 @@ pub const Composition = struct {
 
     fn ensureRows(self: *Composition, count: usize) !void {
         if (self.content) |*content| if (content.lines.len == count) return;
-        var content = try bar.Content.init(self.gpa, count);
+        var content = try Content.init(self.gpa, count);
         errdefer content.deinit();
         const styles = try self.gpa.alloc([]const u8, count);
         errdefer self.gpa.free(styles);
@@ -46,11 +49,11 @@ pub const Composition = struct {
         self.rules = rules;
     }
 
-    pub fn look(self: *const Composition, palette: markup.Palette) bar.Look {
+    pub fn look(self: *const Composition, palette: markup.Palette) Look {
         return .{ .styles = self.styles, .rules = self.rules, .palette = palette };
     }
 
-    pub fn rebuild(self: *Composition, source: *const Source, configured_look: *const bar.Look, pushed: []const Row, count: usize) !void {
+    pub fn rebuild(self: *Composition, source: *const Source, configured_look: *const Look, pushed: []const Row, count: usize) !void {
         try self.ensureRows(count);
         const configured = @min(count, source.content.lines.len);
         const visible = @min(pushed.len, count - configured);
@@ -71,7 +74,7 @@ pub const Composition = struct {
     }
 
     /// Hidden streams retain their value in the session without rendering.
-    pub fn updatePush(self: *Composition, source: *const Source, configured_look: *const bar.Look, pushed: []const Row, count: usize, index: usize) !bool {
+    pub fn updatePush(self: *Composition, source: *const Source, configured_look: *const Look, pushed: []const Row, count: usize, index: usize) !bool {
         const configured = @min(count, source.content.lines.len);
         if (index >= count - configured) return false;
         if (self.content == null or self.content.?.lines.len != count) {
@@ -84,11 +87,11 @@ pub const Composition = struct {
     }
 
     fn writePush(self: *Composition, source: *const Source, snapshot: *const Source.TemplateContext, row: *const Row, n: usize) void {
-        var text: [bar.max_line_bytes]u8 = undefined;
+        var text: [max_line_bytes]u8 = undefined;
         var id_text: [20]u8 = undefined;
         const number = std.fmt.bufPrint(&id_text, "{d}", .{row.id}) catch unreachable;
         const context: Source.TemplateContext = .{ .time = snapshot.time, .tag = row.tag(), .id = number, .stream = row.value() };
-        var tracks: bar.Tracks = .{ .right_priority = true };
+        var tracks: Tracks = .{ .right_priority = true };
         var left_buf: [2048]u8 = undefined;
         var left_writer: std.Io.Writer = .fixed(&left_buf);
         source.writePushLeft(&left_writer, &context, &tracks);
@@ -132,7 +135,7 @@ test "pushed rows clip at complete scalars and retain the right slot" {
     defer composition.deinit();
     var styles = [_][]const u8{""};
     var rules = [_]?[]const u8{null};
-    const look: bar.Look = .{ .styles = &styles, .rules = &rules };
+    const look: Look = .{ .styles = &styles, .rules = &rules };
     var pushed = [_]Row{.{ .id = 1 }};
     for ([_]struct { input: []const u8, expected: []const u8 }{
         .{ .input = "a" ** 1019 ++ "界!", .expected = "a" ** 1019 ++ "\tend" },

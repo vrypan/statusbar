@@ -7,6 +7,7 @@ const c = std.c;
 const sys = @import("platform").sys;
 const Output = @import("terminal").output.Output;
 const bar = @import("render").bar;
+const Content = @import("render").content.Content;
 const config = @import("model").config;
 const Layout = @import("layout.zig").Layout;
 const Proxy = @import("proxy.zig").Proxy;
@@ -281,7 +282,7 @@ pub fn drainSignals(self: *Proxy, sig_r: sys.Fd, pid: c.pid_t, now_ms: i64) !voi
 
 test "large paints retain their complete terminal restoration" {
     const count = 100;
-    var content = try bar.Content.init(std.testing.allocator, count);
+    var content = try Content.init(std.testing.allocator, count);
     defer content.deinit();
     const styles = try std.testing.allocator.alloc([]const u8, count);
     defer std.testing.allocator.free(styles);
@@ -298,7 +299,7 @@ test "large paints retain their complete terminal restoration" {
 }
 
 test "semantically identical paint clears the pending scheduler request" {
-    var content = try bar.Content.init(std.testing.allocator, 1);
+    var content = try Content.init(std.testing.allocator, 1);
     defer content.deinit();
     _ = content.set("same");
     var styles = [_][]const u8{""};

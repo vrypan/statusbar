@@ -6,12 +6,16 @@ const std = @import("std");
 const Output = @import("terminal").output.Output;
 const Input = @import("terminal").input.Input;
 const bar = @import("render").bar;
+const Content = @import("render").content.Content;
+const Tracks = @import("render").content.Tracks;
+const Look = @import("render").content.Look;
+const max_line_bytes = @import("render").content.max_line_bytes;
 
-fn measuredContent(content: *bar.Content, colors: usize, regions: usize, region_chars: usize) !void {
+fn measuredContent(content: *Content, colors: usize, regions: usize, region_chars: usize) !void {
     if (regions > 0) {
-        var raw: [bar.max_line_bytes]u8 = undefined;
+        var raw: [max_line_bytes]u8 = undefined;
         var len: usize = 0;
-        var tracks: bar.Tracks = .{};
+        var tracks: Tracks = .{};
         const left = (regions + 1) / 2;
         for (0..regions) |n| {
             if (n == left) {
@@ -28,12 +32,12 @@ fn measuredContent(content: *bar.Content, colors: usize, regions: usize, region_
         _ = content.setTrackedLine(0, raw[0..len], tracks);
     } else {
         for (0..content.lines.len) |row| {
-            var raw: [bar.max_line_bytes]u8 = undefined;
+            var raw: [max_line_bytes]u8 = undefined;
             var w = std.Io.Writer.fixed(&raw);
             for (row * 16..@min(colors, (row + 1) * 16)) |n| {
                 try w.print("\x1b[38;2;{d};180;210mx", .{128 + n});
             }
-            var tracks: bar.Tracks = .{};
+            var tracks: Tracks = .{};
             tracks.spans[0] = .{ .owner = .left, .id = 0, .start = 0, .end = @intCast(w.end) };
             tracks.len = 1;
             _ = content.setTrackedLine(row, w.buffered(), tracks);
@@ -41,7 +45,7 @@ fn measuredContent(content: *bar.Content, colors: usize, regions: usize, region_
     }
 }
 
-fn armMeasured(renderer: *bar.Renderer, content: *const bar.Content, now: i64) void {
+fn armMeasured(renderer: *bar.Renderer, content: *const Content, now: i64) void {
     for (renderer.rows, content.tracks) |*row, tracks| {
         for (tracks.items()) |span| {
             const side: usize = if (span.owner == .left) 0 else 1;
@@ -70,7 +74,7 @@ fn assertRestored(renderer: *bar.Renderer, now: i64) !void {
 fn adaptiveBench(io: std.Io, out: *std.Io.Writer, colors: usize, regions: usize, region_chars: usize) !void {
     var counted = std.testing.FailingAllocator.init(std.heap.smp_allocator, .{});
     const row_count = if (regions > 0) 1 else (colors + 15) / 16;
-    var content = try bar.Content.init(counted.allocator(), row_count);
+    var content = try Content.init(counted.allocator(), row_count);
     defer content.deinit();
     try measuredContent(&content, colors, regions, region_chars);
     var renderer = try bar.Renderer.init(counted.allocator());
@@ -79,7 +83,7 @@ fn adaptiveBench(io: std.Io, out: *std.Io.Writer, colors: usize, regions: usize,
     renderer.palette.background = .{ 10, 10, 10 };
     var styles: [4][]const u8 = @splat("");
     var rules: [4]?[]const u8 = @splat(null);
-    const look: bar.Look = .{ .styles = styles[0..row_count], .rules = rules[0..row_count] };
+    const look: Look = .{ .styles = styles[0..row_count], .rules = rules[0..row_count] };
     try renderer.resize(@intCast(row_count), if (regions > 0) 512 else 80);
     try renderer.acceptContent(&content, &look);
     _ = try renderer.build(20, "", true, true);
@@ -167,19 +171,19 @@ fn adaptiveBench(io: std.Io, out: *std.Io.Writer, colors: usize, regions: usize,
 
 fn unrelatedRowBench(io: std.Io, out: *std.Io.Writer) !void {
     var counted = std.testing.FailingAllocator.init(std.heap.smp_allocator, .{});
-    var content = try bar.Content.init(counted.allocator(), 4);
+    var content = try Content.init(counted.allocator(), 4);
     defer content.deinit();
     var renderer = try bar.Renderer.init(counted.allocator());
     defer renderer.deinit();
     renderer.palette.foreground = .{ 190, 180, 210 };
     renderer.palette.background = .{ 10, 10, 10 };
-    var tracks: bar.Tracks = .{};
+    var tracks: Tracks = .{};
     tracks.spans[0] = .{ .owner = .left, .id = 0, .start = 0, .end = 200 };
     tracks.len = 1;
     for (1..4) |row| _ = content.setTrackedLine(row, "x" ** 200, tracks);
     var styles = [_][]const u8{ "", "", "", "" };
     var rules = [_]?[]const u8{ null, null, null, null };
-    const look: bar.Look = .{ .styles = &styles, .rules = &rules };
+    const look: Look = .{ .styles = &styles, .rules = &rules };
     try renderer.resize(4, 512);
     for (0..4) |n| {
         _ = content.setLine(0, if (n % 2 == 0) "clock A" else "clock B");
@@ -201,12 +205,12 @@ fn unrelatedRowBench(io: std.Io, out: *std.Io.Writer) !void {
 fn renderBench(io: std.Io, out: *std.Io.Writer) !void {
     var counted = std.testing.FailingAllocator.init(std.heap.smp_allocator, .{});
     const gpa = counted.allocator();
-    var content = try bar.Content.init(gpa, 4);
+    var content = try Content.init(gpa, 4);
     defer content.deinit();
     _ = content.set("#[fg=blue,bold]host#[default]\t12:00\nλ 日本\tmain\n\x1b]8;;https://example.test\x07headline\x1b]8;;\x07\nCPU 20%\tMEM 60%");
     var styles = [_][]const u8{ "", "", "", "" };
     var rules = [_]?[]const u8{ "─", null, null, null };
-    const look: bar.Look = .{ .styles = &styles, .rules = &rules };
+    const look: Look = .{ .styles = &styles, .rules = &rules };
     var renderer = try bar.Renderer.init(gpa);
     defer renderer.deinit();
     try renderer.resize(4, 120);
@@ -255,11 +259,11 @@ fn renderBench(io: std.Io, out: *std.Io.Writer) !void {
     }
 }
 
-fn regionContent(content: *bar.Content, long: bool) void {
+fn regionContent(content: *Content, long: bool) void {
     const a: []const u8 = if (long) "long" else "x";
     var buf: [64]u8 = undefined;
     const raw = std.fmt.bufPrint(&buf, "CPU {s} MEM steady\tRIGHT", .{a}) catch unreachable;
-    var tracks: bar.Tracks = .{};
+    var tracks: Tracks = .{};
     tracks.spans[0] = .{ .owner = .left, .id = 0, .start = 4, .end = @intCast(4 + a.len) };
     tracks.spans[1] = .{ .owner = .left, .id = 1, .start = @intCast(9 + a.len), .end = @intCast(15 + a.len) };
     tracks.len = 2;
@@ -268,13 +272,13 @@ fn regionContent(content: *bar.Content, long: bool) void {
 
 fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
     var counted = std.testing.FailingAllocator.init(std.heap.smp_allocator, .{});
-    var content = try bar.Content.init(counted.allocator(), 1);
+    var content = try Content.init(counted.allocator(), 1);
     defer content.deinit();
     var renderer = try bar.Renderer.init(counted.allocator());
     defer renderer.deinit();
     var styles = [_][]const u8{""};
     var rules = [_]?[]const u8{null};
-    const look: bar.Look = .{ .styles = &styles, .rules = &rules };
+    const look: Look = .{ .styles = &styles, .rules = &rules };
     try renderer.resize(1, 80);
     for (0..6) |n| {
         regionContent(&content, n % 2 == 0);
