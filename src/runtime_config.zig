@@ -18,6 +18,10 @@ pub const Runtime = struct {
     rules: []?[]const u8,
     style_bufs: [][256]u8,
     look: bar.Look,
+    push_style: []u8,
+    composed: ?bar.Content = null,
+    composed_styles: [][]const u8 = &.{},
+    composed_rules: []?[]const u8 = &.{},
     renderer: bar.Renderer,
     /// The first accepted frame establishes tracking baselines silently.
     silent_baseline: bool = true,
@@ -61,6 +65,9 @@ pub const Runtime = struct {
             rules[n] = line.rule;
             styles[n] = markup.barStyle(line.style orelse cfg.style orelse "", look.palette, &style_bufs[n]);
         }
+        var push_style_buf: [256]u8 = undefined;
+        const push_style = try gpa.dupe(u8, markup.barStyle(cfg.push_style orelse cfg.style orelse "", look.palette, &push_style_buf));
+        errdefer gpa.free(push_style);
         var renderer = try bar.Renderer.init(gpa);
         errdefer renderer.deinit();
         renderer.highlight = cfg.highlight;
@@ -78,16 +85,44 @@ pub const Runtime = struct {
             .rules = rules,
             .style_bufs = style_bufs,
             .look = look,
+            .push_style = push_style,
             .renderer = renderer,
         };
     }
 
+    /// Reuse composition storage until the number of visible rows changes.
+    /// Config replacement owns a separate Runtime and therefore a separate
+    /// cache until its renderer is ready to replace the active one.
+    pub fn ensureComposition(self: *Runtime, count: usize) !void {
+        if (self.composed) |*content| if (content.lines.len == count) return;
+        var content = try bar.Content.init(self.gpa, count);
+        errdefer content.deinit();
+        const styles = try self.gpa.alloc([]const u8, count);
+        errdefer self.gpa.free(styles);
+        const rules = try self.gpa.alloc(?[]const u8, count);
+        errdefer self.gpa.free(rules);
+        if (self.composed) |*old| {
+            old.deinit();
+            self.gpa.free(self.composed_styles);
+            self.gpa.free(self.composed_rules);
+        }
+        self.composed = content;
+        self.composed_styles = styles;
+        self.composed_rules = rules;
+    }
+
     pub fn deinit(self: *Runtime) void {
+        if (self.composed) |*content| {
+            content.deinit();
+            self.gpa.free(self.composed_styles);
+            self.gpa.free(self.composed_rules);
+        }
         self.renderer.deinit();
         self.source.deinit();
         self.gpa.free(self.styles);
         self.gpa.free(self.rules);
         self.gpa.free(self.style_bufs);
+        self.gpa.free(self.push_style);
         if (self.owned_cfg) |cfg| {
             cfg.deinit();
             self.gpa.destroy(cfg);

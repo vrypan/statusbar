@@ -23,7 +23,6 @@ const osc7 = @import("osc7.zig");
 const Output = @import("output.zig").Output;
 const Input = @import("input.zig").Input;
 const bar = @import("bar.zig");
-const markup = @import("markup.zig");
 const config = @import("config.zig");
 const Source = @import("source.zig").Source;
 const Runtime = @import("runtime_config.zig").Runtime;
@@ -524,14 +523,10 @@ const Proxy = struct {
     }
 
     fn composeRows(self: *Proxy, runtime: *Runtime, layout: Layout, invalidate: bool) !void {
-        var content = try bar.Content.init(self.gpa, layout.bar);
-        defer content.deinit();
-        const styles = try self.gpa.alloc([]const u8, layout.bar);
-        defer self.gpa.free(styles);
-        const rules = try self.gpa.alloc(?[]const u8, layout.bar);
-        defer self.gpa.free(rules);
-        var pushed_style_buf: [256]u8 = undefined;
-        const pushed_style = markup.barStyle(runtime.cfg.push_style orelse runtime.cfg.style orelse "", runtime.look.palette, &pushed_style_buf);
+        try runtime.ensureComposition(layout.bar);
+        const content = &runtime.composed.?;
+        const styles = runtime.composed_styles;
+        const rules = runtime.composed_rules;
         const configured = @min(@as(usize, layout.bar), @as(usize, runtime.lines));
         const pushed_visible = @min(self.pushed.items.items.len, @as(usize, layout.bar) - configured);
         for (0..configured) |n| {
@@ -539,44 +534,63 @@ const Proxy = struct {
             styles[n] = runtime.look.styles[n];
             rules[n] = runtime.look.rules[n];
         }
-        for (self.pushed.items.items[0..pushed_visible], configured..) |*row, n| {
-            var text: [bar.max_line_bytes]u8 = undefined;
-            var id_text: [20]u8 = undefined;
-            const number = try std.fmt.bufPrint(&id_text, "{d}", .{row.id});
-            var tracks: bar.Tracks = .{ .right_priority = true };
-            var left_buf: [2048]u8 = undefined;
-            var left_writer: std.Io.Writer = .fixed(&left_buf);
-            runtime.source.writePushLeft(&left_writer, row.value(), row.tag(), number, &tracks);
-            const left = left_writer.buffered();
-            const right_spans_start = tracks.len;
-            var right_buf: [512]u8 = undefined;
-            var right_writer: std.Io.Writer = .fixed(&right_buf);
-            runtime.source.writePushRight(&right_writer, row.tag(), number, &tracks);
-            const right = right_writer.buffered();
-            var left_len = @min(left.len, text.len - right.len - 1);
-            while (left_len > 0 and !std.unicode.utf8ValidateSlice(left[0..left_len])) : (left_len -= 1) {}
-            @memcpy(text[0..left_len], left[0..left_len]);
-            text[left_len] = '\t';
-            @memcpy(text[left_len + 1 ..][0..right.len], right);
-            const len = left_len + 1 + right.len;
-            for (tracks.spans[0..right_spans_start]) |*span| {
-                span.start = @min(span.start, @as(u16, @intCast(left_len)));
-                span.end = @min(span.end, @as(u16, @intCast(left_len)));
-            }
-            for (tracks.spans[right_spans_start..tracks.len]) |*span| {
-                span.start += @intCast(left_len + 1);
-                span.end += @intCast(left_len + 1);
-            }
-            _ = content.setTrackedLine(n, text[0..len], tracks);
-            styles[n] = pushed_style;
-            rules[n] = null;
-        }
+        for (0..pushed_visible) |index| self.composePushedLine(runtime, content, index, configured + index);
         for (configured + pushed_visible..layout.bar) |n| {
-            styles[n] = pushed_style;
+            styles[n] = runtime.push_style;
             rules[n] = null;
         }
         const look: bar.Look = .{ .styles = styles, .rules = rules, .palette = runtime.look.palette };
-        if (invalidate) try runtime.renderer.relayout(&content, &look) else try runtime.renderer.acceptContent(&content, &look);
+        if (invalidate) try runtime.renderer.relayout(content, &look) else try runtime.renderer.acceptContent(content, &look);
+    }
+
+    fn composePushedLine(self: *Proxy, runtime: *Runtime, content: *bar.Content, index: usize, n: usize) void {
+        const row = &self.pushed.items.items[index];
+        var text: [bar.max_line_bytes]u8 = undefined;
+        var id_text: [20]u8 = undefined;
+        const number = std.fmt.bufPrint(&id_text, "{d}", .{row.id}) catch unreachable;
+        var tracks: bar.Tracks = .{ .right_priority = true };
+        var left_buf: [2048]u8 = undefined;
+        var left_writer: std.Io.Writer = .fixed(&left_buf);
+        runtime.source.writePushLeft(&left_writer, row.value(), row.tag(), number, &tracks);
+        const left = left_writer.buffered();
+        const right_spans_start = tracks.len;
+        var right_buf: [512]u8 = undefined;
+        var right_writer: std.Io.Writer = .fixed(&right_buf);
+        runtime.source.writePushRight(&right_writer, row.tag(), number, &tracks);
+        const right = right_writer.buffered();
+        var left_len = @min(left.len, text.len - right.len - 1);
+        while (left_len > 0 and !std.unicode.utf8ValidateSlice(left[0..left_len])) : (left_len -= 1) {}
+        @memcpy(text[0..left_len], left[0..left_len]);
+        text[left_len] = '\t';
+        @memcpy(text[left_len + 1 ..][0..right.len], right);
+        const len = left_len + 1 + right.len;
+        for (tracks.spans[0..right_spans_start]) |*span| {
+            span.start = @min(span.start, @as(u16, @intCast(left_len)));
+            span.end = @min(span.end, @as(u16, @intCast(left_len)));
+        }
+        for (tracks.spans[right_spans_start..tracks.len]) |*span| {
+            span.start += @intCast(left_len + 1);
+            span.end += @intCast(left_len + 1);
+        }
+        _ = content.setTrackedLine(n, text[0..len], tracks);
+        runtime.composed_styles[n] = runtime.push_style;
+        runtime.composed_rules[n] = null;
+    }
+
+    /// A stream changes one pushed row. The renderer already skips unchanged
+    /// rows, so keep the other raw rows and their formatted templates intact.
+    fn composePushedUpdate(self: *Proxy, runtime: *Runtime, layout: Layout, index: usize) !bool {
+        const configured = @min(@as(usize, layout.bar), @as(usize, runtime.lines));
+        if (index >= @as(usize, layout.bar) - configured) return false;
+        if (runtime.composed == null or runtime.composed.?.lines.len != layout.bar) {
+            try self.composeRows(runtime, layout, false);
+            return true;
+        }
+        const content = &runtime.composed.?;
+        self.composePushedLine(runtime, content, index, configured + index);
+        const look: bar.Look = .{ .styles = runtime.composed_styles, .rules = runtime.composed_rules, .palette = runtime.look.palette };
+        try runtime.renderer.acceptContent(content, &look);
+        return true;
     }
 
     fn resizeForPushedRows(self: *Proxy, now_ms: i64) !void {
@@ -659,12 +673,14 @@ const Proxy = struct {
             if (decoded_len > decoded.len) return "ERR";
             std.base64.standard.Decoder.decode(decoded[0..decoded_len], encoded) catch return "ERR";
             var before: ?PushedRow = null;
-            for (self.pushed.items.items) |row| if (row.id == id) {
+            var changed_index: usize = 0;
+            for (self.pushed.items.items, 0..) |row, index| if (row.id == id) {
                 before = row;
+                changed_index = index;
                 break;
             };
             if (self.pushed.update(id, decoded[0..decoded_len])) {
-                self.composeRows(self.runtime, self.layout, false) catch {
+                const visible = self.composePushedUpdate(self.runtime, self.layout, changed_index) catch {
                     for (self.pushed.items.items) |*row| if (row.id == id) {
                         row.* = before.?;
                         break;
@@ -672,7 +688,7 @@ const Proxy = struct {
                     self.composeRows(self.runtime, self.layout, true) catch {};
                     return "ERR";
                 };
-                self.requestPaint(now_ms);
+                if (visible) self.requestPaint(now_ms);
             }
             return "OK";
         }
@@ -1252,6 +1268,48 @@ fn schedulerProxy() Proxy {
     proxy.paint_requested_ms = null;
     proxy.last_output_ms = 0;
     return proxy;
+}
+
+test "pushed stream updates reuse composition storage and prepare one row" {
+    var counted = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const gpa = counted.allocator();
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(gpa, "[line.1]\nleft = configured\n", &diag);
+    defer cfg.deinit();
+    var runtime = try Runtime.initInitial(gpa, std.testing.io, &cfg, 1, 80);
+    defer runtime.deinit();
+    var pushed: PushedRows = .{ .allocator = gpa };
+    defer pushed.deinit();
+    _ = try pushed.push("first", "one");
+    const changed_id = try pushed.push("second", "two");
+    _ = try pushed.push("third", "three");
+    const layout = Layout.of(.{ .row = 24, .col = 80, .xpixel = 0, .ypixel = 0 }, 4);
+    try runtime.renderer.resize(layout.bar, layout.cols);
+    var proxy: Proxy = undefined;
+    proxy.pushed = &pushed;
+    try proxy.composeRows(&runtime, layout, true);
+    const storage = runtime.composed.?.lines.ptr;
+
+    try std.testing.expect(pushed.update(changed_id, "BBBB"));
+    try std.testing.expect(try proxy.composePushedUpdate(&runtime, layout, 1));
+    try std.testing.expectEqual(@as(usize, 1), runtime.renderer.parsed_rows);
+    const allocations = counted.allocations;
+    try std.testing.expect(pushed.update(changed_id, "CCCC"));
+    try std.testing.expect(try proxy.composePushedUpdate(&runtime, layout, 1));
+    try std.testing.expectEqual(@as(usize, 1), runtime.renderer.parsed_rows);
+    try std.testing.expectEqual(allocations, counted.allocations);
+    try std.testing.expectEqual(storage, runtime.composed.?.lines.ptr);
+    try std.testing.expectEqualStrings("[2] two > CCCC\t", runtime.composed.?.line(2));
+    try std.testing.expectEqualStrings("[3] three > \t", runtime.composed.?.line(3));
+
+    const short = Layout.of(.{ .row = 4, .col = 80, .xpixel = 0, .ypixel = 0 }, 4);
+    try runtime.renderer.resize(short.bar, short.cols);
+    try proxy.composeRows(&runtime, short, true);
+    try std.testing.expect(pushed.update(changed_id, "DONE"));
+    try std.testing.expect(!(try proxy.composePushedUpdate(&runtime, short, 1)));
+    try runtime.renderer.resize(layout.bar, layout.cols);
+    try proxy.composeRows(&runtime, layout, true);
+    try std.testing.expectEqualStrings("[2] two > DONE\t", runtime.composed.?.line(2));
 }
 
 test "semantically identical paint clears the pending scheduler request" {
