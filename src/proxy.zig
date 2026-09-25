@@ -606,8 +606,12 @@ const Proxy = struct {
             // The caller must send this response before returning from its stack frame.
             return self.controlReply(result);
         }
-        const id_text = parts.next() orelse return "ERR";
-        const id = std.fmt.parseInt(u64, id_text, 10) catch return "ERR";
+        const id = if (parts.next()) |id_text|
+            std.fmt.parseInt(u64, id_text, 10) catch return "ERR"
+        else if (std.mem.eql(u8, operation, "P"))
+            self.pushed.latestId() orelse return "EMPTY"
+        else
+            return "ERR";
         if (id == 0 or id >= self.pushed.next_id) return "ERR";
         if (std.mem.eql(u8, operation, "U")) {
             if (!self.pushed.ownedBy(id, owner)) return "ERR";

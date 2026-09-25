@@ -370,7 +370,10 @@ fn pushRow(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
 }
 
 fn popRow(io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
-    const id = parseSlot(command.positionals()[0]) orelse return usageError(stderr, command, "ID must be a positive decimal integer");
+    const id = if (command.positionals().len > 0)
+        parseSlot(command.positionals()[0]) orelse return usageError(stderr, command, "ID must be a positive decimal integer")
+    else
+        null;
     const token = @import("environment.zig").get("STATUSBAR_SESSION_ID") orelse return usageError(stderr, command, "pop requires a running statusbar session");
     var path_buf: [96]u8 = undefined;
     var client = sessionClient(io, &path_buf) catch |err| {
@@ -381,12 +384,21 @@ fn popRow(io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
     defer client.deinit();
     var packet: [128]u8 = undefined;
     var reply: [128]u8 = undefined;
-    const answer = client.request(try std.fmt.bufPrint(&packet, "1|{s}|P|{d}", .{ token, id }), &reply) catch |err| {
+    const request = if (id) |number|
+        try std.fmt.bufPrint(&packet, "1|{s}|P|{d}", .{ token, number })
+    else
+        try std.fmt.bufPrint(&packet, "1|{s}|P", .{token});
+    const answer = client.request(request, &reply) catch |err| {
         try stderr.print("statusbar: cannot remove row: {t}\n", .{err});
         try stderr.flush();
         return 1;
     };
-    if (!std.mem.eql(u8, answer, "OK")) return usageError(stderr, command, "ID does not belong to this session");
+    if (id == null and std.mem.eql(u8, answer, "EMPTY")) {
+        try stderr.writeAll("statusbar: no pushed rows to remove\n");
+        try stderr.flush();
+        return 1;
+    }
+    if (!std.mem.eql(u8, answer, "OK")) return usageError(stderr, command, if (id == null) "cannot remove the latest pushed row" else "ID does not belong to this session");
     return 0;
 }
 

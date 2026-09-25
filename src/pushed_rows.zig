@@ -47,6 +47,11 @@ pub const Rows = struct {
         return false;
     }
 
+    pub fn latestId(self: *const Rows) ?u64 {
+        if (self.items.items.len == 0) return null;
+        return self.items.items[self.items.items.len - 1].id;
+    }
+
     pub fn update(self: *Rows, id: u64, value: []const u8) bool {
         for (self.items.items) |*row| {
             if (row.id != id) continue;
@@ -79,8 +84,15 @@ test "rows preserve IDs after middle removal and ignore late updates" {
     try std.testing.expect(!rows.ownedBy(1, "second"));
     try std.testing.expect(rows.pop(2));
     try std.testing.expectEqual(@as(u64, 3), rows.items.items[1].id);
+    try std.testing.expectEqual(@as(?u64, 3), rows.latestId());
     try std.testing.expect(!rows.update(2, "late"));
     try std.testing.expectEqual(@as(u64, 4), try rows.push("fourth"));
+    try std.testing.expectEqual(@as(?u64, 4), rows.latestId());
+    try std.testing.expect(rows.pop(4));
+    try std.testing.expectEqual(@as(?u64, 3), rows.latestId());
+    try std.testing.expect(rows.pop(3));
+    try std.testing.expect(rows.pop(1));
+    try std.testing.expectEqual(@as(?u64, null), rows.latestId());
 }
 
 test "row capacity is bounded and IDs do not wrap" {

@@ -1238,6 +1238,13 @@ assert command.stderr == b'', command.stderr
 time.sleep(.1)
 run('pop', '8')
 assert run('pop', second.decode()) == b''
+stack = [run('push', input=value).strip() for value in (b'older', b'middle', b'newer')]
+assert stack == [b'9', b'10', b'11'], stack
+run('pop', '10')
+assert run('pop') == b''
+run('pop', '9')
+empty_pop = subprocess.run([b, 'pop'], capture_output=True)
+assert empty_pop.returncode == 1 and b'no pushed rows' in empty_pop.stderr, empty_pop
 wrong = os.environ.copy()
 wrong['STATUSBAR_SESSION_ID'] = '0' * 32
 assert subprocess.run([b, 'pop', '2'], env=wrong, capture_output=True).returncode != 0

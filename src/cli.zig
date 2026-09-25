@@ -100,10 +100,10 @@ const commands = [_]zecli.CommandSpec{
     },
     .{
         .name = "pop",
-        .description = "Remove a row created by push",
-        .usage = "statusbar pop <ID>",
-        .arguments = &.{.{ .name = "ID", .description = "ID shown at the start of the row", .required = true }},
-        .examples = &.{"statusbar pop 7"},
+        .description = "Remove a pushed row",
+        .usage = "statusbar pop [ID]",
+        .arguments = &.{.{ .name = "ID", .description = "Row ID; omit to remove the latest pushed row" }},
+        .examples = &.{ "statusbar pop", "statusbar pop 7" },
     },
     .{
         .name = "init",

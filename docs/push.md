@@ -48,7 +48,14 @@ id=$(printf 'Build complete\n' | statusbar push)
 statusbar pop "$id"
 ```
 
-For a background pipeline, use the ID shown on the bar to remove its row:
+With no ID, `pop` removes the most recently pushed row that still exists:
+
+```sh
+statusbar pop
+```
+
+For a background pipeline, use the ID shown on the bar to remove a specific
+row:
 
 ```sh
 statusbar pop 1
@@ -58,6 +65,7 @@ statusbar pop 1
 The producer keeps running and future updates to that removed row are ignored.
 Removing the same ID again succeeds. IDs are never reused during a session.
 `pop` cannot remove a configured row. Up to 128 pushed rows may exist at once.
+`statusbar pop` reports an error when there are no pushed rows to remove.
 
 Pushed rows survive a replacement of the running config. They do not add
 numbered slots, and `statusbar config --print current` prints only config text.
