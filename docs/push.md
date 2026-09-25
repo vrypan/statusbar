@@ -15,6 +15,20 @@ Starting…                         [1]
 Server ready                       [1]
 ```
 
+Use `-t TEXT` or `--tag TEXT` to label the row. The tag appears before its ID
+in the right slot:
+
+```sh
+tail -n 0 -f app.log | statusbar push -t app.log &
+```
+
+```text
+Server ready               app.log [1]
+```
+
+Tags must be plain UTF-8 text without control characters and may contain up to
+128 bytes. On a narrow terminal, the tag is shortened so the ID stays visible.
+
 Set the base style of pushed rows with `[line.push]` in the config. It applies
 to the ID and text, and is reapplied to each `\r` progress update. See
 [configuration](config.md#linepush).
@@ -26,12 +40,12 @@ To let a width-aware command draw for the space beside the ID, start it with
 `push --`:
 
 ```sh
-statusbar push -- curl --progress-bar --limit-rate 1M \
+statusbar push -t 100Mb.dat -- curl --progress-bar --limit-rate 1M \
   -o /dev/null https://proof.ovh.net/files/100Mb.dat &
 ```
 
 `push` sets the command's `COLUMNS` to the terminal width minus the right-hand
-`[ID]` and one separating column. It captures both stdout and stderr, so
+tag, `[ID]`, and one separating column. It captures both stdout and stderr, so
 curl's progress output reaches the row. The width is measured when the command
 starts; resizing the terminal does not change the running command's `COLUMNS`.
 The command's exit status is

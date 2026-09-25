@@ -87,16 +87,19 @@ const commands = [_]zecli.CommandSpec{
     .{
         .name = "push",
         .description = "Show a stream in a new status bar row",
-        .usage = "statusbar push [-- <COMMAND> [ARG...]]",
+        .usage = "statusbar push [-t TEXT] [-- <COMMAND> [ARG...]]",
+        .flags = &.{.{ .name = "tag", .short = 't', .value = .string, .value_name = "TEXT", .description = "Show a label before the row ID" }},
         .extra_help =
         \\Read stdin from a pipe or file, or run a command after --.
-        \\A command receives COLUMNS set to the row width beside its ID;
+        \\Use -t or --tag to label the row, for example with a filename.
+        \\The tag appears before the ID on the right and must be plain text.
+        \\A command receives COLUMNS set to the row width beside the tag and ID;
         \\both stdout and stderr are streamed into the row.
         \\The final value stays visible after input ends. It prints the ID
         \\on stdout at EOF; use `statusbar pop ID` to remove the row.
         \\Command mode exits with the command's status.
         ++ "\n",
-        .examples = &.{ "tail -n 0 -f app.log | statusbar push &", "statusbar push -- curl --progress-bar -o /dev/null URL", "id=$(printf 'Done\\n' | statusbar push)" },
+        .examples = &.{ "tail -n 0 -f app.log | statusbar push -t app.log &", "statusbar push -t 100Mb.dat -- curl --progress-bar -o /dev/null URL", "id=$(printf 'Done\\n' | statusbar push)" },
     },
     .{
         .name = "pop",

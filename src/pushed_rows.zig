@@ -1,17 +1,45 @@
 const std = @import("std");
+const zunic = @import("zunic");
 
 pub const max_rows = 128;
 pub const max_text = 1024;
+pub const max_tag = 128;
+
+pub fn validTag(tag: []const u8) bool {
+    if (tag.len > max_tag or !std.unicode.utf8ValidateSlice(tag)) return false;
+    for (tag) |byte| if (byte < 0x20 or byte == 0x7f) return false;
+    return true;
+}
+
+/// Keep the ID visible and leave a column for text when the terminal is narrow.
+pub fn visibleTag(tag: []const u8, cols: usize, id_width: usize) []const u8 {
+    const budget = cols -| (id_width + 3); // tag separator, text separator, one text column
+    var width: usize = 0;
+    var end: usize = 0;
+    var it = zunic.text(tag).graphemes().measured().iterator();
+    while (it.next()) |span| {
+        if (width + span.columns > budget) break;
+        width += span.columns;
+        end = span.end.value;
+    }
+    return tag[0..end];
+}
 
 pub const Row = struct {
     id: u64,
     owner: [108]u8 = undefined,
     owner_len: usize = 0,
+    tag_bytes: [max_tag]u8 = undefined,
+    tag_len: usize = 0,
     text: [max_text]u8 = undefined,
     len: usize = 0,
 
     pub fn value(self: *const Row) []const u8 {
         return self.text[0..self.len];
+    }
+
+    pub fn tag(self: *const Row) []const u8 {
+        return self.tag_bytes[0..self.tag_len];
     }
 };
 
@@ -25,13 +53,16 @@ pub const Rows = struct {
         self.items.deinit(self.allocator);
     }
 
-    pub fn push(self: *Rows, owner: []const u8) !u64 {
+    pub fn push(self: *Rows, owner: []const u8, tag: []const u8) !u64 {
         if (self.items.items.len == max_rows or self.next_id == std.math.maxInt(u64)) return error.RowLimit;
         if (owner.len == 0 or owner.len > 108) return error.InvalidOwner;
+        if (!validTag(tag)) return error.InvalidTag;
         const id = self.next_id;
         var row: Row = .{ .id = id };
         @memcpy(row.owner[0..owner.len], owner);
         row.owner_len = owner.len;
+        @memcpy(row.tag_bytes[0..tag.len], tag);
+        row.tag_len = tag.len;
         try self.items.append(self.allocator, row);
         self.next_id += 1;
         return id;
@@ -77,16 +108,17 @@ pub const Rows = struct {
 test "rows preserve IDs after middle removal and ignore late updates" {
     var rows: Rows = .{ .allocator = std.testing.allocator };
     defer rows.deinit();
-    try std.testing.expectEqual(@as(u64, 1), try rows.push("first"));
-    try std.testing.expectEqual(@as(u64, 2), try rows.push("second"));
-    try std.testing.expectEqual(@as(u64, 3), try rows.push("third"));
+    try std.testing.expectEqual(@as(u64, 1), try rows.push("first", "build.log"));
+    try std.testing.expectEqualStrings("build.log", rows.items.items[0].tag());
+    try std.testing.expectEqual(@as(u64, 2), try rows.push("second", ""));
+    try std.testing.expectEqual(@as(u64, 3), try rows.push("third", ""));
     try std.testing.expect(rows.ownedBy(1, "first"));
     try std.testing.expect(!rows.ownedBy(1, "second"));
     try std.testing.expect(rows.pop(2));
     try std.testing.expectEqual(@as(u64, 3), rows.items.items[1].id);
     try std.testing.expectEqual(@as(?u64, 3), rows.latestId());
     try std.testing.expect(!rows.update(2, "late"));
-    try std.testing.expectEqual(@as(u64, 4), try rows.push("fourth"));
+    try std.testing.expectEqual(@as(u64, 4), try rows.push("fourth", ""));
     try std.testing.expectEqual(@as(?u64, 4), rows.latestId());
     try std.testing.expect(rows.pop(4));
     try std.testing.expectEqual(@as(?u64, 3), rows.latestId());
@@ -98,10 +130,18 @@ test "rows preserve IDs after middle removal and ignore late updates" {
 test "row capacity is bounded and IDs do not wrap" {
     var rows: Rows = .{ .allocator = std.testing.allocator };
     defer rows.deinit();
-    for (0..max_rows) |_| _ = try rows.push("owner");
-    try std.testing.expectError(error.RowLimit, rows.push("owner"));
+    for (0..max_rows) |_| _ = try rows.push("owner", "");
+    try std.testing.expectError(error.RowLimit, rows.push("owner", ""));
     try std.testing.expect(rows.pop(1));
-    try std.testing.expectEqual(@as(u64, max_rows + 1), try rows.push("owner"));
+    try std.testing.expectEqual(@as(u64, max_rows + 1), try rows.push("owner", ""));
     rows.next_id = std.math.maxInt(u64);
-    try std.testing.expectError(error.RowLimit, rows.push("owner"));
+    try std.testing.expectError(error.RowLimit, rows.push("owner", ""));
+}
+
+test "tags are plain UTF-8 and retain the ID on narrow rows" {
+    try std.testing.expect(validTag("界.dat"));
+    try std.testing.expect(!validTag("bad\nname"));
+    try std.testing.expect(!validTag("\x1b[31m"));
+    try std.testing.expect(!validTag("\xff"));
+    try std.testing.expectEqualStrings("界.d", visibleTag("界.dat", 10, 3));
 }

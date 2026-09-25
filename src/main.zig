@@ -279,6 +279,8 @@ fn sessionClient(io: Io, path_buf: *[96]u8) !control.Client {
 
 fn pushRow(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
     if (command.positionals().len != 0) return usageError(stderr, command, "use -- before a push command");
+    const tag = command.getValue([]const u8, "tag") orelse "";
+    if (!@import("pushed_rows.zig").validTag(tag)) return usageError(stderr, command, "tag must be plain UTF-8 text of at most 128 bytes");
     const child_argv = command.passthrough() orelse &.{};
     if (child_argv.len == 0 and (Io.File.stdin().isTty(io) catch false)) return usageError(stderr, command, "push input must be a pipe, file, or command after --");
     const token = @import("environment.zig").get("STATUSBAR_SESSION_ID") orelse return usageError(stderr, command, "push requires a running statusbar session");
@@ -289,9 +291,15 @@ fn pushRow(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         return 1;
     };
     defer client.deinit();
-    var packet: [128]u8 = undefined;
+    var packet: [384]u8 = undefined;
     var reply: [128]u8 = undefined;
-    const created = client.request(try std.fmt.bufPrint(&packet, "1|{s}|C", .{token}), &reply) catch |err| {
+    var encoded_tag: [std.base64.standard.Encoder.calcSize(@import("pushed_rows.zig").max_tag)]u8 = undefined;
+    const encoded = std.base64.standard.Encoder.encode(&encoded_tag, tag);
+    const create_request = if (tag.len == 0)
+        try std.fmt.bufPrint(&packet, "1|{s}|C", .{token})
+    else
+        try std.fmt.bufPrint(&packet, "1|{s}|C|{s}", .{ token, encoded });
+    const created = client.request(create_request, &reply) catch |err| {
         try stderr.print("statusbar: cannot create row: {t}\n", .{err});
         try stderr.flush();
         return 1;
@@ -319,8 +327,10 @@ fn pushRow(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
             return 1;
         };
         var width_buf: [20]u8 = undefined;
-        const id_and_gap_width = std.fmt.count("[{d}] ", .{id});
-        const available = @max(1, @as(usize, size.col) -| id_and_gap_width);
+        const id_width = std.fmt.count("[{d}]", .{id});
+        const displayed_tag = @import("pushed_rows.zig").visibleTag(tag, size.col, id_width);
+        const tag_width = if (displayed_tag.len == 0) @as(usize, 0) else @import("zunic").text(displayed_tag).width() + 1;
+        const available = @max(1, @as(usize, size.col) -| (id_width + tag_width + 1));
         const width = try std.fmt.bufPrint(&width_buf, "{d}", .{available});
         var child_env = try sys.environMap().clone(arena);
         defer child_env.deinit();

@@ -32,6 +32,7 @@ const SessionState = @import("session_state.zig").State;
 const PaletteProbe = @import("terminal_palette.zig").Probe;
 const PushedRows = @import("pushed_rows.zig").Rows;
 const PushedRow = @import("pushed_rows.zig").Row;
+const pushed_rows = @import("pushed_rows.zig");
 const control = @import("session_control.zig");
 
 const io_buf_size = 64 * 1024;
@@ -542,13 +543,19 @@ const Proxy = struct {
             var text: [bar.max_line_bytes]u8 = undefined;
             var id_buf: [22]u8 = undefined;
             const label = try std.fmt.bufPrint(&id_buf, "[{d}]", .{row.id});
+            const tag = pushed_rows.visibleTag(row.tag(), layout.cols, @import("zunic").text(label).width());
+            var right_buf: [pushed_rows.max_tag + 23]u8 = undefined;
+            const right = if (tag.len == 0)
+                label
+            else
+                try std.fmt.bufPrint(&right_buf, "{s} {s}", .{ tag, label });
             const value = row.value();
-            var value_len = @min(value.len, text.len - label.len - 1);
+            var value_len = @min(value.len, text.len - right.len - 1);
             while (value_len > 0 and !std.unicode.utf8ValidateSlice(value[0..value_len])) : (value_len -= 1) {}
             @memcpy(text[0..value_len], value[0..value_len]);
             text[value_len] = '\t';
-            @memcpy(text[value_len + 1 ..][0..label.len], label);
-            const len = value_len + 1 + label.len;
+            @memcpy(text[value_len + 1 ..][0..right.len], right);
+            const len = value_len + 1 + right.len;
             _ = content.setTrackedLine(n, text[0..len], .{ .literal = .{ true, true }, .right_priority = true });
             styles[n] = pushed_style;
             rules[n] = null;
@@ -594,8 +601,16 @@ const Proxy = struct {
         if (!std.mem.eql(u8, token, &self.session_token)) return "ERR";
         const operation = parts.next() orelse return "ERR";
         if (std.mem.eql(u8, operation, "C")) {
+            const encoded = parts.next();
             if (parts.next() != null or @as(usize, self.runtime.lines) + self.pushed.items.items.len >= 65533) return "ERR";
-            const id = self.pushed.push(owner) catch return "ERR";
+            var decoded: [pushed_rows.max_tag]u8 = undefined;
+            const tag = if (encoded) |data| blk: {
+                const len = std.base64.standard.Decoder.calcSizeForSlice(data) catch return "ERR";
+                if (len > decoded.len) return "ERR";
+                std.base64.standard.Decoder.decode(decoded[0..len], data) catch return "ERR";
+                break :blk decoded[0..len];
+            } else "";
+            const id = self.pushed.push(owner, tag) catch return "ERR";
             self.resizeForPushedRows(now_ms) catch {
                 _ = self.pushed.pop(id);
                 self.pushed.next_id = id;

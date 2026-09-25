@@ -1,9 +1,21 @@
 # Changelog
 
-Changes are grouped by version, newest first. Unreleased versions contain
-commits since the latest version tag. Entries preserve commit subjects verbatim.
+Changes are grouped by version, newest first. Unreleased contains commits since
+the latest version tag. Entries preserve commit subjects verbatim.
 
-## v0.3.1 (unreleased)
+## Unreleased
+
+- Add tags to pushed rows
+- Place pushed row IDs on the right
+- Add configurable style for pushed rows
+- Allow pop to remove latest pushed row
+- Remove streaming mode from set
+- Add dynamic push and pop rows with command streaming
+- Use session state for shell integration detection
+- Stream stdin into slots with literal progress updates
+- Document how I use statusbar
+
+## v0.3.1
 
 - Bump version to 0.3.1
 - Upgrade zecli to 0.4.4

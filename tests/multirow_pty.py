@@ -1248,6 +1248,14 @@ assert empty_pop.returncode == 1 and b'no pushed rows' in empty_pop.stderr, empt
 wrong = os.environ.copy()
 wrong['STATUSBAR_SESSION_ID'] = '0' * 32
 assert subprocess.run([b, 'pop', '2'], env=wrong, capture_output=True).returncode != 0
+tagged = subprocess.run([b, 'push', '-t', '100Mb.dat', '--', sys.executable,
+                         '-c', 'import os; print("width=" + os.environ["COLUMNS"])'],
+                        capture_output=True)
+assert tagged.returncode == 0 and tagged.stdout == b'12\n', tagged
+time.sleep(.1)
+run('pop', '12')
+bad_tag = subprocess.run([b, 'push', '-t', 'bad\nname'], input=b'value', capture_output=True)
+assert bad_tag.returncode != 0, bad_tag
 print('PUSH_POP_OK', flush=True)
 '''
     config = b'[line.push]\nstyle = fg=#123456\n[line.1]\nleft = configured\n'
@@ -1271,6 +1279,8 @@ print('PUSH_POP_OK', flush=True)
         assert b'reloaded' in data and b'[3]' in data and b'in progress' in data, data[-700:]
         assert b'[7]' in data, data[-700:]
         assert b'[8]' in data and b'99.9%' in data, data[-700:]
+        assert any(row.startswith(b'width=65') and row.endswith(b'100Mb.dat [12]')
+                   for row in plain), plain[-4:]
     finally:
         os.unlink(path)
     print('push/pop streams, command width, stable IDs, reloads, active removal, and authentication passed')

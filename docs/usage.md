@@ -73,8 +73,9 @@ leaves the final result displayed. `statusbar pop` removes the newest pushed
 row still present; `statusbar pop ID` removes a specific row, even if its
 stream is still active. See [pushing rows](push.md) for examples and
 limits. Pushed rows do not have numbered slots and survive config replacement.
-`statusbar push -- command` starts the command with `COLUMNS` set to the width
-beside the ID, streams its stdout and stderr, and returns its exit status.
+`statusbar push -t label -- command` shows `label` before the ID on the right.
+It starts the command with `COLUMNS` set to the width beside the label and ID,
+streams its stdout and stderr, and returns its exit status.
 
 ## `init`
 
