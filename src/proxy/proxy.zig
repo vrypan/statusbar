@@ -103,8 +103,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
 
     var child_environment = try sys.environMap().clone(gpa);
     defer child_environment.deinit();
-    var number: [8]u8 = undefined;
-    try child_environment.put("STATUSBAR_LINES", try std.fmt.bufPrint(&number, "{d}", .{runtime.lines}));
+    _ = child_environment.swapRemove("STATUSBAR_LINES");
     try child_environment.put("STATUSBAR_STATE", session_state.path());
     try child_environment.put("STATUSBAR_SESSION_ID", &session_token);
     const default_argv = [_][]const u8{sys.env("SHELL") orelse "/bin/sh"};

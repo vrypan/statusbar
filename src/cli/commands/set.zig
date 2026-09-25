@@ -22,14 +22,10 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stde
 
     // Outside a session there is no bar to update, and nothing is written.
     const env = @import("platform").environment;
-    const line_count = if (env.get("STATUSBAR_STATE")) |state_path|
-        @import("session").session_state.readLines(io, state_path) catch
-            return common.usageError(stderr, command, "STATUSBAR_STATE is unavailable or malformed")
-    else blk: {
-        const line_text = env.get("STATUSBAR_LINES") orelse return 0;
-        break :blk common.parseSlot(line_text) orelse return common.usageError(stderr, command, "STATUSBAR_LINES is malformed");
-    };
-    const max_slot = std.math.mul(usize, line_count, 2) catch return common.usageError(stderr, command, "STATUSBAR_LINES is malformed");
+    const state_path = env.get("STATUSBAR_STATE") orelse return 0;
+    const line_count = @import("session").session_state.readLines(io, state_path) catch
+        return common.usageError(stderr, command, "STATUSBAR_STATE is unavailable or malformed");
+    const max_slot = std.math.mul(usize, line_count, 2) catch return common.usageError(stderr, command, "STATUSBAR_STATE is malformed");
     if (slot > max_slot) return common.usageError(stderr, command, "SLOT does not exist in this session");
     const encoder = std.base64.standard.Encoder;
     const encoded = try arena.alloc(u8, encoder.calcSize(text.items.len));

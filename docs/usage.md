@@ -220,7 +220,6 @@ working directory or environment of statusbar commands.
 
 | Variable            | Set for                   | Meaning                                  |
 |---------------------|---------------------------|------------------------------------------|
-| `STATUSBAR_LINES`   | the child and bar commands | legacy startup row count in the child; refreshed when configured commands restart |
 | `STATUSBAR_COLUMNS` | bar commands              | the bar's width                          |
 | `STATUSBAR_CONFIG`  | read by statusbar         | config file, when `--config` isn't given |
 | `STATUSBAR_STATE`   | the child                  | session indicator and private current row-count/config snapshots used by `set` and `config` |

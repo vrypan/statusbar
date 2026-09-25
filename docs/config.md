@@ -254,8 +254,8 @@ skipped rather than replayed.
 
 Commands run in the directory where statusbar started, not your shell's,
 with stdin and stderr on `/dev/null`. `STATUSBAR_COLUMNS` is the current
-width and `STATUSBAR_LINES` is the configured row count, even while rows are
-hidden.
+width. Use `statusbar config --print current` to inspect the current
+configuration, including lines hidden by terminal size.
 
 ## Templates
 

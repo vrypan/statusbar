@@ -66,7 +66,7 @@ pub const Source = struct {
         var started: usize = 0;
         errdefer for (commands[0..started]) |*command| command.deinit(io);
         for (specs, 0..) |spec, n| {
-            commands[n] = try status.Command.init(gpa, io, spec.run, cfg.commandInterval(n), lines, cols);
+            commands[n] = try status.Command.init(gpa, io, spec.run, cfg.commandInterval(n), cols);
             started += 1;
         }
         var content = try Content.init(gpa, lines);

@@ -93,7 +93,7 @@ test "a status command that exits after closing stdout wakes the loop" {
     installChildHandler();
 
     const Command = @import("model").status.Command;
-    var command = try Command.init(std.testing.allocator, io, "exec >&-; sleep 0.2", 1000, 1, 80);
+    var command = try Command.init(std.testing.allocator, io, "exec >&-; sleep 0.2", 1000, 80);
     defer command.deinit(io);
     command.tick(io, 0);
     var fds = [_]posix.pollfd{.{ .fd = command.readFd(), .events = posix.POLL.IN, .revents = 0 }};

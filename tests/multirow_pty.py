@@ -133,18 +133,18 @@ def osc_value(data, slot):
 
 def check_set_dash(binary):
     env = os.environ.copy()
-    env.pop("STATUSBAR_STATE", None)
-    env["STATUSBAR_LINES"] = "2"
-    for args, value in ((["4", "-"], b"-"),
-                        (["4", "--", "-"], b"-"),
-                        (["--", "4", "-"], b"-"),
-                        (["4", "-", "extra"], b"- extra")):
-        code, data = capture_pty([binary, "set", *args], env)
-        assert code == 0 and osc_value(data, 4) == value, data
+    with tempfile.TemporaryDirectory() as directory:
+        env["STATUSBAR_STATE"] = session_state_stub(directory, 2)
+        for args, value in ((["4", "-"], b"-"),
+                            (["4", "--", "-"], b"-"),
+                            (["--", "4", "-"], b"-"),
+                            (["4", "-", "extra"], b"- extra")):
+            code, data = capture_pty([binary, "set", *args], env)
+            assert code == 0 and osc_value(data, 4) == value, data
 
-    command = f"printf 'ignored' | {shlex.quote(binary)} set 4 -"
-    code, data = capture_pty(["/bin/sh", "-c", command], env)
-    assert code == 0 and osc_value(data, 4) == b"-", data
+        command = f"printf 'ignored' | {shlex.quote(binary)} set 4 -"
+        code, data = capture_pty(["/bin/sh", "-c", command], env)
+        assert code == 0 and osc_value(data, 4) == b"-", data
     print("set treats a sole dash as literal text")
 def check_init_invocation(binary):
     env = os.environ.copy()
@@ -168,10 +168,10 @@ def check_init_invocation(binary):
         )
         assert b"command 'statusbar' set" in by_name.stdout
 
-    lines_only = env.copy()
-    lines_only.pop("STATUSBAR_STATE")
-    lines_only["STATUSBAR_LINES"] = "2"
-    outside = subprocess.run([binary, "init", "zsh"], env=lines_only,
+    outside_env = env.copy()
+    outside_env.pop("STATUSBAR_STATE")
+    outside_env["STATUSBAR_LINES"] = "2"  # obsolete variable is ignored
+    outside = subprocess.run([binary, "init", "zsh"], env=outside_env,
                              capture_output=True, check=True)
     assert outside.stdout == b"", outside
 
@@ -181,7 +181,7 @@ def check_init_invocation(binary):
 def check_stdin_config(binary):
     config = "interval = 0.1\nstyle = fg=blue\n[line.1]\nleft = PIPE_ONE\n[line.2]\nleft = #(printf PIPE_TWO)\n"
     q = shlex.quote
-    child = r'''printf '__READY__:%s:%s\n' "$(stty size)" "$STATUSBAR_LINES"
+    child = r'''printf '__READY__:%s:%s\n' "$(stty size)" "${STATUSBAR_LINES-unset}"
 while IFS= read -r value; do
     case "$value" in
         SIZE) printf '__SIZE__:%s\n' "$(stty size)" ;;
@@ -194,11 +194,12 @@ done
     command = shlex.join([binary, "--config=-", "--", "/bin/sh", "-c", child, "sh", binary])
     env = os.environ.copy()
     env["STATUSBAR_CONFIG"] = "/does/not/exist/statusbar-config"
+    env["STATUSBAR_LINES"] = "9"  # obsolete parent value must not reach the child
     script = f"printf %s {q(config)} | {command}"
     pid, master = spawn(["/bin/sh", "-c", script], env=env)
     reaped = False
     try:
-        data = read_until(master, b"", b"__READY__:22 80:2")
+        data = read_until(master, b"", b"__READY__:22 80:unset")
         data = read_until(master, data, b"PIPE_TWO")
         assert b"PIPE_ONE" in data, data
         os.write(master, b"keyboard works\n")
@@ -289,7 +290,6 @@ def check_zsh(binary):
         return
 
     env = os.environ.copy()
-    env["STATUSBAR_LINES"] = "3"
     env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
     quoted_binary = shlex.quote(binary)
     for bad in ("+1", "-1", "zero", "0", "999999999999999999999999999999"):
@@ -303,19 +303,15 @@ def check_zsh(binary):
         assert result.returncode == 2, (bad, result)
         assert result.stdout == b"", (bad, result.stdout)
 
-    invalid_env = env.copy()
-    invalid_env["STATUSBAR_LINES"] = "1"
     invalid = subprocess.run(
-        [binary, "init", "zsh"], env=invalid_env,
+        [binary, "init", "zsh"], env=env,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
     )
     assert invalid.returncode == 0
     assert b"__statusbar_report_cwd" in invalid.stdout
 
-    zero_env = env.copy()
-    zero_env["STATUSBAR_LINES"] = "0"
     zero = subprocess.run(
-        [binary, "init", "zsh", "--starship-slot", "1"], env=zero_env,
+        [binary, "init", "zsh", "--starship-slot", "1"], env=env,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
     )
     assert zero.returncode == 0
@@ -353,7 +349,6 @@ def check_zsh(binary):
         # complete prompt in the terminal. The same installed hook can begin
         # using it after a later configuration reload adds the slot.
         one_row_env = zenv.copy()
-        one_row_env["STATUSBAR_LINES"] = "1"
         one_row_env["STATUSBAR_STATE"] = session_state_stub(directory, 1)
         script = (
             f'export STARSHIP_TEST_MODE=multi; eval "$({quoted_binary} init zsh)"; '
@@ -374,7 +369,6 @@ def check_fish(binary):
         return
 
     env = os.environ.copy()
-    env["STATUSBAR_LINES"] = "3"
     env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
     quoted_binary = shlex.quote(binary)
     with tempfile.TemporaryDirectory() as directory:
@@ -406,7 +400,6 @@ def check_fish(binary):
         assert b"one%literal" in data, data
 
         one_row_env = fenv.copy()
-        one_row_env["STATUSBAR_LINES"] = "1"
         one_row_env["STATUSBAR_STATE"] = session_state_stub(directory, 1)
         script = (
             f"set -gx STARSHIP_TEST_MODE multi; {quoted_binary} init fish | source; "
@@ -427,7 +420,6 @@ def check_nu(binary):
         return
 
     env = os.environ.copy()
-    env["STATUSBAR_LINES"] = "3"
     env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
     with tempfile.TemporaryDirectory() as directory:
         os.symlink(binary, os.path.join(directory, "statusbar"))
@@ -463,7 +455,6 @@ def check_nu(binary):
 
         nenv["STARSHIP_TEST_MODE"] = "multi"
         one_row_env = nenv.copy()
-        one_row_env["STATUSBAR_LINES"] = "1"
         one_row_env["STATUSBAR_STATE"] = session_state_stub(directory, 1)
         code, data = capture_pty([nu, "-n", "-c", script], one_row_env)
         assert code == 0 and b"SetUserVar=StatusBarSlot" not in data, data
@@ -487,7 +478,6 @@ def check_nu(binary):
 
 def check_init_features(binary):
     env = os.environ.copy()
-    env["STATUSBAR_LINES"] = "1"
     env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
     for shell in ("zsh", "fish"):
         for flags in (("--starship=false", "--report-cwd=false"),):
@@ -1327,20 +1317,30 @@ def main():
     binary = os.path.abspath(sys.argv[1])
     check_set_dash(binary)
 
-    env = os.environ.copy()
-    env["STATUSBAR_LINES"] = "1"
-    code, data = capture_pty([binary, "set", "1", "   "], env)
-    assert code == 0
-    assert osc_value(data, 1) == b"   ", data
+    with tempfile.TemporaryDirectory() as directory:
+        env = os.environ.copy()
+        env["STATUSBAR_STATE"] = session_state_stub(directory, 1)
+        code, data = capture_pty([binary, "set", "1", "   "], env)
+        assert code == 0
+        assert osc_value(data, 1) == b"   ", data
 
-    invalid_env = os.environ.copy()
-    invalid_env["STATUSBAR_LINES"] = "0"
-    invalid = subprocess.run(
-        [binary, "set", "1", "x"], env=invalid_env,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-    )
-    assert invalid.returncode == 2
-    assert b"STATUSBAR_LINES is malformed" in invalid.stderr
+        outside_env = env.copy()
+        outside_env.pop("STATUSBAR_STATE")
+        outside_env["STATUSBAR_LINES"] = "1"  # obsolete fallback is ignored
+        code, data = capture_pty([binary, "set", "1", "x"], outside_env)
+        assert code == 0 and b"SetUserVar=StatusBarSlot" not in data, data
+
+        invalid_path = os.path.join(directory, "invalid-state")
+        with open(invalid_path, "w", encoding="ascii") as state:
+            state.write("malformed\n")
+        invalid_env = env.copy()
+        invalid_env["STATUSBAR_STATE"] = invalid_path
+        invalid = subprocess.run(
+            [binary, "set", "1", "x"], env=invalid_env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        assert invalid.returncode == 2
+        assert b"STATUSBAR_STATE is unavailable or malformed" in invalid.stderr
 
     check_init_invocation(binary)
     check_stdin_config(binary)
@@ -1372,8 +1372,8 @@ right = configured-six
 """
     script = r'''
 statusbar_bin=$1
-trap 'size=$(stty size); rows=${size%% *}; printf "__SIZE__:%s:%s\n" "$rows" "$STATUSBAR_LINES"' WINCH
-size=$(stty size); rows=${size%% *}; printf "__START__:%s:%s\n" "$rows" "$STATUSBAR_LINES"
+trap 'size=$(stty size); rows=${size%% *}; printf "__SIZE__:%s\n" "$rows"' WINCH
+size=$(stty size); rows=${size%% *}; printf "__START__:%s:%s\n" "$rows" "${STATUSBAR_LINES-unset}"
 while :; do
   IFS= read -r command || continue
   case "$command" in
@@ -1395,7 +1395,7 @@ done
     try:
         argv = [binary, "-c", config_path, "--", "/bin/sh", "-c", script, "sh", binary]
         pid, master = spawn(argv)
-        data = read_until(master, b"", b"__START__:21:3")
+        data = read_until(master, b"", b"__START__:21:unset")
         data = read_until(master, data, b"configured-six")
         suffix = b"\x1b[0m\x1b8\x1b[?7h"
         # Finish the content-bearing startup paint, not an earlier blank paint.
@@ -1422,14 +1422,14 @@ done
         assert forwarded in read_until(master, b"", forwarded)
 
         resize(master, 4)
-        data = read_until(master, data, b"__SIZE__:2:3")
+        data = read_until(master, data, b"__SIZE__:2")
         before_set = len(data)
         os.write(master, b"SET\n")
         data = read_until(master, data, b"__SET__")
         assert b"hidden-value" not in data[before_set:], "hidden row was painted at height 4"
 
         resize(master, 24)
-        data = read_until(master, data, b"__SIZE__:21:3")
+        data = read_until(master, data, b"__SIZE__:21")
         data = read_until(master, data, b"hidden-value")
 
         os.write(master, b"BAD\n")

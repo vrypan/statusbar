@@ -34,7 +34,7 @@ pub const Command = struct {
     active_origin: display.RunOrigin = .initial,
     pending_origin: ?display.RunOrigin = null,
 
-    pub fn init(gpa: std.mem.Allocator, io: std.Io, shell_command: []const u8, interval_ms: i64, lines: u16, cols: u16) !Command {
+    pub fn init(gpa: std.mem.Allocator, io: std.Io, shell_command: []const u8, interval_ms: i64, cols: u16) !Command {
         const devnull = posix.openatZ(posix.AT.FDCWD, "/dev/null", .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0) catch return error.Syscall;
         errdefer sys.close(io, devnull);
         var self: Command = .{
@@ -45,8 +45,7 @@ pub const Command = struct {
             .devnull = devnull,
         };
         errdefer self.environment.deinit();
-        var buf: [8]u8 = undefined;
-        try self.environment.put("STATUSBAR_LINES", try std.fmt.bufPrint(&buf, "{d}", .{lines}));
+        _ = self.environment.swapRemove("STATUSBAR_LINES");
         try self.setColumns(cols);
         return self;
     }
@@ -211,7 +210,7 @@ fn awaitOutput(command: *Command, io: std.Io) !Command.Result {
 }
 
 test "command output exits and schedules the next refresh" {
-    var command = try Command.init(std.testing.allocator, std.testing.io, "printf done", 100, 1, 80);
+    var command = try Command.init(std.testing.allocator, std.testing.io, "printf done", 100, 80);
     defer command.deinit(std.testing.io);
 
     command.refreshNow(0, .scheduled);
@@ -228,7 +227,7 @@ test "command output exits and schedules the next refresh" {
 }
 
 test "command deadline survives closed stdout until the process is reaped" {
-    var command = try Command.init(std.testing.allocator, std.testing.io, "printf ready; exec 1>&-; sleep 2", 100, 1, 80);
+    var command = try Command.init(std.testing.allocator, std.testing.io, "printf ready; exec 1>&-; sleep 2", 100, 80);
     defer command.deinit(std.testing.io);
 
     command.refreshNow(0, .scheduled);
@@ -261,7 +260,7 @@ test "command deadline survives closed stdout until the process is reaped" {
 }
 
 test "command deadline closes an open stdout pipe" {
-    var command = try Command.init(std.testing.allocator, std.testing.io, "sleep 2", 100, 1, 80);
+    var command = try Command.init(std.testing.allocator, std.testing.io, "sleep 2", 100, 80);
     defer command.deinit(std.testing.io);
 
     command.refreshNow(0, .scheduled);
@@ -274,7 +273,7 @@ test "command deadline closes an open stdout pipe" {
 }
 
 test "geometry requests retain origin and wait behind an active run" {
-    var command = try Command.init(std.testing.allocator, std.testing.io, "sleep 0.02; printf done", 1000, 1, 80);
+    var command = try Command.init(std.testing.allocator, std.testing.io, "sleep 0.02; printf done", 1000, 80);
     defer command.deinit(std.testing.io);
 
     command.refreshNow(0, .scheduled);
