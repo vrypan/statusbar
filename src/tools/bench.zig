@@ -3,10 +3,9 @@
 //!     zig build bench -Doptimize=ReleaseFast
 
 const std = @import("std");
-const internals = @import("internals");
-const Output = internals.output.Output;
-const Input = internals.input.Input;
-const bar = internals.bar;
+const Output = @import("terminal").output.Output;
+const Input = @import("terminal").input.Input;
+const bar = @import("render").bar;
 
 fn measuredContent(content: *bar.Content, colors: usize, regions: usize, region_chars: usize) !void {
     if (regions > 0) {

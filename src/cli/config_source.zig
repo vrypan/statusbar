@@ -1,7 +1,7 @@
 //! Finding and loading the config a session starts with.
 const std = @import("std");
 const Io = std.Io;
-const config = @import("../model/config.zig");
+const config = @import("model").config;
 
 /// samples/default.config, used when there is no config file.
 pub const default_config = @embedFile("default_config");
@@ -21,7 +21,7 @@ const SelectedConfigPath = struct {
 };
 
 pub fn selectConfigPath(arena: std.mem.Allocator, flag: ?[]const u8) !SelectedConfigPath {
-    const env = @import("../platform/environment.zig");
+    const env = @import("platform").environment;
     if (flag) |value| return .{ .path = value, .explicit = true, .from_stdin = std.mem.eql(u8, value, "-") };
     if (env.get("STATUSBAR_CONFIG")) |value| return .{ .path = value, .explicit = true, .from_stdin = false };
     if (env.get("XDG_CONFIG_HOME")) |xdg| return .{ .path = try std.fmt.allocPrint(arena, "{s}/statusbar/config", .{xdg}), .explicit = false, .from_stdin = false };

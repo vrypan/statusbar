@@ -1,10 +1,10 @@
 //! Replacing the running config with an authenticated OSC 3110 request.
 
 const std = @import("std");
-const sys = @import("../platform/sys.zig");
-const config = @import("../model/config.zig");
-const Runtime = @import("../model/runtime_config.zig").Runtime;
-const config_protocol = @import("../terminal/config_protocol.zig");
+const sys = @import("platform").sys;
+const config = @import("model").config;
+const Runtime = @import("model").runtime_config.Runtime;
+const config_protocol = @import("terminal").config_protocol;
 const Layout = @import("layout.zig").Layout;
 const Proxy = @import("proxy.zig").Proxy;
 const paint_quiet_ms = @import("loop.zig").paint_quiet_ms;

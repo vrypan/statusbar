@@ -4,8 +4,8 @@
 const std = @import("std");
 const posix = std.posix;
 const c = std.c;
-const sys = @import("../platform/sys.zig");
-const osc7 = @import("../terminal/osc7.zig");
+const sys = @import("platform").sys;
+const osc7 = @import("terminal").osc7;
 const stdout_fd = @import("proxy.zig").stdout_fd;
 
 pub const io_buf_size = 64 * 1024;

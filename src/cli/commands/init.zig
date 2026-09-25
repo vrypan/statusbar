@@ -23,7 +23,7 @@ pub fn run(arena: std.mem.Allocator, io: Io, invoked_as: []const u8, command: *c
         common.parseSlot(raw) orelse return common.usageError(stderr, command, "--starship-slot must be a positive decimal integer")
     else
         3;
-    _ = @import("../../platform/environment.zig").get("STATUSBAR_STATE") orelse return 0;
+    _ = @import("platform").environment.get("STATUSBAR_STATE") orelse return 0;
     if (!starship and !report_cwd) return 0;
     if (report_cwd) try stdout.writeAll(if (std.mem.eql(u8, args[0], "zsh")) zsh_cwd_init else fish_cwd_init);
     if (!starship) {

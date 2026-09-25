@@ -2,7 +2,7 @@
 const std = @import("std");
 const Io = std.Io;
 const zecli = @import("zecli");
-const control = @import("../session/session_control.zig");
+const control = @import("session").session_control;
 
 /// Reports an invalid value the way zecli reports a parse error.
 pub fn usageError(stderr: *Io.Writer, command: *const zecli.Command, message: []const u8) !u8 {
@@ -19,7 +19,7 @@ pub fn parseSlot(text: []const u8) ?usize {
 }
 
 pub fn sessionClient(io: Io, path_buf: *[96]u8) !control.Client {
-    const path = @import("../platform/environment.zig").get("STATUSBAR_STATE") orelse return error.NoSession;
+    const path = @import("platform").environment.get("STATUSBAR_STATE") orelse return error.NoSession;
     return control.Client.init(io, path, path_buf);
 }
 

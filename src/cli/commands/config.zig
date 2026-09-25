@@ -5,7 +5,7 @@ const zecli = @import("zecli");
 const cli = @import("../cli.zig");
 const common = @import("../common.zig");
 const config_source = @import("../config_source.zig");
-const config = @import("../../model/config.zig");
+const config = @import("model").config;
 
 /// Print a config snapshot or submit a complete replacement from stdin.
 pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer, help_output: anytype) !u8 {
@@ -45,10 +45,10 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         if (std.mem.eql(u8, selection, "default")) {
             try stdout.writeAll(config_source.default_config);
         } else {
-            const state = @import("../../session/session_state.zig");
+            const state = @import("session").session_state;
             const selected = std.meta.stringToEnum(state.Selection, selection) orelse
                 return common.usageError(stderr, command, "--print expects default, startup, or current");
-            const env = @import("../../platform/environment.zig");
+            const env = @import("platform").environment;
             const state_path = env.get("STATUSBAR_STATE") orelse return common.usageError(stderr, command, "--print startup/current requires a running statusbar session");
             const token = env.get("STATUSBAR_SESSION_ID") orelse return common.usageError(stderr, command, "--print startup/current requires a running statusbar session");
             const text = state.readConfig(arena, io, state_path, token, selected) catch |err| {
@@ -64,8 +64,8 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
 }
 
 fn sendConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
-    const protocol = @import("../../terminal/config_protocol.zig");
-    const token = @import("../../platform/environment.zig").get("STATUSBAR_SESSION_ID") orelse
+    const protocol = @import("terminal").config_protocol;
+    const token = @import("platform").environment.get("STATUSBAR_SESSION_ID") orelse
         return common.usageError(stderr, command, "not inside a compatible statusbar session");
     if (!protocol.validToken(token)) return common.usageError(stderr, command, "STATUSBAR_SESSION_ID is malformed");
     var buffer: [4096]u8 = undefined;

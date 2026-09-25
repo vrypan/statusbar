@@ -1,11 +1,11 @@
 //! Owns the formatted rows passed from configured sources and pushed streams to the renderer.
 const std = @import("std");
 const zunic = @import("zunic");
-const bar = @import("../render/bar.zig");
+const bar = @import("render").bar;
 const config = @import("config.zig");
-const markup = @import("../render/markup.zig");
+const markup = @import("render").markup;
 const Source = @import("source.zig").Source;
-const Row = @import("../session/pushed_rows.zig").Row;
+const Row = @import("session").pushed_rows.Row;
 
 pub const Composition = struct {
     gpa: std.mem.Allocator,

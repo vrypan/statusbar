@@ -1,6 +1,6 @@
 //! Read-only OSC 4/10/11 discovery. Never invent RGB values for terminal colors.
 const std = @import("std");
-const color = @import("../shared/color.zig");
+const color = @import("shared").color;
 const Rgb = color.Rgb;
 const Palette = color.Palette;
 

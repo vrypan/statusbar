@@ -2,19 +2,9 @@ const std = @import("std");
 const Io = std.Io;
 const build_options = @import("build_options");
 const zecli = @import("zecli");
-const cli = @import("cli/cli.zig");
-const proxy = @import("proxy/proxy.zig");
-
-/// One file per subcommand, each with a `run` entry point.
-const commands = struct {
-    const run = @import("cli/commands/run.zig");
-    const set = @import("cli/commands/set.zig");
-    const push = @import("cli/commands/push.zig");
-    const pop = @import("cli/commands/pop.zig");
-    const init = @import("cli/commands/init.zig");
-    const config = @import("cli/commands/config.zig");
-    const completion = @import("cli/commands/completion.zig");
-};
+const cli = @import("cli").spec;
+const commands = @import("cli").commands;
+const proxy = @import("proxy").proxy;
 
 pub const panic = std.debug.FullPanic(struct {
     fn restoreThenPanic(msg: []const u8, first_trace_addr: ?usize) noreturn {
@@ -24,7 +14,7 @@ pub const panic = std.debug.FullPanic(struct {
 }.restoreThenPanic);
 
 pub fn main(init: std.process.Init) !u8 {
-    @import("platform/environment.zig").init(init.environ_map);
+    @import("platform").environment.init(init.environ_map);
     const arena = init.arena.allocator();
     const args = try init.minimal.args.toSlice(arena);
 
@@ -75,30 +65,4 @@ pub fn main(init: std.process.Init) !u8 {
         .config => commands.config.run(arena, init.io, command, stdout, stderr, help_output),
         .completion => commands.completion.run(command, stdout, stderr),
     };
-}
-
-test {
-    _ = commands.run;
-    _ = commands.set;
-    _ = commands.push;
-    _ = commands.pop;
-    _ = commands.init;
-    _ = commands.config;
-    _ = commands.completion;
-    _ = @import("session/push_stream.zig");
-    _ = @import("session/push_protocol.zig");
-    _ = @import("cli/common.zig");
-    _ = @import("cli/config_source.zig");
-    _ = @import("terminal/output.zig");
-    _ = @import("terminal/input.zig");
-    _ = @import("session/session_state.zig");
-    _ = @import("render/bar.zig");
-    _ = @import("render/markup.zig");
-    _ = @import("model/config.zig");
-    _ = cli;
-    _ = @import("model/source.zig");
-    _ = @import("platform/child.zig");
-    _ = @import("model/status.zig");
-    _ = @import("terminal/config_protocol.zig");
-    _ = proxy;
 }

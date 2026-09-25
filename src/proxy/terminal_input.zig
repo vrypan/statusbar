@@ -3,8 +3,8 @@
 
 const std = @import("std");
 const posix = std.posix;
-const sys = @import("../platform/sys.zig");
-const bar = @import("../render/bar.zig");
+const sys = @import("platform").sys;
+const bar = @import("render").bar;
 const Layout = @import("layout.zig").Layout;
 const Proxy = @import("proxy.zig").Proxy;
 const WriterSink = @import("buffers.zig").WriterSink;
@@ -144,7 +144,7 @@ test "palette filtering preserves CSI translation across fragmented input" {
     proxy.feedTerminalInput("[8;24;80t\x1b]11;rgb:1111/2222/3333\x1b");
     proxy.feedTerminalInput("\\keys\x1b[<0;3;24M");
     try std.testing.expectEqualStrings("\x1b[8;22;80tkeys", proxy.pending_input.pending());
-    try std.testing.expectEqualDeep(@import("../shared/color.zig").Rgb{ 17, 34, 51 }, renderer.palette.background.?);
+    try std.testing.expectEqualDeep(@import("shared").color.Rgb{ 17, 34, 51 }, renderer.palette.background.?);
 }
 
 test "completed palette discovery bypasses its copy stage" {

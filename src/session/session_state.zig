@@ -2,7 +2,7 @@
 //! This file is not a control channel: writing it cannot make statusbar act.
 
 const std = @import("std");
-const protocol = @import("../terminal/config_protocol.zig");
+const protocol = @import("terminal").config_protocol;
 const max_config = 64 * 1024;
 
 pub const State = struct {

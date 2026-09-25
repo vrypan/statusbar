@@ -3,7 +3,7 @@
 const std = @import("std");
 const posix = std.posix;
 const c = std.c;
-const sys = @import("../platform/sys.zig");
+const sys = @import("platform").sys;
 const stderr_fd = @import("proxy.zig").stderr_fd;
 const stdin_fd = @import("proxy.zig").stdin_fd;
 const stdout_fd = @import("proxy.zig").stdout_fd;
@@ -92,7 +92,7 @@ test "a status command that exits after closing stdout wakes the loop" {
     sig_pipe_w.store(sig_fds[1], .monotonic);
     installChildHandler();
 
-    const Command = @import("../model/status.zig").Command;
+    const Command = @import("model").status.Command;
     var command = try Command.init(std.testing.allocator, io, "exec >&-; sleep 0.2", 1000, 1, 80);
     defer command.deinit(io);
     command.tick(io, 0);

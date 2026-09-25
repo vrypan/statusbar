@@ -2,7 +2,7 @@
 //! Matrices: https://bottosson.github.io/posts/oklab/
 const std = @import("std");
 const styled = @import("styled_text.zig");
-const color = @import("../shared/color.zig");
+const color = @import("shared").color;
 const Rgb = color.Rgb;
 pub const steps: u8 = 40;
 pub const step_ms: i64 = 30;

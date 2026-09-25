@@ -18,12 +18,12 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stde
         try text.appendSlice(arena, word);
     }
     text.items.len = normalizeSlotText(text.items).len;
-    if (text.items.len > @import("../../shared/slots.zig").max_value) return common.usageError(stderr, command, "TEXT must be at most 1024 bytes");
+    if (text.items.len > @import("shared").slots.max_value) return common.usageError(stderr, command, "TEXT must be at most 1024 bytes");
 
     // Outside a session there is no bar to update, and nothing is written.
-    const env = @import("../../platform/environment.zig");
+    const env = @import("platform").environment;
     const line_count = if (env.get("STATUSBAR_STATE")) |state_path|
-        @import("../../session/session_state.zig").readLines(io, state_path) catch
+        @import("session").session_state.readLines(io, state_path) catch
             return common.usageError(stderr, command, "STATUSBAR_STATE is unavailable or malformed")
     else blk: {
         const line_text = env.get("STATUSBAR_LINES") orelse return 0;

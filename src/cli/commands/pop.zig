@@ -3,14 +3,14 @@ const std = @import("std");
 const Io = std.Io;
 const zecli = @import("zecli");
 const common = @import("../common.zig");
-const push_protocol = @import("../../session/push_protocol.zig");
+const push_protocol = @import("session").push_protocol;
 
 pub fn run(io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
     const id = if (command.positionals().len > 0)
         common.parseSlot(command.positionals()[0]) orelse return common.usageError(stderr, command, "ID must be a positive decimal integer")
     else
         null;
-    const token = @import("../../platform/environment.zig").get("STATUSBAR_SESSION_ID") orelse return common.usageError(stderr, command, "pop requires a running statusbar session");
+    const token = @import("platform").environment.get("STATUSBAR_SESSION_ID") orelse return common.usageError(stderr, command, "pop requires a running statusbar session");
     var path_buf: [96]u8 = undefined;
     var client = common.sessionClient(io, &path_buf) catch |err| {
         try stderr.print("statusbar: cannot connect to session: {t}\n", .{err});

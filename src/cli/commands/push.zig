@@ -3,16 +3,16 @@ const std = @import("std");
 const Io = std.Io;
 const zecli = @import("zecli");
 const common = @import("../common.zig");
-const push_stream = @import("../../session/push_stream.zig");
-const push_protocol = @import("../../session/push_protocol.zig");
+const push_stream = @import("session").push_stream;
+const push_protocol = @import("session").push_protocol;
 
 pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
     if (command.positionals().len != 0) return common.usageError(stderr, command, "use -- before a push command");
     const tag = command.getValue([]const u8, "tag") orelse "";
-    if (!@import("../../session/pushed_rows.zig").validTag(tag)) return common.usageError(stderr, command, "tag must be plain UTF-8 text of at most 128 bytes");
+    if (!@import("session").pushed_rows.validTag(tag)) return common.usageError(stderr, command, "tag must be plain UTF-8 text of at most 128 bytes");
     const child_argv = command.passthrough() orelse &.{};
     if (child_argv.len == 0 and (Io.File.stdin().isTty(io) catch false)) return common.usageError(stderr, command, "push input must be a pipe, file, or command after --");
-    const token = @import("../../platform/environment.zig").get("STATUSBAR_SESSION_ID") orelse return common.usageError(stderr, command, "push requires a running statusbar session");
+    const token = @import("platform").environment.get("STATUSBAR_SESSION_ID") orelse return common.usageError(stderr, command, "push requires a running statusbar session");
     var path_buf: [96]u8 = undefined;
     var client = common.sessionClient(io, &path_buf) catch |err| {
         try stderr.print("statusbar: cannot connect to session: {t}\n", .{err});
@@ -37,10 +37,10 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         const request = push_protocol.encode(&packet, token, .{ .pop = id }) catch "";
         if (request.len > 0) _ = client.request(request, &reply) catch {};
     };
-    var child_pipe: ?@import("../../platform/sys.zig").Fd = null;
+    var child_pipe: ?@import("platform").sys.Fd = null;
     var child: ?std.process.Child = null;
     if (child_argv.len > 0) {
-        const sys = @import("../../platform/sys.zig");
+        const sys = @import("platform").sys;
         var width_buf: [20]u8 = undefined;
         const width = try std.fmt.bufPrint(&width_buf, "{d}", .{command_columns});
         var child_env = try sys.environMap().clone(arena);
@@ -64,7 +64,7 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         child_pipe = pipe[0];
         remove_on_start_failure = false;
     }
-    defer if (child_pipe) |fd| @import("../../platform/sys.zig").close(io, fd);
+    defer if (child_pipe) |fd| @import("platform").sys.close(io, fd);
     push_stream.run(io, &client, token, id, child_pipe orelse 0) catch |err| {
         if (child) |*process| process.kill(io);
         try stderr.print("statusbar: push stream failed: {t}\n", .{err});

@@ -232,8 +232,9 @@ checks explicitly skip missing zsh/fish locally; release CI installs both.
 
 ## Source layout
 
-Each directory under `src/` is one layer. A file imports only from its own
-layer or the layers above it in this list:
+Each directory under `src/` is one layer, built as its own module from its
+`root.zig`. A file imports only from its own layer or the layers above it in
+this list:
 
 | Directory | Contents |
 |---|---|
@@ -247,8 +248,14 @@ layer or the layers above it in this list:
 | `cli/` | One file per subcommand in `commands/`, shell integration scripts in `shell/`; `main.zig` stays at the root of `src/` |
 
 `terminal/` and `render/` are independent of each other, as are `shared/` and
-`platform/`. `src/bench_internals.zig` exports what `src/tools/bench.zig`
-measures.
+`platform/`. `build.zig` lists the modules each layer may import, and the
+compiler enforces it: a layer cannot import a module it was not given, or
+reach another directory by path. Cross-layer imports name the module, as in
+`@import("render").bar`.
+
+Zig runs only the tests of a compilation's root module, so `zig build test`
+builds one test binary per layer. Each `root.zig` lists its files in a `test`
+block; a new file must be added there, or its tests will not run.
 
 ## Limitations
 

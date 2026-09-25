@@ -3,7 +3,7 @@
 const std = @import("std");
 const zunic = @import("zunic");
 
-pub const Color = @import("../shared/color.zig").Color;
+pub const Color = @import("shared").color.Color;
 pub const Style = struct {
     fg: Color = .default,
     bg: Color = .default,

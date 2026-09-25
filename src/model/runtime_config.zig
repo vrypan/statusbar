@@ -1,9 +1,9 @@
 //! One complete, replaceable statusbar runtime generation.
 
 const std = @import("std");
-const bar = @import("../render/bar.zig");
+const bar = @import("render").bar;
 const config = @import("config.zig");
-const markup = @import("../render/markup.zig");
+const markup = @import("render").markup;
 const Composition = @import("composition.zig").Composition;
 const Source = @import("source.zig").Source;
 
