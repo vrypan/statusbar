@@ -19,9 +19,10 @@ shell
 - Output is scanned for sequences that address absolute rows (CUP, HVP, VPA,
   DECSTBM), and rows past the child's screen are clamped so they never reach
   the bar. Everything else passes through as it arrives.
-- Erasures that reach the bar, RIS, DECSTR, DECALN and alternate-screen
-  switches trigger a repaint. A repaint that follows an erasure goes out in
-  the same write, so the terminal never shows a frame without the bar.
+- Erasures that reach the bar (ED and selective DECSED), RIS, DECSTR,
+  DECALN and alternate-screen switches trigger a repaint. A repaint that
+  follows an erasure goes out in the same write, so the terminal never shows
+  a frame without the bar.
 - Cursor position reports pass through unchanged, since the child's rows are
   numbered the same on both sides. The text-area size report (XTWINOPS 18)
   leaves out the bar's rows, and mouse reports aimed at the bar are not sent

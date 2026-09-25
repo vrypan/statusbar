@@ -594,16 +594,17 @@ pub const Output = struct {
                 'u' => if (count == 0) {
                     self.cursor_saved = false;
                 },
-                'J' => {
-                    sink.write(seq);
-                    const mode = if (count > 0) params[0] else 0;
-                    // Erasing below reaches the bar, and so does the whole
-                    // screen; erasing above does not.
-                    if (mode != 1) self.damaged = true;
-                    return;
-                },
                 else => {},
             }
+        }
+        if ((marker == 0 or marker == '?') and intermediates.len == 0 and final == 'J') {
+            // ED, and DECSED, which spares only protected cells and the bar
+            // has none. Erasing below reaches the bar, and so does the whole
+            // screen; erasing above does not.
+            sink.write(seq);
+            const mode = if (count > 0) params[0] else 0;
+            if (mode != 1) self.damaged = true;
+            return;
         } else if (marker == '?' and intermediates.len == 0 and (final == 'h' or final == 'l')) {
             sink.write(seq);
             var switched = false;
@@ -824,13 +825,13 @@ test "sequences inside strings are not rewritten" {
 }
 
 test "erasures that reach the bar and resets damage it" {
-    for ([_][]const u8{ "\x1b[1J", "\x1b[K", "\x1b[2K" }) |input| {
+    for ([_][]const u8{ "\x1b[1J", "\x1b[?1J", "\x1b[K", "\x1b[2K" }) |input| {
         var out: Output = .{ .bar = 1, .rows = 10 };
         const got = try translate(&out, input, 64);
         defer std.testing.allocator.free(got);
         try std.testing.expect(!out.damaged);
     }
-    for ([_][]const u8{ "\x1b[J", "\x1b[0J", "\x1b[2J", "\x1b[3J", "\x1b[?1049h", "\x1b[!p", "\x1b#8" }) |input| {
+    for ([_][]const u8{ "\x1b[J", "\x1b[0J", "\x1b[2J", "\x1b[3J", "\x1b[?J", "\x1b[?2J", "\x1b[?1049h", "\x1b[!p", "\x1b#8" }) |input| {
         var out: Output = .{ .bar = 1, .rows = 10 };
         const got = try translate(&out, input, 64);
         defer std.testing.allocator.free(got);
