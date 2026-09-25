@@ -42,6 +42,8 @@ Loading is transactional: an invalid config leaves the active bar in place.
 A successful replacement applies every
 setting, including its number of `[line.N]` sections. Existing numbered-slot
 overrides survive only where the same slot number exists in the new layout.
+Rows created by `statusbar push` stay below the configured rows with their
+IDs and content intact; they are separate from numbered slots.
 Configured commands restart and establish their first values without a change
 highlight. Because those commands are executable code, load trusted configs.
 

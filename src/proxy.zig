@@ -23,12 +23,16 @@ const osc7 = @import("osc7.zig");
 const Output = @import("output.zig").Output;
 const Input = @import("input.zig").Input;
 const bar = @import("bar.zig");
+const markup = @import("markup.zig");
 const config = @import("config.zig");
 const Source = @import("source.zig").Source;
 const Runtime = @import("runtime_config.zig").Runtime;
 const config_protocol = @import("config_protocol.zig");
 const SessionState = @import("session_state.zig").State;
 const PaletteProbe = @import("terminal_palette.zig").Probe;
+const PushedRows = @import("pushed_rows.zig").Rows;
+const PushedRow = @import("pushed_rows.zig").Row;
+const control = @import("session_control.zig");
 
 const io_buf_size = 64 * 1024;
 const pending_input_capacity = 64 * 1024;
@@ -119,6 +123,11 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     const session_token = config_protocol.makeToken(io);
     var session_state = try SessionState.init(io, runtime.lines, opts.config_text, session_token);
     defer session_state.deinit();
+    var control_path: [128]u8 = undefined;
+    var endpoint = try control.Endpoint.init(io, session_state.path(), &control_path);
+    defer endpoint.deinit();
+    var pushed: PushedRows = .{ .allocator = gpa };
+    defer pushed.deinit();
 
     var child_environment = try sys.environMap().clone(gpa);
     defer child_environment.deinit();
@@ -149,6 +158,8 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         .renderer = &runtime.renderer,
         .session_state = &session_state,
         .session_token = session_token,
+        .control_endpoint = &endpoint,
+        .pushed = &pushed,
     };
     defer proxy.releaseRows();
     try proxy.reserveRows(outer_ws.row);
@@ -376,6 +387,8 @@ const Proxy = struct {
     renderer: *bar.Renderer,
     session_state: *SessionState,
     session_token: [config_protocol.token_len]u8,
+    control_endpoint: *control.Endpoint = undefined,
+    pushed: *PushedRows = undefined,
 
     terminal: TerminalSink = undefined,
     pending_input: PendingInput = .{},
@@ -394,6 +407,7 @@ const Proxy = struct {
     /// background jobs still hold the pty open.
     child_status: ?sys.Wait = null,
     child_exited_ms: i64 = 0,
+    control_reply: [64]u8 = undefined,
 
     fn now(self: *const Proxy) i64 {
         return std.Io.Clock.now(.awake, self.io).toMilliseconds();
@@ -508,6 +522,155 @@ const Proxy = struct {
         self.pending_input.write(writer.buffered());
     }
 
+    fn composeRows(self: *Proxy, runtime: *Runtime, layout: Layout, invalidate: bool) !void {
+        var content = try bar.Content.init(self.gpa, layout.bar);
+        defer content.deinit();
+        const styles = try self.gpa.alloc([]const u8, layout.bar);
+        defer self.gpa.free(styles);
+        const rules = try self.gpa.alloc(?[]const u8, layout.bar);
+        defer self.gpa.free(rules);
+        var pushed_style_buf: [256]u8 = undefined;
+        const pushed_style = markup.barStyle(runtime.cfg.style orelse "", runtime.look.palette, &pushed_style_buf);
+        const configured = @min(@as(usize, layout.bar), @as(usize, runtime.lines));
+        const pushed_visible = @min(self.pushed.items.items.len, @as(usize, layout.bar) - configured);
+        for (0..configured) |n| {
+            _ = content.setTrackedLine(n, runtime.source.content.line(n), runtime.source.content.tracks[n]);
+            styles[n] = runtime.look.styles[n];
+            rules[n] = runtime.look.rules[n];
+        }
+        for (self.pushed.items.items[0..pushed_visible], configured..) |*row, n| {
+            var text: [bar.max_line_bytes]u8 = undefined;
+            const prefix = try std.fmt.bufPrint(&text, "[{d}]\t", .{row.id});
+            var rest = row.value();
+            if (rest.len > text.len - prefix.len) {
+                rest = rest[rest.len - (text.len - prefix.len) ..];
+                while (rest.len > 0 and rest[0] & 0xc0 == 0x80) rest = rest[1..];
+            }
+            @memcpy(text[prefix.len..][0..rest.len], rest);
+            var len = prefix.len + rest.len;
+            while (!std.unicode.utf8ValidateSlice(text[0..len]) and len > prefix.len) : (len -= 1) {}
+            _ = content.setTrackedLine(n, text[0..len], .{ .literal = .{ true, true } });
+            styles[n] = pushed_style;
+            rules[n] = null;
+        }
+        for (configured + pushed_visible..layout.bar) |n| {
+            styles[n] = pushed_style;
+            rules[n] = null;
+        }
+        const look: bar.Look = .{ .styles = styles, .rules = rules, .palette = runtime.look.palette };
+        if (invalidate) try runtime.renderer.relayout(&content, &look) else try runtime.renderer.acceptContent(&content, &look);
+    }
+
+    fn resizeForPushedRows(self: *Proxy, now_ms: i64) !void {
+        const outer = try sys.getWinsize(stdin_fd);
+        const count = @as(usize, self.runtime.lines) + self.pushed.items.items.len;
+        if (count > 65533) return error.RowLimit;
+        const old = self.layout;
+        const next = Layout.of(outer, @intCast(count));
+        try self.runtime.renderer.resize(next.bar, next.cols);
+        errdefer {
+            self.layout = old;
+            self.runtime.renderer.resize(old.bar, old.cols) catch {};
+            self.composeRows(self.runtime, old, true) catch {};
+            self.output.damaged = true;
+            self.requestPaint(now_ms);
+        }
+        try self.composeRows(self.runtime, next, true);
+        self.makeRoomForGrowth(old, next);
+        self.eraseRows(old);
+        self.layout = next;
+        try sys.setWinsize(self.master, &next.child);
+        self.output.resize(next.bar, next.child.row);
+        self.input.bar = next.bar;
+        self.input.rows = next.child.row;
+        self.output.damaged = true;
+        self.requestPaint(now_ms);
+    }
+
+    fn controlRequest(self: *Proxy, packet: []const u8, owner: []const u8, now_ms: i64) []const u8 {
+        var parts = std.mem.splitScalar(u8, packet, '|');
+        if (!std.mem.eql(u8, parts.next() orelse return "ERR", "1")) return "ERR";
+        const token = parts.next() orelse return "ERR";
+        if (!std.mem.eql(u8, token, &self.session_token)) return "ERR";
+        const operation = parts.next() orelse return "ERR";
+        if (std.mem.eql(u8, operation, "C")) {
+            if (parts.next() != null or @as(usize, self.runtime.lines) + self.pushed.items.items.len >= 65533) return "ERR";
+            const id = self.pushed.push(owner) catch return "ERR";
+            self.resizeForPushedRows(now_ms) catch {
+                _ = self.pushed.pop(id);
+                self.pushed.next_id = id;
+                return "ERR";
+            };
+            var response: [64]u8 = undefined;
+            const result = std.fmt.bufPrint(&response, "OK|{d}", .{id}) catch return "ERR";
+            // The caller must send this response before returning from its stack frame.
+            return self.controlReply(result);
+        }
+        const id_text = parts.next() orelse return "ERR";
+        const id = std.fmt.parseInt(u64, id_text, 10) catch return "ERR";
+        if (id == 0 or id >= self.pushed.next_id) return "ERR";
+        if (std.mem.eql(u8, operation, "U")) {
+            if (!self.pushed.ownedBy(id, owner)) return "ERR";
+            const encoded = parts.next() orelse return "ERR";
+            if (parts.next() != null) return "ERR";
+            var decoded: [1024]u8 = undefined;
+            const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(encoded) catch return "ERR";
+            if (decoded_len > decoded.len) return "ERR";
+            std.base64.standard.Decoder.decode(decoded[0..decoded_len], encoded) catch return "ERR";
+            var before: ?PushedRow = null;
+            for (self.pushed.items.items) |row| if (row.id == id) {
+                before = row;
+                break;
+            };
+            if (self.pushed.update(id, decoded[0..decoded_len])) {
+                self.composeRows(self.runtime, self.layout, false) catch {
+                    for (self.pushed.items.items) |*row| if (row.id == id) {
+                        row.* = before.?;
+                        break;
+                    };
+                    self.composeRows(self.runtime, self.layout, true) catch {};
+                    return "ERR";
+                };
+                self.requestPaint(now_ms);
+            }
+            return "OK";
+        }
+        if (parts.next() != null) return "ERR";
+        if (std.mem.eql(u8, operation, "F")) return if (self.pushed.ownedBy(id, owner) or !self.pushed.exists(id)) "OK" else "ERR";
+        if (std.mem.eql(u8, operation, "P")) {
+            for (self.pushed.items.items, 0..) |row, index| {
+                if (row.id != id) continue;
+                _ = self.pushed.pop(id);
+                self.resizeForPushedRows(now_ms) catch {
+                    self.pushed.items.insert(self.gpa, index, row) catch unreachable;
+                    self.composeRows(self.runtime, self.layout, true) catch {};
+                    return "ERR";
+                };
+                break;
+            }
+            return "OK";
+        }
+        return "ERR";
+    }
+
+    fn controlReply(self: *Proxy, value: []const u8) []const u8 {
+        @memcpy(self.control_reply[0..value.len], value);
+        return self.control_reply[0..value.len];
+    }
+
+    fn drainControl(self: *Proxy, now_ms: i64) void {
+        for (0..16) |_| {
+            var packet: [control.max_packet]u8 = undefined;
+            var from: control.Address = undefined;
+            var from_len: c.socklen_t = undefined;
+            const message = self.control_endpoint.receive(&packet, &from, &from_len) orelse break;
+            const owner = std.mem.sliceTo(&from.path, 0);
+            const reply = self.controlRequest(message, owner, now_ms);
+            // Updates do not need responses. Acknowledged operations do.
+            if (std.mem.indexOf(u8, message, "|U|") == null) self.control_endpoint.reply(&from, from_len, reply);
+        }
+    }
+
     fn replaceConfig(self: *Proxy, text: []const u8, now_ms: i64, diag: *config.Diagnostic) !void {
         const outer = sys.getWinsize(stdin_fd) catch return error.TerminalSizeUnavailable;
         var candidate = try Runtime.initText(self.gpa, self.io, text, outer.row, outer.col, diag);
@@ -521,7 +684,11 @@ const Proxy = struct {
         var pending_state = try self.session_state.prepare(candidate.lines, text);
         defer pending_state.deinit(self.io);
         const old_layout = self.layout;
-        const new_layout = Layout.of(outer, candidate.lines);
+        const total_lines = @as(usize, candidate.lines) + self.pushed.items.items.len;
+        if (total_lines > 65533) return error.RowLimit;
+        const new_layout = Layout.of(outer, @intCast(total_lines));
+        try candidate.renderer.resize(new_layout.bar, new_layout.cols);
+        try self.composeRows(&candidate, new_layout, true);
         self.makeRoomForGrowth(old_layout, new_layout);
         self.eraseRows(old_layout);
         self.layout = new_layout;
@@ -666,16 +833,19 @@ const Proxy = struct {
             .{ .fd = stdin_fd, .events = posix.POLL.IN, .revents = 0 },
             .{ .fd = self.master, .events = posix.POLL.IN, .revents = 0 },
             .{ .fd = sig_r, .events = posix.POLL.IN, .revents = 0 },
+            .{ .fd = self.control_endpoint.fd, .events = posix.POLL.IN, .revents = 0 },
         } ++ [_]posix.pollfd{undefined} ** config.max_commands;
         const in = &fds[0];
         const out = &fds[1];
         const sig = &fds[2];
+        const ctl = &fds[3];
 
         while (true) {
             in.fd = if (stdin_open and self.pending_input.room() > in_buf.len + input_headroom) stdin_fd else -1;
             out.events = posix.POLL.IN;
             if (self.pending_input.len > 0) out.events |= posix.POLL.OUT;
-            const command_fds = self.runtime.source.pollFds(fds[3..]);
+            ctl.fd = if (self.output.atBoundary() and !self.output.cursor_saved) self.control_endpoint.fd else -1;
+            const command_fds = self.runtime.source.pollFds(fds[4..]);
 
             var now_ms = self.now();
             var timeout = minTimeout(self.paintTimeout(now_ms), self.runtime.source.timeout(now_ms));
@@ -685,7 +855,7 @@ const Proxy = struct {
             if (self.held_config_len != null and self.output.atBoundary()) timeout = minTimeout(timeout, @max(self.last_output_ms + paint_quiet_ms - now_ms, 0));
             if (self.palette_probe.holding()) timeout = minTimeout(timeout, @max(self.last_input_ms + input_hold_ms - now_ms, 0));
             if (self.input.holding()) timeout = minTimeout(timeout, @max(self.last_input_ms + input_hold_ms - now_ms, 0));
-            _ = posix.poll(fds[0 .. 3 + command_fds.len], @intCast(@min(timeout, std.math.maxInt(c_int)))) catch return;
+            _ = posix.poll(fds[0 .. 4 + command_fds.len], @intCast(@min(timeout, std.math.maxInt(c_int)))) catch return;
             now_ms = self.now();
             if (self.palette_deadline_ms) |deadline| {
                 if (now_ms >= deadline) {
@@ -696,6 +866,7 @@ const Proxy = struct {
             if (sig.revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
                 try self.drainSignals(sig_r, pid, now_ms);
             }
+            if (ctl.fd >= 0 and ctl.revents & posix.POLL.IN != 0) self.drainControl(now_ms);
 
             var runtime_replaced = false;
             if (out.revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
@@ -764,9 +935,9 @@ const Proxy = struct {
             if (!runtime_replaced) {
                 const source_update = self.runtime.source.update(command_fds, now_ms);
                 if (source_update.content_changed) {
-                    try self.runtime.renderer.acceptContent(&self.runtime.source.content, &self.runtime.look);
+                    try self.composeRows(self.runtime, self.layout, false);
                     if (!self.runtime.silent_baseline) {
-                        for (0..self.runtime.renderer.rows.len) |row| for (0..2) |side| {
+                        for (0..@min(self.runtime.renderer.rows.len, @as(usize, self.runtime.lines))) |row| for (0..2) |side| {
                             const slot = row * 2 + side;
                             if (self.runtime.source.slotContentEligible(slot, source_update.baseline, source_update.override_events)) self.runtime.renderer.highlightChange(row, side, now_ms);
                         };
@@ -774,7 +945,7 @@ const Proxy = struct {
                     self.runtime.silent_baseline = false;
                     self.requestPaint(now_ms);
                 }
-                for (0..self.runtime.renderer.rows.len) |row| for (0..2) |side| {
+                for (0..@min(self.runtime.renderer.rows.len, @as(usize, self.runtime.lines))) |row| for (0..2) |side| {
                     const slot = row * 2 + side;
                     if (self.runtime.source.override_lens[slot] != null or (slot < 32 and source_update.override_events & (@as(u32, 1) << @intCast(slot)) != 0)) self.runtime.renderer.cancelHighlight(row, side);
                 };
@@ -840,7 +1011,7 @@ const Proxy = struct {
         if (!resized) return;
         const ws = sys.getWinsize(stdin_fd) catch return;
         const width_changed = ws.col != self.layout.cols;
-        self.layout = Layout.of(ws, self.runtime.lines);
+        self.layout = Layout.of(ws, @intCast(@as(usize, self.runtime.lines) + self.pushed.items.items.len));
         sys.setWinsize(self.master, &self.layout.child) catch {};
         self.output.resize(self.layout.bar, self.layout.child.row);
         self.input.bar = self.layout.bar;
@@ -850,7 +1021,7 @@ const Proxy = struct {
             self.runtime.source.refreshGeometry(now_ms);
         }
         try self.runtime.renderer.resize(self.layout.bar, self.layout.cols);
-        try self.runtime.renderer.relayout(&self.runtime.source.content, &self.runtime.look);
+        try self.composeRows(self.runtime, self.layout, true);
         // Terminals drop the margins on resize; put them back before the
         // child redraws, if the stream allows it right now.
         self.requestPaint(now_ms);

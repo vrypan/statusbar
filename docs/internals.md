@@ -40,6 +40,10 @@ shell
   than statusbar measured is clipped at the right edge rather than wrapping.
 - Numbered `StatusBarSlotN` and `StatusBarSlotLiteralN` user variables are taken out of the
   output stream; see [set.md](set.md).
+- Pushed rows are session-owned and survive config replacement. A private local
+  datagram socket authenticates and acknowledges row creation and removal;
+  bounded stream updates use the same literal text rules as `set SLOT -`.
+  Their IDs and content are separate from configured slot numbering.
 - Exact OSC 3110 `STATUSBAR` messages are also taken out of the output stream.
   A session token authenticates complete `CONFIG` replacement requests. The
   streaming parser stops at each request boundary so config and slot updates

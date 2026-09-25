@@ -561,6 +561,7 @@ fn placeSnapshot(row: *cells.Row, snapshot: cells.Row, start: usize, width: usiz
         row.put(start + col, .{ .bytes = cell.glyph.get(snapshot.data.items), .columns = cell.width, .style = cell.style, .link = .{ .params = cell.params.get(snapshot.data.items), .uri = cell.uri.get(snapshot.data.items) }, .region = cell.region }, cell.owner);
     }
 }
+
 // The target gets the final layout's available capacity, including unused
 // columns after a short value. Both versions are projected into this budget.
 fn regionCapacity(row: cells.Row, id: u4, capacity: usize) usize {

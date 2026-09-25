@@ -5,6 +5,7 @@ const posix = std.posix;
 const zunic = @import("zunic");
 const sys = @import("sys.zig");
 const max_value = @import("output.zig").max_value;
+const control = @import("session_control.zig");
 
 pub const State = struct {
     line: [max_value]u8 = undefined,
@@ -93,6 +94,8 @@ const Sender = struct {
     io: Io,
     tty: Io.File,
     slot: usize,
+    input_fd: sys.Fd = 0,
+    pushed: ?struct { client: *control.Client, token: []const u8, id: u64 } = null,
     state: State = .{},
     reader: Io.Reader,
     input: [4096]u8 = undefined,
@@ -112,8 +115,13 @@ const Sender = struct {
         var encoded: [encoder.calcSize(max_value)]u8 = undefined;
         _ = encoder.encode(encoded[0..encoder.calcSize(value.len)], value);
         var frame: [1500]u8 = undefined;
-        const sequence = std.fmt.bufPrint(&frame, "\x1b]1337;SetUserVar=StatusBarSlotLiteral{d}={s}\x07", .{ self.slot, encoded[0..encoder.calcSize(value.len)] }) catch return error.Stream;
-        self.tty.writeStreamingAll(self.io, sequence) catch return error.Stream;
+        if (self.pushed) |push| {
+            const sequence = std.fmt.bufPrint(&frame, "1|{s}|U|{d}|{s}", .{ push.token, push.id, encoded[0..encoder.calcSize(value.len)] }) catch return error.Stream;
+            push.client.send(sequence) catch return error.Stream;
+        } else {
+            const sequence = std.fmt.bufPrint(&frame, "\x1b]1337;SetUserVar=StatusBarSlotLiteral{d}={s}\x07", .{ self.slot, encoded[0..encoder.calcSize(value.len)] }) catch return error.Stream;
+            self.tty.writeStreamingAll(self.io, sequence) catch return error.Stream;
+        }
         self.state.markSent(now_ms);
     }
 
@@ -132,7 +140,7 @@ const Sender = struct {
                 self.drained_due_once = false;
                 continue;
             }
-            var fds = [_]posix.pollfd{.{ .fd = 0, .events = posix.POLL.IN, .revents = 0 }};
+            var fds = [_]posix.pollfd{.{ .fd = self.input_fd, .events = posix.POLL.IN, .revents = 0 }};
             const ready = posix.poll(&fds, @intCast(if (timeout < 0) -1 else @min(timeout, std.math.maxInt(c_int)))) catch {
                 return error.ReadFailed;
             };
@@ -144,7 +152,7 @@ const Sender = struct {
                 return error.ReadFailed;
             }
             const dest = limit.slice(writer.writableSliceGreedy(1) catch return error.WriteFailed);
-            const n = sys.read(0, dest) catch {
+            const n = sys.read(self.input_fd, dest) catch {
                 return error.ReadFailed;
             };
             if (n == 0) {
@@ -166,6 +174,22 @@ pub fn run(io: Io, tty: Io.File, slot: usize) error{Stream}!void {
         .slot = slot,
         .reader = .{ .vtable = &.{ .stream = Sender.stream }, .buffer = undefined, .seek = 0, .end = 0 },
     };
+    try runSender(&sender);
+}
+
+pub fn runPush(io: Io, client: *control.Client, token: []const u8, id: u64, input_fd: sys.Fd) error{Stream}!void {
+    var sender: Sender = .{
+        .io = io,
+        .tty = undefined,
+        .slot = 0,
+        .input_fd = input_fd,
+        .pushed = .{ .client = client, .token = token, .id = id },
+        .reader = .{ .vtable = &.{ .stream = Sender.stream }, .buffer = undefined, .seek = 0, .end = 0 },
+    };
+    try runSender(&sender);
+}
+
+fn runSender(sender: *Sender) error{Stream}!void {
     sender.reader.buffer = &sender.input;
     var updates = zunic.reader(&sender.reader).graphemes();
     while (true) {

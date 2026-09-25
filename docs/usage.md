@@ -3,6 +3,9 @@
 ```
 statusbar [run] [options] [-- COMMAND...]
 statusbar set <SLOT> [TEXT...]
+statusbar push
+statusbar push -- <COMMAND> [ARG...]
+statusbar pop <ID>
 statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
 statusbar config [--print [default|startup|current]] [--default] [--path]
 statusbar completion <bash|zsh|fish>
@@ -65,6 +68,16 @@ text display literally; one-shot TEXT supports statusbar markup. See [set.md](se
 for line boundaries, pacing, and progress examples.
 
 See [set.md](set.md) for formatting and more examples.
+
+## `push` and `pop`
+
+`command | statusbar push` appends a row with a visible ID and streams the
+latest line of input into it. When input ends, it prints the ID to stdout and
+leaves the final result displayed. `statusbar pop ID` removes that row, even
+if its stream is still active. See [pushing rows](push.md) for examples and
+limits. Pushed rows do not have numbered slots and survive config replacement.
+`statusbar push -- command` starts the command with `COLUMNS` set to the width
+beside the ID, streams its stdout and stderr, and returns its exit status.
 
 ## `init`
 

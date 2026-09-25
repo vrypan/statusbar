@@ -21,6 +21,7 @@ This guide calls the visible parts of the bar *rows*. In a config file, each
 | Change layouts without restarting the shell | [Load another config](#load-another-config) |
 | Notice when a command's value changes | [Highlight changed values](#highlight-changed-values) |
 | Show changing directory or Git context | [Update slots from your shell](#put-live-context-in-a-slot) |
+| Give a command its own temporary row | [Push a stream into a row](push.md) |
 | Move Starship's details out of the prompt | [Use Starship](#use-starship) |
 | Try a more visual look | [Try a theme](#try-a-theme) |
 | See an everyday setup with actual configs | [How I use statusbar](how-i-use-statusbar.md) |
@@ -276,6 +277,7 @@ before comparing timings; a single warm frame does not predict first-use cost.
 - [Usage](usage.md) — commands, options, completions, generated configs, and environment.
 - [Configuration](config.md) — rows, commands, change highlights, colors, markup, and rules.
 - [Updating slots](set.md) — runtime updates from scripts and the terminal protocol.
+- [Pushing rows](push.md) — stream output into a new row and remove it by ID.
 - [Starship](starship.md) — prompt integration and customization.
 - [Display and animation model](display-model.md) — content updates, animation
   ticks, composed frames, and terminal paints.

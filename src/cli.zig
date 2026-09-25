@@ -90,6 +90,27 @@ const commands = [_]zecli.CommandSpec{
         },
     },
     .{
+        .name = "push",
+        .description = "Show a stream in a new status bar row",
+        .usage = "statusbar push [-- <COMMAND> [ARG...]]",
+        .extra_help =
+        \\Read stdin from a pipe or file, or run a command after --.
+        \\A command receives COLUMNS set to the row width beside its ID;
+        \\both stdout and stderr are streamed into the row.
+        \\The final value stays visible after input ends. It prints the ID
+        \\on stdout at EOF; use `statusbar pop ID` to remove the row.
+        \\Command mode exits with the command's status.
+        ++ "\n",
+        .examples = &.{ "tail -n 0 -f app.log | statusbar push &", "statusbar push -- curl --progress-bar -o /dev/null URL", "id=$(printf 'Done\\n' | statusbar push)" },
+    },
+    .{
+        .name = "pop",
+        .description = "Remove a row created by push",
+        .usage = "statusbar pop <ID>",
+        .arguments = &.{.{ .name = "ID", .description = "ID shown at the start of the row", .required = true }},
+        .examples = &.{"statusbar pop 7"},
+    },
+    .{
         .name = "init",
         .description = "Print shell setup for Starship and directory titles",
         .usage = "statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]",

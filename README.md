@@ -12,6 +12,7 @@ working.
 - Wrap values in `#[track]...#[notrack]` to pulse just those regions when
   their displayed content changes, using their own colors and terminal palette.
 - Update it from your scripts with `statusbar set`.
+- Give a command its own row with `statusbar push -- command`, then remove it with `statusbar pop ID`.
 - Optionally move Starship's prompt details into it while keeping the prompt
   character in the terminal.
 
@@ -75,6 +76,7 @@ For Nushell, copy [samples/statusbar.nu](samples/statusbar.nu) to
 Start with the [user guide](docs/README.md) for a practical setup: one-command
 bars, personal layouts, live slots, Starship, and themes. Reference guides
 cover [configuration](docs/config.md), [runtime slot updates](docs/set.md),
+[temporary rows](docs/push.md),
 [Starship](docs/starship.md), and [internals and limitations](docs/internals.md).
 
 ## How I use statusbar

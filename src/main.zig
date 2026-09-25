@@ -60,6 +60,8 @@ pub fn main(init: std.process.Init) !u8 {
     return switch (try command.as(cli.CommandName)) {
         .run => runSession(arena, init.io, command, stderr),
         .set => setSlot(arena, init.io, args[1..], command, stderr),
+        .push => pushRow(arena, init.io, command, stdout, stderr),
+        .pop => popRow(init.io, command, stderr),
         .init => shellInit(arena, init.io, args[0], command, stdout, stderr),
         .config => printConfig(arena, init.io, command, stdout, stderr, help_output),
         .completion => printCompletion(command, stdout, stderr),
@@ -286,6 +288,125 @@ fn setSlot(arena: std.mem.Allocator, io: Io, raw_args: []const []const u8, comma
 }
 
 const slot_stream = @import("slot_stream.zig");
+const control = @import("session_control.zig");
+
+fn sessionClient(io: Io, path_buf: *[96]u8) !control.Client {
+    const path = @import("environment.zig").get("STATUSBAR_STATE") orelse return error.NoSession;
+    return control.Client.init(io, path, path_buf);
+}
+
+fn pushRow(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
+    if (command.positionals().len != 0) return usageError(stderr, command, "use -- before a push command");
+    const child_argv = command.passthrough() orelse &.{};
+    if (child_argv.len == 0 and (Io.File.stdin().isTty(io) catch false)) return usageError(stderr, command, "push input must be a pipe, file, or command after --");
+    const token = @import("environment.zig").get("STATUSBAR_SESSION_ID") orelse return usageError(stderr, command, "push requires a running statusbar session");
+    var path_buf: [96]u8 = undefined;
+    var client = sessionClient(io, &path_buf) catch |err| {
+        try stderr.print("statusbar: cannot connect to session: {t}\n", .{err});
+        try stderr.flush();
+        return 1;
+    };
+    defer client.deinit();
+    var packet: [128]u8 = undefined;
+    var reply: [128]u8 = undefined;
+    const created = client.request(try std.fmt.bufPrint(&packet, "1|{s}|C", .{token}), &reply) catch |err| {
+        try stderr.print("statusbar: cannot create row: {t}\n", .{err});
+        try stderr.flush();
+        return 1;
+    };
+    if (!std.mem.startsWith(u8, created, "OK|")) return usageError(stderr, command, "the session rejected push");
+    const id = std.fmt.parseInt(u64, created[3..], 10) catch return usageError(stderr, command, "invalid row ID from session");
+    var remove_on_start_failure = child_argv.len > 0;
+    defer if (remove_on_start_failure) {
+        const request = std.fmt.bufPrint(&packet, "1|{s}|P|{d}", .{ token, id }) catch "";
+        if (request.len > 0) _ = client.request(request, &reply) catch {};
+    };
+    var child_pipe: ?@import("sys.zig").Fd = null;
+    var child: ?std.process.Child = null;
+    if (child_argv.len > 0) {
+        const sys = @import("sys.zig");
+        const tty = Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .read_only }) catch |err| {
+            try stderr.print("statusbar: cannot measure terminal width: {t}\n", .{err});
+            try stderr.flush();
+            return 1;
+        };
+        defer tty.close(io);
+        const size = sys.getWinsize(tty.handle) catch {
+            try stderr.writeAll("statusbar: cannot measure terminal width\n");
+            try stderr.flush();
+            return 1;
+        };
+        var width_buf: [20]u8 = undefined;
+        const prefix_width = std.fmt.count("[{d}] ", .{id});
+        const available = @max(1, @as(usize, size.col) -| prefix_width);
+        const width = try std.fmt.bufPrint(&width_buf, "{d}", .{available});
+        var child_env = try sys.environMap().clone(arena);
+        defer child_env.deinit();
+        try child_env.put("COLUMNS", width);
+        const pipe = try Io.Threaded.pipe2(.{ .CLOEXEC = true });
+        const output_file: Io.File = .{ .handle = pipe[1], .flags = .{ .nonblocking = false } };
+        child = std.process.spawn(io, .{
+            .argv = child_argv,
+            .environ_map = &child_env,
+            .stdout = .{ .file = output_file },
+            .stderr = .{ .file = output_file },
+        }) catch |err| {
+            sys.close(io, pipe[0]);
+            sys.close(io, pipe[1]);
+            try stderr.print("statusbar: cannot start command: {t}\n", .{err});
+            try stderr.flush();
+            return 1;
+        };
+        sys.close(io, pipe[1]);
+        child_pipe = pipe[0];
+        remove_on_start_failure = false;
+    }
+    defer if (child_pipe) |fd| @import("sys.zig").close(io, fd);
+    slot_stream.runPush(io, &client, token, id, child_pipe orelse 0) catch |err| {
+        if (child) |*process| process.kill(io);
+        try stderr.print("statusbar: push stream failed: {t}\n", .{err});
+        try stderr.flush();
+        return 1;
+    };
+    const child_status: u8 = if (child) |*process| blk: {
+        const term = try process.wait(io);
+        break :blk switch (term) {
+            .exited => |code| code,
+            .signal => |signal| @as(u8, @intCast(128 + @intFromEnum(signal))),
+            else => 1,
+        };
+    } else 0;
+    const finished = client.request(try std.fmt.bufPrint(&packet, "1|{s}|F|{d}", .{ token, id }), &reply) catch |err| {
+        try stderr.print("statusbar: cannot finish row: {t}\n", .{err});
+        try stderr.flush();
+        return 1;
+    };
+    if (!std.mem.eql(u8, finished, "OK")) return usageError(stderr, command, "the session rejected the final value");
+    try stdout.print("{d}\n", .{id});
+    try stdout.flush();
+    return child_status;
+}
+
+fn popRow(io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
+    const id = parseSlot(command.positionals()[0]) orelse return usageError(stderr, command, "ID must be a positive decimal integer");
+    const token = @import("environment.zig").get("STATUSBAR_SESSION_ID") orelse return usageError(stderr, command, "pop requires a running statusbar session");
+    var path_buf: [96]u8 = undefined;
+    var client = sessionClient(io, &path_buf) catch |err| {
+        try stderr.print("statusbar: cannot connect to session: {t}\n", .{err});
+        try stderr.flush();
+        return 1;
+    };
+    defer client.deinit();
+    var packet: [128]u8 = undefined;
+    var reply: [128]u8 = undefined;
+    const answer = client.request(try std.fmt.bufPrint(&packet, "1|{s}|P|{d}", .{ token, id }), &reply) catch |err| {
+        try stderr.print("statusbar: cannot remove row: {t}\n", .{err});
+        try stderr.flush();
+        return 1;
+    };
+    if (!std.mem.eql(u8, answer, "OK")) return usageError(stderr, command, "ID does not belong to this session");
+    return 0;
+}
 
 fn streamSlotMode(raw_args: []const []const u8, args: []const []const u8) bool {
     if (args.len != 2 or !std.mem.eql(u8, args[1], "-")) return false;

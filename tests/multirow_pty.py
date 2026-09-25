@@ -1352,6 +1352,90 @@ def check_background_job_exit(binary):
     print("a background job holding the pty does not keep the session open")
 
 
+def check_push_pop(binary):
+    child = r'''
+import os, subprocess, sys, time
+b = sys.argv[1]
+def run(*args, **kwargs):
+    result = subprocess.run([b, *args], capture_output=True, **kwargs)
+    assert result.returncode == 0, (args, result.returncode, result.stderr)
+    return result.stdout
+first = run('push', input=b'partial\rfirst final\n').strip()
+second = run('push', input='Καλημέρα ## #[bold]'.encode()).strip()
+assert first == b'1' and second == b'2', (first, second)
+with open(os.environ['STATUSBAR_STATE'], 'rb') as state:
+    state.readline()
+    assert state.readline() == b'lines 1\n'
+print('PUSHED_TWO', flush=True)
+run('config', input=b'[line.1]\nleft = reloaded\n[line.2]\nright = new\n')
+time.sleep(.1)
+run('pop', first.decode())
+assert run('pop', first.decode()) == b''
+print('POPPED_FIRST', flush=True)
+p = subprocess.Popen([b, 'push'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+p.stdin.write(b'in progress')
+p.stdin.flush()
+time.sleep(1.0)
+run('pop', '3')
+p.stdin.write(b'\rfinished')
+p.stdin.close()
+assert p.wait(timeout=4) == 0, p.stderr.read()
+assert p.stdout.read() == b'3\n'
+simultaneous = [subprocess.Popen([b, 'push'], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                for _ in range(2)]
+for stream, value in zip(simultaneous, (b'left', b'right')):
+    stream.stdin.write(value)
+    stream.stdin.close()
+ids = []
+for stream in simultaneous:
+    assert stream.wait(timeout=5) == 0, stream.stderr.read()
+    ids.append(stream.stdout.read().strip())
+assert set(ids) == {b'4', b'5'}, ids
+for row_id in ids:
+    run('pop', row_id.decode())
+empty = run('push', input=b'').strip()
+assert empty == b'6', empty
+run('pop', empty.decode())
+wide = run('push', input=b'#' * 74 + b' 99.9%').strip()
+assert wide == b'7', wide
+time.sleep(.1)
+run('pop', wide.decode())
+command = subprocess.run([b, 'push', '--', sys.executable, '-c',
+                          'import os,sys; '
+                          'sys.stdout.write("started\\n"); sys.stdout.flush(); '
+                          'w=int(os.environ["COLUMNS"]); '
+                          'sys.stderr.write("#" * (w-6) + " 99.9%\\r"); '
+                          'sys.exit(7 if w==76 else 9)'], capture_output=True)
+assert command.returncode == 7, (command.returncode, command.stderr)
+assert command.stdout == b'8\n', command.stdout
+assert command.stderr == b'', command.stderr
+time.sleep(.1)
+run('pop', '8')
+assert run('pop', second.decode()) == b''
+wrong = os.environ.copy()
+wrong['STATUSBAR_SESSION_ID'] = '0' * 32
+assert subprocess.run([b, 'pop', '2'], env=wrong, capture_output=True).returncode != 0
+print('PUSH_POP_OK', flush=True)
+'''
+    config = b'[line.1]\nleft = configured\n'
+    with tempfile.NamedTemporaryFile(delete=False) as cfg:
+        cfg.write(config)
+        path = cfg.name
+    try:
+        code, data = capture_pty([binary, '-c', path, '--', sys.executable,
+                                  '-c', child, binary], timeout=12)
+        assert code == 0 and b'PUSH_POP_OK' in data, data[-2500:]
+        assert b'[1]' in data and b'first final' in data, data[-2500:]
+        assert b'[2]' in data and 'Καλημέρα ## #[bold]'.encode() in data, data[-2500:]
+        assert b'reloaded' in data and b'[3]' in data and b'in progress' in data, data[-700:]
+        assert b'[7]' in data, data[-700:]
+        assert b'[8]' in data and b'99.9%' in data, data[-700:]
+    finally:
+        os.unlink(path)
+    print('push/pop streams, command width, stable IDs, reloads, active removal, and authentication passed')
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: multirow_pty.py STATUSBAR")
@@ -1390,6 +1474,7 @@ def main():
     check_osc_config(binary)
     check_theme_growth(binary)
     check_background_job_exit(binary)
+    check_push_pop(binary)
     config = """\
 [line.1]
 left = one
