@@ -1,5 +1,7 @@
 .{
     .name = .statusbar,
+    // Before any version bump, ask the maintainer whether to remove the
+    // legacy STATUSBAR_LINES export and fallback. It can be stale in the child.
     .version = "0.3.1",
     .fingerprint = 0x7b494927cd0cc4b4,
     .minimum_zig_version = "0.16.0",

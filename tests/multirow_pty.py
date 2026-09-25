@@ -24,6 +24,14 @@ def resize(fd, rows, cols=80):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
+def session_state_stub(directory, lines):
+    """Give shell integration tests a current row count without a full proxy."""
+    path = os.path.join(directory, f"statusbar-state-{lines}")
+    with open(path, "w", encoding="ascii") as state:
+        state.write(f"statusbar-state 2\nlines {lines}\n")
+    return path
+
+
 def read_until(fd, data, needle, timeout=5):
     deadline = time.monotonic() + timeout
     while needle not in data:
@@ -315,7 +323,7 @@ def check_slot_stream(binary):
 
 def check_init_invocation(binary):
     env = os.environ.copy()
-    env["STATUSBAR_LINES"] = "2"
+    env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
     with tempfile.TemporaryDirectory() as directory:
         stable = os.path.join(directory, "statusbar")
         os.symlink(binary, stable)
@@ -334,6 +342,13 @@ def check_init_invocation(binary):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
         )
         assert b"command 'statusbar' set" in by_name.stdout
+
+    lines_only = env.copy()
+    lines_only.pop("STATUSBAR_STATE")
+    lines_only["STATUSBAR_LINES"] = "2"
+    outside = subprocess.run([binary, "init", "zsh"], env=lines_only,
+                             capture_output=True, check=True)
+    assert outside.stdout == b"", outside
 
     print("shell init preserves upgrade-safe invocation paths")
 
@@ -450,6 +465,7 @@ def check_zsh(binary):
 
     env = os.environ.copy()
     env["STATUSBAR_LINES"] = "3"
+    env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
     quoted_binary = shlex.quote(binary)
     for bad in ("+1", "-1", "zero", "0", "999999999999999999999999999999"):
         result = subprocess.run(
@@ -477,9 +493,8 @@ def check_zsh(binary):
         [binary, "init", "zsh", "--starship-slot", "1"], env=zero_env,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
     )
-    assert zero.returncode == 2
-    assert zero.stdout == b""
-    assert b"STATUSBAR_LINES is malformed" in zero.stderr
+    assert zero.returncode == 0
+    assert b"__statusbar_report_cwd" in zero.stdout
 
     with tempfile.TemporaryDirectory() as directory:
         starship = os.path.join(directory, "starship")
@@ -487,6 +502,7 @@ def check_zsh(binary):
             file.write("#!/bin/sh\ncase $STARSHIP_TEST_MODE in\n  multi) printf 'bar%%%%literal\\nprompt' ;;\n  one) printf 'one%%%%literal' ;;\nesac\n")
         os.chmod(starship, 0o755)
         zenv = env.copy()
+        zenv["STATUSBAR_STATE"] = session_state_stub(directory, 3)
         zenv["PATH"] = directory + os.pathsep + zenv.get("PATH", "")
 
         for slot, option in ((3, ""), (5, "--starship-slot 5")):
@@ -513,6 +529,7 @@ def check_zsh(binary):
         # using it after a later configuration reload adds the slot.
         one_row_env = zenv.copy()
         one_row_env["STATUSBAR_LINES"] = "1"
+        one_row_env["STATUSBAR_STATE"] = session_state_stub(directory, 1)
         script = (
             f'export STARSHIP_TEST_MODE=multi; eval "$({quoted_binary} init zsh)"; '
             "__statusbar_prompt"
@@ -533,6 +550,7 @@ def check_fish(binary):
 
     env = os.environ.copy()
     env["STATUSBAR_LINES"] = "3"
+    env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
     quoted_binary = shlex.quote(binary)
     with tempfile.TemporaryDirectory() as directory:
         starship = os.path.join(directory, "starship")
@@ -540,6 +558,7 @@ def check_fish(binary):
             file.write("#!/bin/sh\ncase $STARSHIP_TEST_MODE in\n  multi) printf 'bar%%literal\\nprompt' ;;\n  one) printf 'one%%literal' ;;\nesac\n")
         os.chmod(starship, 0o755)
         fenv = env.copy()
+        fenv["STATUSBAR_STATE"] = session_state_stub(directory, 3)
         fenv["PATH"] = directory + os.pathsep + fenv.get("PATH", "")
 
         for slot, option in ((3, ""), (5, "--starship-slot 5")):
@@ -563,6 +582,7 @@ def check_fish(binary):
 
         one_row_env = fenv.copy()
         one_row_env["STATUSBAR_LINES"] = "1"
+        one_row_env["STATUSBAR_STATE"] = session_state_stub(directory, 1)
         script = (
             f"set -gx STARSHIP_TEST_MODE multi; {quoted_binary} init fish | source; "
             "fish_prompt"
@@ -583,6 +603,7 @@ def check_nu(binary):
 
     env = os.environ.copy()
     env["STATUSBAR_LINES"] = "3"
+    env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
     with tempfile.TemporaryDirectory() as directory:
         os.symlink(binary, os.path.join(directory, "statusbar"))
         starship = os.path.join(directory, "starship")
@@ -590,6 +611,7 @@ def check_nu(binary):
             file.write("#!/bin/sh\ncase $STARSHIP_TEST_MODE in\n  multi) printf 'bar%%literal\\nprompt' ;;\n  one) printf 'one%%literal' ;;\nesac\n")
         os.chmod(starship, 0o755)
         nenv = env.copy()
+        nenv["STATUSBAR_STATE"] = session_state_stub(directory, 3)
         nenv["PATH"] = directory + os.pathsep + nenv.get("PATH", "")
 
         sample = os.path.join(os.path.dirname(__file__), "..", "samples", "statusbar.nu")
@@ -617,6 +639,7 @@ def check_nu(binary):
         nenv["STARSHIP_TEST_MODE"] = "multi"
         one_row_env = nenv.copy()
         one_row_env["STATUSBAR_LINES"] = "1"
+        one_row_env["STATUSBAR_STATE"] = session_state_stub(directory, 1)
         code, data = capture_pty([nu, "-n", "-c", script], one_row_env)
         assert code == 0 and b"SetUserVar=StatusBarSlot" not in data, data
         assert b"bar%literal\r\nprompt" in data, data
@@ -640,6 +663,7 @@ def check_nu(binary):
 def check_init_features(binary):
     env = os.environ.copy()
     env["STATUSBAR_LINES"] = "1"
+    env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
     for shell in ("zsh", "fish"):
         for flags in (("--starship=false", "--report-cwd=false"),):
             result = subprocess.run([binary, "init", shell, *flags], env=env, capture_output=True)

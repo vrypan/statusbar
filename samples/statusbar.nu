@@ -2,7 +2,7 @@
 # Edit the slot number below if your layout uses a different slot.
 # Nothing changes outside a statusbar session.
 
-if ($env.STATUSBAR_LINES? != null) {
+if ($env.STATUSBAR_STATE? != null) {
   # Report the current directory before each prompt so statusbar can update
   # the terminal title. The guard keeps repeated sourcing from adding hooks.
   if $env.__STATUSBAR_NU_CWD_HOOK? != true {

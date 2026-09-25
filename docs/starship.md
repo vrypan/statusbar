@@ -103,7 +103,7 @@ The sections below build the same thing from parts, for when you want a
 different split: another selection of modules, the right slot, or a
 profile. Use them instead of `statusbar init zsh`, not together with it. Both
 pieces go in `~/.zshrc` after `eval "$(starship init zsh)"`, and both check
-`$STATUSBAR_LINES`, so the same `.zshrc` works inside and outside statusbar.
+`$STATUSBAR_STATE`, so the same `.zshrc` works inside and outside statusbar.
 
 1. A hook that sends Starship's output to the bar before each prompt.
 2. A shorter `PROMPT` while inside statusbar, so the same details don't
@@ -174,7 +174,7 @@ statusbar_prompt = "$character"
 Then switch `PROMPT` to it inside statusbar:
 
 ```zsh
-if [[ -n $STATUSBAR_LINES ]]; then
+if [[ -n $STATUSBAR_STATE ]]; then
   PROMPT='$(starship prompt --profile statusbar_prompt --terminal-width="$COLUMNS" --keymap="${KEYMAP:-}" --status="${STARSHIP_CMD_STATUS:-}" --pipestatus="${STARSHIP_PIPE_STATUS[*]:-}" --cmd-duration="${STARSHIP_DURATION:-}" --jobs="$STARSHIP_JOBS_COUNT")'
 fi
 ```
@@ -226,8 +226,8 @@ see [config.md](config.md).
 Set up the split by hand with a profile, as in
 [Choosing what goes in the bar](#choosing-what-goes-in-the-bar).
 
-**Nothing reaches the bar.** Check that `echo $STATUSBAR_LINES` prints at
-least 2 in the session, that `statusbar init zsh` prints code there, and that
+**Nothing reaches the bar.** Check that `$STATUSBAR_STATE` is set in the
+session, that `statusbar init zsh` prints code there, and that
 `statusbar set 3 test` shows `test`. A statusbar started before you
 updated it may need a restart.
 

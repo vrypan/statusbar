@@ -305,8 +305,7 @@ fn shellInit(arena: std.mem.Allocator, io: Io, invoked_as: []const u8, command: 
         parseSlot(raw) orelse return usageError(stderr, command, "--starship-slot must be a positive decimal integer")
     else
         3;
-    const line_text = @import("environment.zig").get("STATUSBAR_LINES") orelse return 0;
-    _ = parseSlot(line_text) orelse return usageError(stderr, command, "STATUSBAR_LINES is malformed");
+    _ = @import("environment.zig").get("STATUSBAR_STATE") orelse return 0;
     if (!starship and !report_cwd) return 0;
     if (report_cwd) try stdout.writeAll(if (std.mem.eql(u8, args[0], "zsh")) zsh_cwd_init else fish_cwd_init);
     if (!starship) {
