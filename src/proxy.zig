@@ -530,7 +530,7 @@ const Proxy = struct {
         const rules = try self.gpa.alloc(?[]const u8, layout.bar);
         defer self.gpa.free(rules);
         var pushed_style_buf: [256]u8 = undefined;
-        const pushed_style = markup.barStyle(runtime.cfg.style orelse "", runtime.look.palette, &pushed_style_buf);
+        const pushed_style = markup.barStyle(runtime.cfg.push_style orelse runtime.cfg.style orelse "", runtime.look.palette, &pushed_style_buf);
         const configured = @min(@as(usize, layout.bar), @as(usize, runtime.lines));
         const pushed_visible = @min(self.pushed.items.items.len, @as(usize, layout.bar) - configured);
         for (0..configured) |n| {

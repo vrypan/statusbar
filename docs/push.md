@@ -15,6 +15,10 @@ the right slot shows the latest stream value:
 [1]                       Server ready
 ```
 
+Set the base style of pushed rows with `[line.push]` in the config. It applies
+to the ID and text, and is reapplied to each `\r` progress update. See
+[configuration](config.md#linepush).
+
 When reading a pipe, `push` cannot change the width reported to the command
 that wrote to it. Output wider than the space beside the ID is clipped.
 

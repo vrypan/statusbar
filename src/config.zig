@@ -124,6 +124,7 @@ pub const Highlight = struct {
 pub const Config = struct {
     allocator: ?std.mem.Allocator = null,
     style: ?[]const u8 = null,
+    push_style: ?[]const u8 = null,
     interval_ms: i64 = 5000,
     colors: [max_colors]markup.Color = undefined,
     colors_len: usize = 0,
@@ -173,6 +174,7 @@ const Section = union(enum) {
     colors,
     highlight,
     line: usize,
+    push,
     command: usize,
 };
 
@@ -303,6 +305,11 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
                     config.line[n].style = value;
                 } else return fail(diag, "unknown line key; expected left, right, rule or style");
             },
+            .push => {
+                if (eql(key, "style")) {
+                    config.push_style = value;
+                } else return fail(diag, "unknown push line key; expected style");
+            },
             .command => |n| {
                 if (eql(key, "run")) {
                     config.commands[n].run = value;
@@ -341,6 +348,7 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
 fn parseSection(config: *Config, name: []const u8, diag: *Diagnostic) Error!Section {
     if (eql(name, "colors")) return .colors;
     if (eql(name, "highlight")) return .highlight;
+    if (eql(name, "line.push")) return .push;
     if (std.mem.startsWith(u8, name, "line.")) {
         const n = std.fmt.parseInt(usize, name[5..], 10) catch 0;
         if (n < 1 or n > config.line.len) return fail(diag, "line sections must be consecutive from [line.1]");
@@ -355,7 +363,7 @@ fn parseSection(config: *Config, name: []const u8, diag: *Diagnostic) Error!Sect
         config.commands_len += 1;
         return .{ .command = config.commands_len - 1 };
     }
-    return fail(diag, "unknown section; expected [colors], [highlight], [line.N] or [command.NAME]");
+    return fail(diag, "unknown section; expected [colors], [highlight], [line.N], [line.push] or [command.NAME]");
 }
 
 /// Validates row indices before allocating storage. This rejects a sparse
@@ -383,6 +391,7 @@ fn countRows(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
         }
         if (line.len < 2 or line[0] != '[' or line[line.len - 1] != ']') continue;
         const name = std.mem.trim(u8, line[1 .. line.len - 1], " \t");
+        if (eql(name, "line.push")) continue;
         if (!std.mem.startsWith(u8, name, "line.")) continue;
         diag.line = number;
         const suffix = name[5..];
@@ -560,6 +569,7 @@ test "a full config parses" {
     var config = try parse(std.testing.allocator, example, &diag);
     defer config.deinit();
     try std.testing.expectEqualStrings("fg=text", config.style.?);
+    try std.testing.expect(config.push_style == null);
     try std.testing.expectEqualStrings("#89b4fa", config.colors[0].value);
     try std.testing.expectEqualStrings("─", config.line[0].rule.?);
     try std.testing.expectEqual(@as(u16, 2), config.definedLines());
@@ -583,6 +593,17 @@ test "a full config parses" {
     try std.testing.expectEqual(@as(u8, 2), right[0].command);
     try std.testing.expectEqualStrings(" %H:%M ", right[1].text);
     try std.testing.expectEqual(@as(u8, 0), right[2].command);
+}
+
+test "push style is independent of numbered rows" {
+    var diag: Diagnostic = .{};
+    var config = try parse(std.testing.allocator, "[line.push]\nstyle = fg=accent\n[line.1]\nleft = ready\n", &diag);
+    defer config.deinit();
+    try std.testing.expectEqual(@as(u16, 1), config.definedLines());
+    try std.testing.expectEqualStrings("fg=accent", config.push_style.?);
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.1]\n[line.push]\nleft = x\n", &diag));
+    try std.testing.expectEqual(@as(usize, 3), diag.line);
+    try std.testing.expectEqualStrings("unknown push line key; expected style", diag.message);
 }
 
 test "nested parentheses and escaped hashes in templates" {

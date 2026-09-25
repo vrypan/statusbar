@@ -1192,7 +1192,7 @@ with open(os.environ['STATUSBAR_STATE'], 'rb') as state:
     state.readline()
     assert state.readline() == b'lines 1\n'
 print('PUSHED_TWO', flush=True)
-run('config', input=b'[line.1]\nleft = reloaded\n[line.2]\nright = new\n')
+run('config', input=b'[line.push]\nstyle = fg=#654321\n[line.1]\nleft = reloaded\n[line.2]\nright = new\n')
 time.sleep(.1)
 run('pop', first.decode())
 assert run('pop', first.decode()) == b''
@@ -1250,7 +1250,7 @@ wrong['STATUSBAR_SESSION_ID'] = '0' * 32
 assert subprocess.run([b, 'pop', '2'], env=wrong, capture_output=True).returncode != 0
 print('PUSH_POP_OK', flush=True)
 '''
-    config = b'[line.1]\nleft = configured\n'
+    config = b'[line.push]\nstyle = fg=#123456\n[line.1]\nleft = configured\n'
     with tempfile.NamedTemporaryFile(delete=False) as cfg:
         cfg.write(config)
         path = cfg.name
@@ -1260,6 +1260,8 @@ print('PUSH_POP_OK', flush=True)
         assert code == 0 and b'PUSH_POP_OK' in data, data[-2500:]
         assert b'[1]' in data and b'first final' in data, data[-2500:]
         assert b'[2]' in data and 'Καλημέρα ## #[bold]'.encode() in data, data[-2500:]
+        assert b'\x1b[0;38;2;18;52;86m' in data, data[-2500:]
+        assert b'\x1b[0;38;2;101;67;33m' in data, data[-2500:]
         assert b'reloaded' in data and b'[3]' in data and b'in progress' in data, data[-700:]
         assert b'[7]' in data, data[-700:]
         assert b'[8]' in data and b'99.9%' in data, data[-700:]

@@ -39,6 +39,8 @@ All variants define two rows. Their rules fill unused space and can frame left
 and right labels on the same row. On narrow terminals the right side clips
 first. Weather uses the original wttr.in command and may remain empty until
 it responds; these themes do not change that network behavior.
+Each variant also styles temporary rows created by `statusbar push` through
+`[line.push]`.
 
 Inspiration:
 - https://starship.rs/presets/pure-preset

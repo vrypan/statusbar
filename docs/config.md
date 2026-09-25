@@ -107,6 +107,22 @@ patterns are repeated and a remainder stays blank. When a line is too
 narrow, the right slot is clipped first; the left slot is kept longest.
 [`statusbar set`](set.md) addresses any slot by number.
 
+## `[line.push]`
+
+Use `style` to set the base style of every row created by `statusbar push`:
+
+```ini
+[line.push]
+style = fg=accent,bg=#1e1e2e
+```
+
+The style covers the whole row, including its `[ID]` prefix. It accepts the
+same attributes and named colors as `[line.N]` styles. If omitted, pushed rows
+inherit the top-level `style`. This section does not reserve a row or change
+numbered slots. Reloading the config restyles pushed rows that are already
+visible. Streamed ANSI colors can override the base style for individual
+characters; a carriage-return update starts again with the base style.
+
 ## `[command.NAME]`
 
 | Key        | Meaning                                                     |
