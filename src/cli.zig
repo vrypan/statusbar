@@ -67,10 +67,16 @@ const commands = [_]zecli.CommandSpec{
         \\Each row has a left and right slot, numbered from 1. The row must
         \\already exist in your layout.
         \\
-        \\Omit TEXT to restore the value from your config.
+        \\Omit TEXT to restore the value from your config. Use a sole - as
+        \\TEXT to stream stdin, showing the latest line as it arrives. Use
+        \\`-- -` to display a literal dash.
         \\Words are joined with spaces; quote text to keep leading or trailing
         \\spaces. Use `--` before text that starts with a dash.
-        \\Text can include markup such as #[bold] and is limited to 1024 bytes.
+        \\One-shot text supports markup such as #[bold]. Streamed text shows
+        \\# and #[...] literally; supported ANSI colors still work. Values
+        \\are limited to 1024 bytes; longer stream lines are truncated.
+        \\CR and LF start a new line. Short input bursts are combined before
+        \\display, and the last value stays after input ends.
         \\
         \\Outside a statusbar session, this command does nothing, so shell hooks
         \\can call it without checking whether statusbar is running.
@@ -79,6 +85,7 @@ const commands = [_]zecli.CommandSpec{
             "statusbar set 1 'Build passed'",
             "statusbar set 2 '#[fg=green,bold]Ready'",
             "statusbar set 1 -- '--verbose enabled'",
+            "tail -n 0 -f app.log | statusbar set 4 -",
             "statusbar set 1",
         },
     },

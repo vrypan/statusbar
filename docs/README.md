@@ -193,6 +193,8 @@ end
 ```
 
 Calling `statusbar set 5` with no text restores the value from the config.
+Pipe output to `statusbar set 5 -` to show its latest line as it arrives;
+see [streaming updates](set.md#stream-the-latest-line).
 The command is a no-op outside a statusbar session, so the same shell setup
 works in regular terminals. [Updating slots](set.md) covers numbering,
 formatting, and sending updates from scripts.

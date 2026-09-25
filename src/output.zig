@@ -29,12 +29,13 @@ const max_params = 16;
 ///     ESC ] 1337 ; SetUserVar=StatusBarSlot3=<base64> BEL
 const user_var_prefix = "1337;SetUserVar=StatusBar";
 pub const max_value = 1024;
+pub const SlotMode = enum { markup, literal };
 
 const esc = 0x1b;
 
 pub const UpdateHandler = struct {
     context: *anyopaque,
-    callback: *const fn (*anyopaque, usize, []const u8) void,
+    callback: *const fn (*anyopaque, usize, []const u8, SlotMode) void,
 };
 
 pub const Osc7Handler = struct {
@@ -439,15 +440,16 @@ pub const Output = struct {
         if (self.osc7_handler) |handler| handler.callback(handler.context, self.osc7_payload[0..self.osc7_len]);
     }
 
-    /// `StatusBarSlotN=<base64>`. Anything else under the prefix, or a value
+    /// `StatusBarSlotN=<base64>` or `StatusBarSlotLiteralN=<base64>`.
+    /// Anything else under the prefix, or a value
     /// that does not decode, is dropped without exposing the owned payload.
     fn finishUserVar(self: *Output) void {
         if (self.payload_overflow) return;
         const payload = self.payload[0..self.payload_len];
         const eq = std.mem.indexOfScalar(u8, payload, '=') orelse return;
         const name = payload[0..eq];
-        if (!std.mem.startsWith(u8, name, "Slot")) return;
-        const digits = name[4..];
+        const mode: SlotMode = if (std.mem.startsWith(u8, name, "SlotLiteral")) .literal else if (std.mem.startsWith(u8, name, "Slot")) .markup else return;
+        const digits = name[(if (mode == .literal) @as(usize, 11) else 4)..];
         if (digits.len == 0 or (digits.len > 1 and digits[0] == '0')) return;
         for (digits) |byte| if (byte < '0' or byte > '9') return;
         const slot = std.fmt.parseInt(usize, digits, 10) catch return;
@@ -458,7 +460,7 @@ pub const Output = struct {
         if (size > max_value) return;
         var decoded: [max_value]u8 = undefined;
         decoder.decode(decoded[0..size], encoded) catch return;
-        if (self.update_handler) |handler| handler.callback(handler.context, slot - 1, decoded[0..size]);
+        if (self.update_handler) |handler| handler.callback(handler.context, slot - 1, decoded[0..size], mode);
     }
 
     /// Carries an incomplete scalar over read boundaries. Only the leading
@@ -689,7 +691,7 @@ const Slots = struct {
         return .{ .context = self, .callback = receive };
     }
 
-    fn receive(context: *anyopaque, slot: usize, value: []const u8) void {
+    fn receive(context: *anyopaque, slot: usize, value: []const u8, _: SlotMode) void {
         const self: *Slots = @ptrCast(@alignCast(context));
         @memcpy(self.values[slot][0..value.len], value);
         self.lens[slot] = value.len;
@@ -1071,14 +1073,16 @@ test "malformed out of range and oversized numbered updates are dropped" {
 
 test "numbered slot updates are delivered in order from one read" {
     const SlotCollector = struct {
-        slots: [6]usize = undefined,
-        values: [6][16]u8 = undefined,
-        lens: [6]usize = @splat(0),
+        slots: [7]usize = undefined,
+        modes: [7]SlotMode = undefined,
+        values: [7][16]u8 = undefined,
+        lens: [7]usize = @splat(0),
         len: usize = 0,
 
-        fn receive(context: *anyopaque, slot: usize, value: []const u8) void {
+        fn receive(context: *anyopaque, slot: usize, value: []const u8, mode: SlotMode) void {
             const self: *@This() = @ptrCast(@alignCast(context));
             self.slots[self.len] = slot;
+            self.modes[self.len] = mode;
             @memcpy(self.values[self.len][0..value.len], value);
             self.lens[self.len] = value.len;
             self.len += 1;
@@ -1093,6 +1097,15 @@ test "numbered slot updates are delivered in order from one read" {
     for (0..6) |n| try std.testing.expectEqual(n, updates.slots[n]);
     try std.testing.expectEqualStrings("one", updates.values[0][0..updates.lens[0]]);
     try std.testing.expectEqualStrings("six", updates.values[5][0..updates.lens[5]]);
+    for (updates.modes[0..6]) |mode| try std.testing.expectEqual(SlotMode.markup, mode);
+    const literal = "\x1b]1337;SetUserVar=StatusBarSlotLiteral4=IyNbYm9sZF0=\x07";
+    for (literal) |byte| out.feed(&.{byte}, &sink);
+    try std.testing.expectEqual(@as(usize, 7), updates.len);
+    try std.testing.expectEqual(@as(usize, 3), updates.slots[6]);
+    try std.testing.expectEqual(SlotMode.literal, updates.modes[6]);
+    try std.testing.expectEqualStrings("##[bold]", updates.values[6][0..updates.lens[6]]);
+    out.feed("\x1b]1337;SetUserVar=StatusBarSlotLiteral04=YQ==\x07\x1b]1337;SetUserVar=StatusBarSlotLiteral9=YQ==\x07\x1b]1337;SetUserVar=StatusBarSlotLiteralX=YQ==\x07", &sink);
+    try std.testing.expectEqual(@as(usize, 7), updates.len);
     try std.testing.expectEqual(@as(usize, 0), sink.bytes.items.len);
 }
 

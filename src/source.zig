@@ -29,6 +29,7 @@ pub const Source = struct {
     content: bar.Content,
     overrides: [][output.max_value]u8,
     override_lens: []?usize,
+    override_literal: []bool = &.{},
     clock_next_ms: ?i64 = null,
     /// Output arrived since the content was last built.
     stale: bool = false,
@@ -69,6 +70,9 @@ pub const Source = struct {
         const override_lens = try gpa.alloc(?usize, @as(usize, lines) * 2);
         errdefer gpa.free(override_lens);
         @memset(override_lens, null);
+        const override_literal = try gpa.alloc(bool, @as(usize, lines) * 2);
+        errdefer gpa.free(override_literal);
+        @memset(override_literal, false);
         const dependencies = try gpa.alloc(Dependency, lines);
         errdefer gpa.free(dependencies);
         const dirty_rows = try gpa.alloc(bool, lines);
@@ -84,7 +88,7 @@ pub const Source = struct {
                 };
             }
         }
-        var self: Source = .{ .gpa = gpa, .io = io, .commands = commands, .cfg = cfg, .content = content, .overrides = overrides, .override_lens = override_lens, .stale = true, .dependencies = dependencies, .dirty_rows = dirty_rows };
+        var self: Source = .{ .gpa = gpa, .io = io, .commands = commands, .cfg = cfg, .content = content, .overrides = overrides, .override_lens = override_lens, .override_literal = override_literal, .stale = true, .dependencies = dependencies, .dirty_rows = dirty_rows };
         self.updateClockActivation();
         return self;
     }
@@ -95,6 +99,7 @@ pub const Source = struct {
         self.content.deinit();
         self.gpa.free(self.overrides);
         self.gpa.free(self.override_lens);
+        if (self.override_literal.len > 0) self.gpa.free(self.override_literal);
         if (self.dependencies.len > 0) self.gpa.free(self.dependencies);
         if (self.dirty_rows.len > 0) self.gpa.free(self.dirty_rows);
     }
@@ -119,13 +124,18 @@ pub const Source = struct {
     /// Surrounding line breaks are dropped, as prompt tools often add one,
     /// and inner ones become spaces so a value stays on its line.
     pub fn setOverride(self: *Source, n: usize, value: []const u8) void {
+        self.setOverrideMode(n, value, false);
+    }
+
+    pub fn setOverrideMode(self: *Source, n: usize, value: []const u8, literal: bool) void {
         if (n >= self.override_lens.len or value.len > output.max_value) return;
         const trimmed = std.mem.trim(u8, value, "\r\n");
         const old = self.override(n);
         var normalized: [output.max_value]u8 = undefined;
         copyOnOneLine(normalized[0..trimmed.len], trimmed);
         const next: ?[]const u8 = if (trimmed.len == 0) null else normalized[0..trimmed.len];
-        const same = if (old) |a| if (next) |b| std.mem.eql(u8, a, b) else false else next == null;
+        const old_literal = self.override_literal.len > n and self.override_literal[n];
+        const same = (next == null or old_literal == literal) and (if (old) |a| if (next) |b| std.mem.eql(u8, a, b) else false else next == null);
         if (same) return;
         if (trimmed.len == 0) {
             self.override_lens[n] = null;
@@ -133,6 +143,7 @@ pub const Source = struct {
             @memcpy(self.overrides[n][0..trimmed.len], normalized[0..trimmed.len]);
             self.override_lens[n] = trimmed.len;
         }
+        if (self.override_literal.len > n) self.override_literal[n] = trimmed.len > 0 and literal;
         if (n < 32) self.override_events |= @as(u32, 1) << @intCast(n);
         self.content.tracks[n / 2].override_epoch[n % 2] +%= 1;
         self.metadata_stale = true;
@@ -281,10 +292,12 @@ pub const Source = struct {
             var tracks: bar.Tracks = .{ .override_epoch = self.content.tracks[n].override_epoch };
             var w: std.Io.Writer = .fixed(&buf);
             if (self.override(n * 2)) |value| {
+                tracks.literal[0] = self.override_literal.len > n * 2 and self.override_literal[n * 2];
                 w.writeAll(value) catch {};
             } else self.writeTemplate(&w, &line.left, &now, &tracks, .left);
             w.writeByte('\t') catch {};
             if (self.override(n * 2 + 1)) |value| {
+                tracks.literal[1] = self.override_literal.len > n * 2 + 1 and self.override_literal[n * 2 + 1];
                 w.writeAll(value) catch {};
             } else self.writeTemplate(&w, &line.right, &now, &tracks, .right);
             changed = self.content.setTrackedLine(n, w.buffered(), tracks) or changed;
@@ -503,6 +516,33 @@ test "source sidecars retain empty and truncated regions and exclude dynamic mar
     const result = source.update(&.{}, 0);
     try std.testing.expect(result.content_changed);
     try std.testing.expectEqual(@as(u64, 2), source.content.tracks[0].override_epoch[0]);
+}
+
+test "slot mode changes invalidate equal text and clearing restores templates" {
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(std.testing.allocator, "[line.1]\nleft = configured\nright = configured right\n", &diag);
+    defer cfg.deinit();
+    var content = try bar.Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    var overrides: [2][output.max_value]u8 = undefined;
+    var lens: [2]?usize = @splat(null);
+    var literal: [2]bool = .{ false, false };
+    var source: Source = .{ .gpa = std.testing.allocator, .io = std.testing.io, .commands = &.{}, .cfg = &cfg, .content = content, .overrides = &overrides, .override_lens = &lens, .override_literal = &literal };
+    _ = source.rebuild();
+    source.setOverrideMode(0, "##", true);
+    _ = source.rebuild();
+    try std.testing.expect(source.content.tracks[0].literal[0]);
+    try std.testing.expect(!source.content.tracks[0].literal[1]);
+    source.setOverride(0, "##");
+    _ = source.rebuild();
+    try std.testing.expect(!source.content.tracks[0].literal[0]);
+    source.setOverrideMode(1, "#[bold]right", true);
+    _ = source.rebuild();
+    try std.testing.expect(source.content.tracks[0].literal[1]);
+    source.setOverride(1, "");
+    _ = source.rebuild();
+    try std.testing.expect(!source.content.tracks[0].literal[1]);
+    try std.testing.expect(std.mem.endsWith(u8, source.content.line(0), "configured right"));
 }
 
 test "partial startup geometry and same-text overrides establish silent region baselines" {

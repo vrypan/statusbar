@@ -17,12 +17,13 @@ pub const TrackSpan = struct { owner: cells.Owner, id: u4, start: u16, end: u16 
 pub const Tracks = struct {
     spans: [32]TrackSpan = undefined,
     len: usize = 0,
+    literal: [2]bool = .{ false, false },
     override_epoch: [2]u64 = .{ 0, 0 },
     pub fn items(self: *const Tracks) []const TrackSpan {
         return self.spans[0..self.len];
     }
     pub fn eql(a: Tracks, b: Tracks) bool {
-        if (a.len != b.len or !std.meta.eql(a.override_epoch, b.override_epoch)) return false;
+        if (a.len != b.len or !std.meta.eql(a.override_epoch, b.override_epoch) or !std.meta.eql(a.literal, b.literal)) return false;
         for (a.items(), b.items()) |x, y| if (!std.meta.eql(x, y)) return false;
         return true;
     }
@@ -332,11 +333,34 @@ pub const Renderer = struct {
         }
         var expanded_buf: [4096]u8 = undefined;
         var offsets: [max_line_bytes + 1]usize = undefined;
-        const expanded = markup.expandMapped(raw, &expanded_buf, palette, offsets[0 .. raw.len + 1]);
-        const slots = splitSlots(expanded);
+        const raw_slots = splitSlots(raw);
+        var used: usize = 0;
+        var left_len: usize = 0;
+        for (0..2) |side| {
+            const source = raw_slots[side];
+            const raw_start = if (side == 0) @as(usize, 0) else @min(raw_slots[0].len + 1, raw.len);
+            const mapped = offsets[raw_start..][0 .. source.len + 1];
+            const available = expanded_buf.len - used - @as(usize, if (side == 0) 1 else 0);
+            if (tracks.literal[side]) {
+                const retained = @min(source.len, available);
+                @memcpy(expanded_buf[used..][0..retained], source[0..retained]);
+                for (mapped, 0..) |*offset, n| offset.* = used + @min(n, retained);
+                used += retained;
+            } else {
+                const expanded = markup.expandMapped(source, expanded_buf[used..][0..available], palette, mapped);
+                for (mapped) |*offset| offset.* += used;
+                used += expanded.len;
+            }
+            if (side == 0) {
+                left_len = used;
+                expanded_buf[used] = '\t';
+                used += 1;
+            }
+        }
+        const slots = [2][]const u8{ expanded_buf[0..left_len], expanded_buf[left_len + 1 .. used] };
         for (0..2) |side| {
             const owner: cells.Owner = if (side == 0) .left else .right;
-            const start = if (side == 0) 0 else @min(slots[0].len + 1, expanded.len);
+            const start = if (side == 0) 0 else @min(slots[0].len + 1, used);
             var boundaries: [32]styled.Boundary = undefined;
             var count: usize = 0;
             for (tracks.items()) |span| {
@@ -489,9 +513,14 @@ pub const Renderer = struct {
         for (self.rows, 0..) |row, n| {
             if (!row.selected) continue;
             try w.print("\x1b[{d};1H", .{first_row + n});
-            try eraseStyle(row.desired).write(w);
-            try w.writeAll("\x1b[2K");
-            try serialize(w, row.desired);
+            const erase = force or !row.painted_valid;
+            if (erase) {
+                try eraseStyle(row.desired).write(w);
+                try w.writeAll("\x1b[2K");
+            }
+            // On an ordinary update overwrite through the last column. This
+            // replaces a shorter old value without briefly blanking the row.
+            try serialize(w, row.desired, erase);
         }
         try w.writeAll("\x1b]8;;\x1b\\\x1b[0m\x1b8");
         if (autowrap) try w.writeAll("\x1b[?7h");
@@ -602,17 +631,17 @@ fn eraseStyle(row: cells.Row) cells.Style {
     const last = row.cells.items[row.cells.items.len - 1];
     return if (last.kind == .blank) last.style else .{};
 }
-fn serialize(w: *std.Io.Writer, row: cells.Row) !void {
+fn serialize(w: *std.Io.Writer, row: cells.Row, erased_first: bool) !void {
     const erased = eraseStyle(row);
-    var style: ?cells.Style = erased;
+    var style: ?cells.Style = if (erased_first) erased else null;
     var link: cells.Span = .{};
     var params: cells.Span = .{};
     var owner: cells.Owner = .fill;
-    // EL has already established this tail, including its background. Avoid
-    // sending redundant spaces while still serializing all styled slot spaces.
+    // After EL, trailing blanks with its style are already present. Without
+    // EL, send every cell so a shorter value covers the old visible suffix.
     var end = row.cells.items.len;
     const simple_erase = cells.Style.eql(erased, .{ .fg = erased.fg, .bg = erased.bg });
-    while (simple_erase and end > 0 and row.cells.items[end - 1].kind == .blank and cells.Style.eql(row.cells.items[end - 1].style, erased)) end -= 1;
+    while (erased_first and simple_erase and end > 0 and row.cells.items[end - 1].kind == .blank and cells.Style.eql(row.cells.items[end - 1].style, erased)) end -= 1;
     for (row.cells.items[0..end]) |cell| {
         if (cell.kind == .continuation) continue;
         if (!std.mem.eql(u8, link.get(row.data.items), cell.uri.get(row.data.items)) or !std.mem.eql(u8, params.get(row.data.items), cell.params.get(row.data.items)) or owner != cell.owner) {
@@ -751,6 +780,74 @@ test "incremental base, desired patches and painted snapshots" {
     _ = try r.build(22, "", false, true);
     try std.testing.expectEqual(@as(usize, 3), r.emitted_rows);
     try std.testing.expect(std.mem.endsWith(u8, r.writer.writer.buffered(), "\x1b[0m\x1b8"));
+}
+
+test "changed rows overwrite old text without an erase gap" {
+    var content = try Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    _ = content.set("longer");
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{null};
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try r.resize(1, 10);
+    try r.prepare(&content, &look, false);
+    const first = try r.build(24, "", true, false);
+    try std.testing.expect(std.mem.indexOf(u8, first, "\x1b[2K") != null);
+    r.commit();
+
+    _ = content.set("x");
+    try r.prepare(&content, &look, false);
+    const changed = try r.build(24, "", true, false);
+    try std.testing.expect(std.mem.indexOf(u8, changed, "\x1b[2K") == null);
+    try std.testing.expect(std.mem.indexOf(u8, changed, "x         ") != null);
+    r.commit();
+
+    const damaged = try r.build(24, "", true, true);
+    try std.testing.expect(std.mem.indexOf(u8, damaged, "\x1b[2K") != null);
+}
+
+test "literal and markup slots preserve independent hash widths" {
+    const gpa = std.testing.allocator;
+    var content = try Content.init(gpa, 1);
+    defer content.deinit();
+    const raw = "#####[bold] 7%\t###[bold] 8%";
+    var tracks: Tracks = .{ .literal = .{ true, false } };
+    try std.testing.expect(content.setTrackedLine(0, raw, tracks));
+    var styles = [_][]const u8{""};
+    var rules = [_]?[]const u8{null};
+    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var r = try Renderer.init(gpa);
+    defer r.deinit();
+    try r.resize(1, 80);
+    try r.prepare(&content, &look, false);
+    const left = r.rows[0].semantic[0];
+    const right = r.rows[0].semantic[1];
+    try std.testing.expectEqual(@as(usize, 14), left.cells.items.len);
+    try std.testing.expectEqual(@as(usize, 4), right.cells.items.len);
+    for ("#####[bold] 7%", 0..) |byte, col| {
+        try std.testing.expectEqual(byte, left.cells.items[col].glyph.get(left.data.items)[0]);
+    }
+    try std.testing.expectEqualStrings("#", right.cells.items[0].glyph.get(right.data.items));
+    try std.testing.expect(right.cells.items[1].style.bold);
+    try std.testing.expectEqualStrings("%", r.rows[0].base.cells.items[13].glyph.get(r.rows[0].base.data.items));
+    try std.testing.expectEqualStrings("%", r.rows[0].base.cells.items[79].glyph.get(r.rows[0].base.data.items));
+
+    tracks.literal[0] = false;
+    try std.testing.expect(content.setTrackedLine(0, raw, tracks));
+    try r.prepare(&content, &look, false);
+    try std.testing.expectEqual(@as(usize, 5), r.rows[0].semantic[0].cells.items.len);
+
+    tracks.literal[0] = true;
+    try std.testing.expect(content.setTrackedLine(0, "\x1b[31m##\t#[bold]x", tracks));
+    try r.prepare(&content, &look, false);
+    const colored = r.rows[0].semantic[0];
+    try std.testing.expectEqual(@as(usize, 2), colored.cells.items.len);
+    try std.testing.expectEqualStrings("#", colored.cells.items[0].glyph.get(colored.data.items));
+    try std.testing.expectEqual(styled.Color{ .indexed = 1 }, colored.cells.items[0].style.fg);
+    try std.testing.expectEqual(@as(usize, 1), r.rows[0].semantic[1].cells.items.len);
+    try std.testing.expect(r.rows[0].semantic[1].cells.items[0].style.bold);
 }
 
 test "text presentation progress squares leave the right slot aligned" {

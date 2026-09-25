@@ -31,6 +31,46 @@ Values are limited to 1024 bytes. Markup and raw SGR colors work in values.
 Outside a statusbar session, a syntactically valid command writes nothing and
 exits successfully, so shell hooks can call it unconditionally.
 
+## Stream the latest line
+
+Use a sole `-` argument to read stdin continuously:
+
+```sh
+tail -n 0 -f app.log | statusbar set 4 -
+(tail -n 0 -f app.log | statusbar set 4 -) &
+```
+
+The slot updates while a line is arriving; it does not wait for a newline.
+Carriage returns and newlines start a new line. The previous value stays visible
+until the next line supplies text, and the final value stays after EOF. Fast
+intermediate lines can be skipped: statusbar sends at most one update every
+50 ms, plus a final update at EOF. It waits briefly for nearby fragments of a
+progress report to arrive together. A producer that pauses in the middle of a
+report for longer than this window can still display a partial line. The first
+1024 bytes of each line are kept,
+without splitting a UTF-8 character; the rest is ignored until the next line.
+When a producer redraws the same line with `\r`, the identical value is not
+sent again.
+Streamed `#` and `#[...]` display literally, preserving progress bars and log
+text. Supported ANSI colors and hyperlinks still work. One-shot TEXT retains
+statusbar markup. Streaming shows the latest line; cursor movement and
+backspace editing are not interpreted.
+
+Curl sends its progress bar to stderr. Save the download separately and pipe
+the progress to a slot:
+
+```sh
+(curl --progress-bar -o download.zip https://example.com/download.zip 2>&1 |
+  statusbar set 4 -) &
+```
+
+`statusbar set 4` still restores the configured value. To display a literal
+dash, use `statusbar set 4 -- -`. Streaming requires a pipe or redirected file;
+terminal stdin is rejected. It returns immediately outside a statusbar session.
+If another sender updates the same slot, the latest update wins. A later config
+change can remove the slot, in which case the stream continues but its updates
+are ignored by the bar.
+
 The command writes to `/dev/tty`, not stdout, so it also works from tools that
 capture command output:
 
@@ -53,6 +93,10 @@ ST (`ESC \\`) also terminates it. For example:
 ```sh
 printf '\e]1337;SetUserVar=StatusBarSlot4=%s\a' "$(printf %s 'build ✓' | base64 | tr -d '\n')"
 ```
+
+Streamed updates use `StatusBarSlotLiteralN` in the same OSC envelope. The
+receiver uses the name to bypass statusbar markup for that value; existing
+`StatusBarSlotN` senders keep their markup behavior.
 
 statusbar consumes valid numbered slot variables and drops malformed or
 out-of-range variables under its `StatusBar` namespace. It forwards unrelated

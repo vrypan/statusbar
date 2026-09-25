@@ -515,7 +515,7 @@ const Proxy = struct {
         candidate.renderer.palette = self.runtime.renderer.palette;
         candidate.renderer.palette_revision = self.runtime.renderer.palette_revision;
         for (0..@min(candidate.source.override_lens.len, self.runtime.source.override_lens.len)) |slot| {
-            if (self.runtime.source.override_lens[slot]) |len| candidate.source.setOverride(slot, self.runtime.source.overrides[slot][0..len]);
+            if (self.runtime.source.override_lens[slot]) |len| candidate.source.setOverrideMode(slot, self.runtime.source.overrides[slot][0..len], if (self.runtime.source.override_literal.len > slot) self.runtime.source.override_literal[slot] else false);
         }
 
         var pending_state = try self.session_state.prepare(candidate.lines, text);
@@ -857,9 +857,9 @@ const Proxy = struct {
     }
 };
 
-fn receiveSlotUpdate(context: *anyopaque, slot: usize, value: []const u8) void {
+fn receiveSlotUpdate(context: *anyopaque, slot: usize, value: []const u8, mode: @import("output.zig").SlotMode) void {
     const source: *Source = @ptrCast(@alignCast(context));
-    source.setOverride(slot, value);
+    source.setOverrideMode(slot, value, mode == .literal);
 }
 
 fn minTimeout(a: i64, b: i64) i64 {

@@ -38,7 +38,7 @@ shell
   directories.
 - The bar is painted with autowrap off, so text that the terminal draws wider
   than statusbar measured is clipped at the right edge rather than wrapping.
-- Numbered `StatusBarSlotN` user variables are taken out of the
+- Numbered `StatusBarSlotN` and `StatusBarSlotLiteralN` user variables are taken out of the
   output stream; see [set.md](set.md).
 - Exact OSC 3110 `STATUSBAR` messages are also taken out of the output stream.
   A session token authenticates complete `CONFIG` replacement requests. The
