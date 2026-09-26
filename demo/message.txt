@@ -1,0 +1,3 @@
+
+# I can keep working on my shell and see
+# each job's progress in the statusbar.
