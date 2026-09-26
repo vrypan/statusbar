@@ -3,6 +3,10 @@
 Changes are grouped by version, newest first. Each section summarizes changes
 since the previous version.
 
+## Unreleased
+
+- Add terminal-palette variants of all six sample themes
+
 ## v0.4.1
 
 - Add `pop --all` (`-a`) to remove all pushed lines at once

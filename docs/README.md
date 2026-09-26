@@ -135,6 +135,11 @@ styles: [Pure](../samples/themes/pure.config),
 [Gruvbox](../samples/themes/gruvbox.config), and
 [Pastel Powerline](../samples/themes/pastel-powerline.config).
 
+Each has a `-native.config` version that follows your terminal's palette,
+such as [Pure Native](../samples/themes/pure-native.config). The
+[theme directory](../samples/themes/README.md) also includes Minimal and
+Multi-line layouts, both with native variants.
+
 From the repository checkout, try one without replacing your config:
 
 ```sh
