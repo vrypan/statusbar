@@ -11,6 +11,7 @@ order they were added.
 - Bundle sample themes in release archives and Homebrew installations
 - Default the Homebrew theme picker to its bundled theme directory
 - Show a command to save the selected theme when the picker exits after a change
+- Keep the closed-stdout deadline test reliable under slow CI scheduling
 
 ## v0.4.1
 

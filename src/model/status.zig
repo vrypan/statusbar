@@ -227,7 +227,7 @@ test "command output exits and schedules the next refresh" {
 }
 
 test "command deadline survives closed stdout until the process is reaped" {
-    var command = try Command.init(std.testing.allocator, std.testing.io, "printf ready; exec 1>&-; sleep 2", 100, 80);
+    var command = try Command.init(std.testing.allocator, std.testing.io, "printf ready; exec 1>&-; while :; do sleep 60; done", 100, 80);
     defer command.deinit(std.testing.io);
 
     command.refreshNow(0, .scheduled);
@@ -241,12 +241,16 @@ test "command deadline survives closed stdout until the process is reaped" {
     try std.testing.expectEqual(@as(i64, 1), command.timeout(deadline_ms - 1));
     command.tick(std.testing.io, deadline_ms - 1);
     try std.testing.expectEqual(first_pid, command.pid.?);
-    command.tick(std.testing.io, deadline_ms);
-    try std.testing.expect(command.termination_requested);
-    // An overdue, killed process gets a positive bounded reap wait.
-    try std.testing.expectEqual(@as(i64, 50), command.timeout(deadline_ms));
-
+    // Avoid an automatic restart if SIGKILL is reaped in this same tick.
     command.next_ms = deadline_ms + 1_000;
+    command.tick(std.testing.io, deadline_ms);
+    if (command.pid != null) {
+        try std.testing.expectEqual(first_pid, command.pid.?);
+        try std.testing.expect(command.termination_requested);
+        // An overdue, killed process gets a positive bounded reap wait.
+        try std.testing.expectEqual(@as(i64, 50), command.timeout(deadline_ms));
+    }
+
     var attempts: usize = 0;
     while (command.pid != null and attempts < 100) : (attempts += 1) {
         sys.sleepMs(std.testing.io, 5);
@@ -256,7 +260,7 @@ test "command deadline survives closed stdout until the process is reaped" {
     command.next_ms = deadline_ms + 1;
     command.tick(std.testing.io, deadline_ms + 1);
     try std.testing.expect(command.pid != null);
-    try std.testing.expect(command.pid.? != first_pid);
+    try std.testing.expectEqual(deadline_ms + 1, command.started_ms);
 }
 
 test "command deadline closes an open stdout pipe" {
