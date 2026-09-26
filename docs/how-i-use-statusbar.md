@@ -69,16 +69,40 @@ when they change.
 interval = 5
 
 [colors]
-base = #3c3836
-text = #fbf1c7
-accent = #d79921
-muted = #928374
-pill = #504945
-good = #98971a
+# Follow Ghostty's current terminal palette and default foreground.
+base = colour0
+text = default
+accent = colour3
+muted = colour8
+xmuted = colour8
+rule = colour8
+pill = colour8
+good = colour2
+success = colour10
+failure = colour1
+
+[line.push]
+spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+style = fg=muted
+left = "#[fg=accent]#(spinner)#[default] [#(id)] #[bold]#(tag)#[default] › #(stream)"
+right = ""
+
+[line.push.done]
+left = "· [#(id)] #[bold]#(tag)#[default] › #(stream)"
+
+[line.push.success]
+left = "#[fg=success]✔#[default] [#(id)] #[bold]#(tag)#[default] › #(stream)"
+
+[line.push.failed]
+left = "#[fg=failure]✗#[default] [#(id)] #[bold]#(tag)#[default] › #(stream)"
+right = "#[fg=failure]exit #(exit_code)#[default]"
 
 [line.1]
-rule = " "
-style = fg=muted
+# left = "#[fg=muted] Random: #[track]#(random)#[notrack]#[default]"
+# right = "#[track]#[fg=red] #(random) #[default]#[notrack]"
+# rule = " "
+rule = ─
+style = fg=xmuted,dim
 
 # Slot 3 is intentionally empty here: Starship fills it.
 [line.2]
@@ -87,22 +111,27 @@ left = ""
 style = fg=text
 
 [line.3]
-  left = "#[track]#[fg=bold]* HN: #[default]#(hn)#[notrack]"
+  left = "#[nodim]#[track]#[fg=muted,bold]* HN: #[fg=muted,nobold]#(hn)#[notrack]"
   right = ""
   rule = ·
-  style = fg=muted
+  style = fg=rule,dim
 
 [line.4]
-  left = "#[track]#[fg=bold]* GH: #[default]#(gh-statusbar-stars) #[notrack]"
+  left = "#[nodim]#[track]#[fg=muted,bold]* GH: #[fg=muted,nobold]#(gh-statusbar-stars) #[notrack]"
   right = ""
   rule = ·
-  style = fg=muted
+  style = fg=rule,dim
 
 [line.5]
-  left = "#[fg=bold]*#[default] #[fg=muted]#[track]#(system-stats)#[notrack]#[default] "
-  right = " #[fg=muted] #(weather) %a %d #[track]%H:%M#[notrack]"
+  left = "#[nodim]#[fg=muted,bold]*#[fg=muted,nobold] #[track]#(system-stats)#[notrack]#[default] "
+  right = "#[nodim] #[fg=muted] #(weather) %a %d #[track]%H:%M#[notrack]"
   rule = ·
-  style = fg=muted
+  style = fg=rule,dim
+
+[line.6]
+  left = "#[nodim]#[fg=muted]#[track]#(tailscale)#[notrack]#[default] "
+  rule = ·
+  style = fg=rule,dim
 
 [command.hn]
 run = |
@@ -186,6 +215,17 @@ run = |
 	bar "$mem_pct"
 	printf ' TEMP %s°C\n' "$temp"
 interval = 30
+
+[command.tailscale]
+run = |
+  name=$(/Applications/Tailscale.app/Contents/MacOS/Tailscale status --json 2>/dev/null |
+    jq -r 'if .BackendState == "Running" then (.Self.DNSName) else "" end' 2>/dev/null)
+  if [ -n "$name" ]; then
+    printf '#[fg=good]*#[fg=muted] Tailscale: %s\n' "$name"
+  else
+    printf '#[fg=failure]*#[fg=muted] Tailscale\n'
+  fi
+interval = 10
 
 ```
 

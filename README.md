@@ -36,17 +36,58 @@ zig build -Doptimize=ReleaseSafe
 > tarball or at `$(brew --prefix statusbar)/share/statusbar/AGENT_SETUP.md`
 > after a Homebrew install.
 
-If you built from source, use `./zig-out/bin/statusbar` in place of
-`statusbar` below.
+If you built from source, use `./zig-out/bin/statusbar` and
+`./zig-out/bin/statusbar-theme` in place of the bare command names below.
 
 ```sh
-# Start your usual shell with the built-in statusbar.
 statusbar
+```
 
-# Make a personal config from the built-in one.
+This starts your usual shell with a status bar. Run the commands below in
+that shell; exit it to return to your original session.
+
+## Choose a theme
+
+`statusbar-theme` is an interactive theme picker included with statusbar.
+**Start `statusbar` first**, then open the picker inside that session:
+
+| Installation | Open the bundled themes |
+| --- | --- |
+| Homebrew | `statusbar-theme` |
+| Release tarball, from its extracted directory | `./bin/statusbar-theme ./themes` |
+| Source build, from the repository directory | `./zig-out/bin/statusbar-theme ./zig-out/share/statusbar/themes` |
+
+Use arrows or `j`/`k` to select a theme, then **Enter** to apply it. The
+picker stays open so you can try others. Press **Esc** or **q** to close it
+and keep the last applied theme.
+
+Applying a theme changes only the current session. **To use it every time**,
+run the copy command the picker prints when you exit after changing themes.
+
+Homebrew builds find their bundled themes automatically. You can also pass
+a directory of your own `.config` themes:
+
+```sh
+statusbar-theme ~/.config/statusbar/themes
+```
+
+The bundled themes include versions with fixed colors and versions that
+follow your terminal's palette. See [sample themes](samples/themes/README.md).
+The picker uses [zooi](https://github.com/vrypan/zooi).
+
+## Customize your bar
+
+Edit your saved config, or create one from the built-in layout:
+
+```sh
 mkdir -p ~/.config/statusbar
 statusbar config --default > ~/.config/statusbar/config
-statusbar
+```
+
+After editing the file, apply it to the running session:
+
+```sh
+statusbar config < ~/.config/statusbar/config
 ```
 
 Each config line has a left and right side. Add text, a clock, or a command's
@@ -58,22 +99,6 @@ For live output, `statusbar push -t build -- make` adds a temporary line;
 a statusbar slot.
 
 Run `statusbar --help` for the full command list.
-
-With Homebrew, pick and preview a theme inside a running session:
-
-```sh
-statusbar-theme
-```
-
-Use arrows or `j`/`k` to select, Enter to apply, and Esc or `q` to close.
-The picker uses [zooi](https://github.com/vrypan/zooi) and changes only the
-current session. See [sample themes](samples/themes/README.md).
-The Homebrew build defaults to its bundled themes. Pass a directory to browse
-your own, for example `statusbar-theme ~/.config/statusbar/themes`.
-
-Release tarballs include a `themes/` directory alongside `bin/`. After
-extracting one, run `./bin/statusbar-theme ./themes` from its directory.
-Source builds install themes in `zig-out/share/statusbar/themes`.
 
 ## Use Starship in statusbar
 
