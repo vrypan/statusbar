@@ -5,6 +5,9 @@ since the previous version.
 
 ## Unreleased
 
+- Default the Homebrew theme picker to its bundled theme directory
+- Bundle sample themes in release archives and Homebrew installations
+- Add `statusbar-theme DIRECTORY`, an interactive theme picker using zooi
 - Add terminal-palette variants of all six sample themes
 
 ## v0.4.1

@@ -17,12 +17,25 @@ class Statusbar < Formula
 
   def install
     ENV["ZIG_GLOBAL_CACHE_DIR"] = (buildpath/".zig-global-cache").to_s
-    system "zig", "build", "-Doptimize=ReleaseSafe", "--prefix", prefix
+    system "zig", "build", "-Doptimize=ReleaseSafe",
+           "-Ddefault-themes-dir=#{opt_pkgshare}/themes", "--prefix", prefix
     generate_completions_from_executable bin/"statusbar", "completion"
+  end
+
+  def caveats
+    <<~EOS
+      Browse the bundled themes inside a running statusbar session:
+        statusbar-theme
+    EOS
   end
 
   test do
     assert_path_exists bin/"statusbar"
+    assert_path_exists bin/"statusbar-theme"
+    assert_path_exists pkgshare/"themes/pure.config"
+    assert_path_exists pkgshare/"themes/pure-native.config"
+    assert_match "Usage: statusbar-theme", shell_output("#{bin}/statusbar-theme --help")
+    assert_match "Default directory: #{opt_pkgshare}/themes", shell_output("#{bin}/statusbar-theme --help")
     assert_match version.to_s, shell_output("#{bin}/statusbar --version")
     assert_match "[line.1]", shell_output("#{bin}/statusbar config --default")
   end

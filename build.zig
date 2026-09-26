@@ -62,6 +62,13 @@ fn addLayers(
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const themes_dir = b.option([]const u8, "themes-dir", "Theme directory relative to the install prefix") orelse "share/statusbar/themes";
+    b.installDirectory(.{
+        .source_dir = b.path("samples/themes"),
+        .install_dir = .prefix,
+        .install_subdir = themes_dir,
+        .include_extensions = &.{".config"},
+    });
 
     const options = b.addOptions();
     options.addOption([]const u8, "version", manifest.version);
@@ -91,6 +98,26 @@ pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{ .name = "statusbar", .root_module = mod });
     b.installArtifact(exe);
 
+    const theme_mod = b.createModule(.{
+        .root_source_file = b.path("src/theme_picker/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const zooi = b.dependency("zooi", .{}).module("zooi");
+    // Share one Unicode module across zooi and the config parser. Separate
+    // zunic versions generate identical options files, which Zig rejects.
+    zooi.addImport("zunic", packages.zunic);
+    theme_mod.addImport("zooi", zooi);
+    theme_mod.addImport("cli", layers.get(.cli));
+    theme_mod.addImport("terminal", layers.get(.terminal));
+    theme_mod.addOptions("build_options", options);
+    const theme_options = b.addOptions();
+    theme_options.addOption(?[]const u8, "default_themes_dir", b.option([]const u8, "default-themes-dir", "Default directory for statusbar-theme when no argument is given"));
+    theme_mod.addOptions("theme_options", theme_options);
+    const theme_exe = b.addExecutable(.{ .name = "statusbar-theme", .root_module = theme_mod });
+    b.installArtifact(theme_exe);
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
@@ -113,6 +140,8 @@ pub fn build(b: *std.Build) void {
     // Zig runs only the tests of a compilation's root module, so each layer
     // gets its own test binary.
     const test_step = b.step("test", "Run unit tests");
+    const theme_tests = b.addTest(.{ .name = "theme-picker", .root_module = theme_mod });
+    test_step.dependOn(&b.addRunArtifact(theme_tests).step);
     for (std.enums.values(Layer)) |layer| {
         const tests = b.addTest(.{ .name = @tagName(layer), .root_module = layers.get(layer) });
         test_step.dependOn(&b.addRunArtifact(tests).step);

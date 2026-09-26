@@ -140,6 +140,10 @@ such as [Pure Native](../samples/themes/pure-native.config). The
 [theme directory](../samples/themes/README.md) also includes Minimal and
 Multi-line layouts, both with native variants.
 
+Inside a running session, use `statusbar-theme /path/to/themes` to browse
+and activate a `.config` file with the keyboard. The picker changes the
+current session without writing your saved config.
+
 From the repository checkout, try one without replacing your config:
 
 ```sh

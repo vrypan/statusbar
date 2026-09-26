@@ -12,10 +12,15 @@
             .url = "git+https://github.com/vrypan/zecli.git?ref=v0.4.4#644c2668b209d0637d7b7245ee786fbb29f2b496",
             .hash = "zecli-0.4.4-j151kwOjAwC6rTbPTKN1BAQUUYAIACV4A2Xr3qG11q6U",
         },
+        .zooi = .{
+            .url = "git+https://github.com/vrypan/zooi.git#99885e109c951ceb17e1500184558ff81006a20c",
+            .hash = "zooi-0.3.3-c99W4EroAwA0-F8-IXHN6sBnbbBjOuIwmGWwapbiMY8t",
+        },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
+        "samples",
     },
 }

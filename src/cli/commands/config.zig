@@ -76,10 +76,21 @@ fn sendConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
         return 1;
     };
     if (text.len == 0) return common.usageError(stderr, command, "stdin contains no config");
+    return sendText(arena, io, token, text, "stdin", stderr);
+}
+
+/// Validate and submit a replacement from either the CLI or the theme picker.
+pub fn sendText(arena: std.mem.Allocator, io: Io, token: []const u8, text: []const u8, label: []const u8, stderr: *Io.Writer) !u8 {
+    const protocol = @import("terminal").config_protocol;
+    if (text.len == 0) {
+        try stderr.print("statusbar: {s}: empty config\n", .{label});
+        try stderr.flush();
+        return 2;
+    }
     var diag: config.Diagnostic = .{};
     var checked = config.parse(arena, text, &diag) catch |err| {
         if (err == error.OutOfMemory) return err;
-        if (diag.line > 0) try stderr.print("statusbar: stdin:{d}: {s}\n", .{ diag.line, diag.message }) else try stderr.print("statusbar: stdin: {s}\n", .{diag.message});
+        if (diag.line > 0) try stderr.print("statusbar: {s}:{d}: {s}\n", .{ label, diag.line, diag.message }) else try stderr.print("statusbar: {s}: {s}\n", .{ label, diag.message });
         try stderr.flush();
         return 2;
     };

@@ -21,6 +21,7 @@ test:
 
 test-integration: build
 	python3 -u tests/multirow_pty.py ./zig-out/bin/statusbar
+	python3 -u tests/theme_picker_pty.py ./zig-out/bin/statusbar-theme ./zig-out/bin/statusbar
 
 fmt-check:
 	$(ZIG) fmt --check src build.zig build.zig.zon
@@ -31,14 +32,18 @@ all: $(TARGETS)
 
 $(TARGETS):
 	@echo "==> $@"
-	$(ZIG) build -Dtarget=$@ -Doptimize=$(OPTIMIZE) --prefix $(DIST)/statusbar-$(VERSION)-$@
+	$(ZIG) build -Dtarget=$@ -Doptimize=$(OPTIMIZE) -Dthemes-dir=themes --prefix $(DIST)/statusbar-$(VERSION)-$@
 
 package: all
 	@for target in $(TARGETS); do \
 		root="statusbar-$(VERSION)-$$target"; \
 		dir="$(DIST)/$$root"; \
 		test -x "$$dir/bin/statusbar" || exit 1; \
-		tar -czf "$(DIST)/$$root.tar.gz" -C "$(DIST)" "$$root" || exit 1; \
+		test -x "$$dir/bin/statusbar-theme" || exit 1; \
+		for theme in samples/themes/*.config; do \
+			cmp "$$theme" "$$dir/themes/$${theme##*/}" || exit 1; \
+		done; \
+		COPYFILE_DISABLE=1 tar -czf "$(DIST)/$$root.tar.gz" -C "$(DIST)" "$$root" || exit 1; \
 		echo "$(DIST)/$$root.tar.gz"; \
 	done
 

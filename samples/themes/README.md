@@ -49,6 +49,43 @@ configuration; selecting a native statusbar theme does not recolor Starship.
 
 ## Try a layout
 
+All twelve configs are bundled with the binaries:
+
+| Installation | Theme directory |
+| --- | --- |
+| Homebrew | `$(brew --prefix statusbar)/share/statusbar/themes` |
+| Release tarball | `themes/` alongside `bin/` |
+| `zig build` | `zig-out/share/statusbar/themes` |
+
+For Homebrew, run inside a statusbar session:
+
+```sh
+statusbar-theme
+```
+
+The Homebrew build uses its bundled theme directory by default; an explicit
+directory argument overrides it. Other builds require a directory unless
+compiled with `-Ddefault-themes-dir=/path/to/themes`.
+
+Themes installed by Homebrew are package data and may be replaced on upgrade.
+Copy a theme to your own directory before customizing it.
+
+Inside a running statusbar session, browse this directory interactively:
+
+```sh
+./zig-out/bin/statusbar-theme ./samples/themes
+```
+
+The separate `statusbar-theme` binary lists `.config` files alphabetically
+in the given directory, including symlinks to regular files. It does not
+recurse. Use arrows or `j`/`k`, Page Up/Down, and Home/End to navigate.
+Enter validates and applies the selected config while keeping the picker open.
+Esc, `q`, or Ctrl-C closes it, leaving the last applied theme active.
+Invalid or oversized configs report an error and leave the session unchanged.
+Selecting a theme replaces the entire session config, just like
+`statusbar config < FILE`, without modifying your saved config. Commands in
+the selected config run once it is activated.
+
 These are statusbar adaptations inspired by the linked Starship presets,
 not Starship configuration files. Starship is not required. Gruvbox and
 Pastel need Powerline glyphs, usually provided by a Nerd Font; Pure and Tokyo

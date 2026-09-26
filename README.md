@@ -18,7 +18,7 @@ Or build from source with Zig 0.16 on macOS or Linux:
 
 ```sh
 zig build -Doptimize=ReleaseSafe
-# The binary is zig-out/bin/statusbar
+# Binaries: zig-out/bin/statusbar and zig-out/bin/statusbar-theme
 ```
 
 ## Quick start
@@ -45,6 +45,22 @@ For live output, `statusbar push -t build -- make` adds a temporary line;
 a statusbar slot.
 
 Run `statusbar --help` for the full command list.
+
+With Homebrew, pick and preview a theme inside a running session:
+
+```sh
+statusbar-theme
+```
+
+Use arrows or `j`/`k` to select, Enter to apply, and Esc or `q` to close.
+The picker uses [zooi](https://github.com/vrypan/zooi) and changes only the
+current session. See [sample themes](samples/themes/README.md).
+The Homebrew build defaults to its bundled themes. Pass a directory to browse
+your own, for example `statusbar-theme ~/.config/statusbar/themes`.
+
+Release tarballs include a `themes/` directory alongside `bin/`. After
+extracting one, run `./bin/statusbar-theme ./themes` from its directory.
+Source builds install themes in `zig-out/share/statusbar/themes`.
 
 ## Use Starship in statusbar
 
