@@ -5,6 +5,7 @@ since the previous version.
 
 ## Unreleased
 
+- Show a command to save the selected theme when the picker exits after a change
 - Default the Homebrew theme picker to its bundled theme directory
 - Bundle sample themes in release archives and Homebrew installations
 - Add `statusbar-theme DIRECTORY`, an interactive theme picker using zooi

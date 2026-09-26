@@ -4,6 +4,7 @@ import base64
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -21,7 +22,7 @@ def expect(fd, data, marker):
     return data
 
 
-def pick(binary, directory, keys, *, resize_to=None, apply_marker=PREFIX, again=None):
+def pick(binary, directory, keys, *, resize_to=None, apply_marker=PREFIX, again=None, extra_env=None):
     script = '''
 before=$(stty -g)
 "$1" "$2"
@@ -32,6 +33,7 @@ printf '__RESULT_%s____PICK_FINISHED__' "$code"
 IFS= read -r done
 '''
     env = dict(os.environ, STATUSBAR_SESSION_ID=TOKEN)
+    env.update(extra_env or {})
     pid, fd = spawn(["/bin/sh", "-c", script, "sh", binary, str(directory)], env=env)
     try:
         data = expect(fd, b"", b"Enter apply")
@@ -60,20 +62,26 @@ IFS= read -r done
         stop(pid, fd)
 
 
+def hint_command(data):
+    line = re.search(rb"(?:\r?\n)  cp ([^\r\n]+)", data)
+    assert line, data
+    return shlex.split("cp " + line[1].decode())
+
+
 def check_picker(binary, root):
     themes = root / "themes with spaces"
     themes.mkdir()
     a = b"[line.1]\nleft = FIRST\n"
     z = b"[line.1]\nleft = LAST\n"
     (themes / "z-last.config").write_bytes(z)
-    (themes / "a first.config").write_bytes(a)
-    (themes / "b-link.config").symlink_to("a first.config")
+    (themes / "a first's.config").write_bytes(a)
+    (themes / "b-link.config").symlink_to("a first's.config")
     (themes / "broken.config").symlink_to("missing")
     (themes / "ignored.config").mkdir()
     (themes / "README.md").write_text("not a theme")
     os.mkfifo(themes / "pipe.config")
     data = pick(binary, themes, b"\x1b[B\x1b[B\r")
-    assert data.index(b"a first.config") < data.index(b"b-link.config") < data.index(b"z-last.config")
+    assert data.index(b"a first's.config") < data.index(b"b-link.config") < data.index(b"z-last.config")
     for hidden in (b"README.md", b"ignored.config", b"pipe.config", b"broken.config"):
         assert hidden not in data, data
     frame = re.search(re.escape(PREFIX) + rb"([^\x1b]+)\x1b\\", data)
@@ -81,14 +89,18 @@ def check_picker(binary, root):
     assert base64.b64decode(frame[1]) == b"1;" + TOKEN.encode() + b";" + z
     assert frame.start() < data.index(b"\x1b[?1049l"), data
     assert b"__RESULT_0__" in data, data
+    assert data.index(b"\x1b[?1049l") < data.index(b"To use this theme"), data
+    assert hint_command(data)[1] == str(themes / "z-last.config"), data
 
     data = pick(binary, themes, b"\x1b[F\r", again=b"\x1b[H\r")
     frames = re.findall(re.escape(PREFIX) + rb"([^\x1b]+)\x1b\\", data)
     assert len(frames) == 2 and base64.b64decode(frames[0]).endswith(z) and base64.b64decode(frames[1]).endswith(a), data
 
+    assert hint_command(data)[1] == str(themes / "a first's.config"), data
+
     for keys in (b"q", b"\x1b", b"\x03"):
         data = pick(binary, themes, keys)
-        assert PREFIX not in data and b"__RESULT_0__" in data, data
+        assert PREFIX not in data and b"__RESULT_0__" in data and b"To use this theme" not in data, data
 
     # Page/End/Home navigation after a resize to a one-row terminal.
     data = pick(binary, themes, b"\x1b[F\x1b[Hj\r", resize_to=(1, 12))
@@ -101,8 +113,22 @@ def check_picker(binary, root):
                                 (b"#" * 30000, b"limit")):
         (invalid / "bad.config").write_bytes(contents)
         data = pick(binary, invalid, b"\r", apply_marker=diagnostic)
-        assert PREFIX not in data and diagnostic in data, data
+        assert PREFIX not in data and diagnostic in data and b"To use this theme" not in data, data
         assert b"__RESULT_0__" in data, data
+    for variables, destination in (
+        ({"HOME": str(root / "home"), "XDG_CONFIG_HOME": "", "STATUSBAR_CONFIG": ""}, root / "home/.config/statusbar/config"),
+        ({"XDG_CONFIG_HOME": str(root / "xdg space"), "STATUSBAR_CONFIG": ""}, root / "xdg space/statusbar/config"),
+        ({"STATUSBAR_CONFIG": str(root / "custom's config")}, root / "custom's config"),
+    ):
+        data = pick(binary, themes, b"\r", extra_env=variables)
+        assert hint_command(data) == ["cp", str(themes / "a first's.config"), str(destination)], data
+        assert not destination.exists(), destination
+
+    # Applying the original again leaves no change to persist.
+    state = root / "state"
+    state.write_bytes(f"statusbar-state 2\nlines 1\nsession {TOKEN}\nstartup {len(a)}\ncurrent {len(a)}\n".encode() + a + a)
+    data = pick(binary, themes, b"\x1b[F\r", again=b"\x1b[H\r", extra_env={"STATUSBAR_STATE": str(state)})
+    assert b"To use this theme" not in data, data
     print("picker: discovery, selection, cancellation, resize, validation, restoration")
 
 
@@ -122,7 +148,7 @@ IFS= read -r go
 printf '__SNAPSHOT_DONE__'
 IFS= read -r done
 '''
-    for contents, keys, expected in ((new, b"\r", new), (new, b"q", old),
+    for contents, keys, expected in ((new, b"\r", new), (old, b"\r", old), (new, b"q", old),
                                      ("[unknown]\n", b"\r", old)):
         selected.write_text(contents)
         env = os.environ.copy()
@@ -134,10 +160,11 @@ IFS= read -r done
             data = expect(fd, b"", b"Enter apply")
             os.write(fd, keys)
             if keys == b"\r":
-                data = expect(fd, data, b"Applied:" if expected == new else b"unknown")
+                data = expect(fd, data, b"unknown" if contents == "[unknown]\n" else b"Applied:")
                 assert b"__PICKER_DONE__" not in data, data
                 os.write(fd, b"q")
             data = expect(fd, data, b"__PICKER_DONE__")
+            assert (b"To use this theme" in data) == (expected != old), data
             os.write(fd, b"SNAPSHOT\n")
             snapshot = expect(fd, b"", b"__SNAPSHOT_DONE__")
             assert expected.replace("\n", "\r\n").encode() in snapshot, snapshot
@@ -156,7 +183,7 @@ def main():
     result = subprocess.run([picker, "."], capture_output=True, env=env)
     assert result.returncode == 2 and b"inside a statusbar session" in result.stderr
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         result = subprocess.run([picker, directory], capture_output=True,
                                 env=dict(env, STATUSBAR_SESSION_ID=TOKEN))
         assert result.returncode == 1 and b"no .config files" in result.stderr

@@ -27,6 +27,7 @@ fn terminate(sig: std.posix.SIG) callconv(.c) void {
 }
 
 pub fn main(init: std.process.Init) !u8 {
+    @import("platform").environment.init(init.environ_map);
     const arena = init.arena.allocator();
     const args = try init.minimal.args.toSlice(arena);
     var err_buf: [1024]u8 = undefined;
@@ -72,30 +73,62 @@ pub fn main(init: std.process.Init) !u8 {
         return 1;
     }
 
+    const initial = if (init.environ_map.get("STATUSBAR_STATE")) |state_path|
+        @import("session").session_state.readConfig(arena, init.io, state_path, token, .current) catch null
+    else
+        null;
     const action: std.posix.Sigaction = .{ .handler = .{ .handler = terminate }, .mask = std.posix.sigemptyset(), .flags = 0 };
     for ([_]std.posix.SIG{ .TERM, .HUP, .INT }) |sig| std.posix.sigaction(sig, &action, null);
-    choose(arena, init.io, dir, token, path, names) catch |err| {
+    const changed = choose(arena, init.io, dir, token, path, names, initial) catch |err| {
         try stderr.print("statusbar-theme: terminal UI failed: {t}\n", .{err});
         return 1;
     };
+    if (changed) |name| {
+        const destination = try @import("cli").config_source.selectConfigPath(arena, null);
+        if (destination.path.len > 0) {
+            const directory = try dir.realPathFileAlloc(init.io, ".", arena);
+            const source = try std.fs.path.join(arena, &.{ directory, name });
+            const cwd = try Io.Dir.cwd().realPathFileAlloc(init.io, ".", arena);
+            const target = try std.fs.path.resolve(arena, &.{ cwd, destination.path });
+            try printSaveHint(stdout, source, target);
+        }
+    }
     return 0;
 }
 
-fn applyTheme(arena: std.mem.Allocator, io: Io, dir: Io.Dir, token: []const u8, selected: []const u8, stderr: *Io.Writer) !u8 {
+fn printSaveHint(out: *Io.Writer, source: []const u8, target: []const u8) !void {
+    try out.writeAll("To use this theme every time you start statusbar:\n  mkdir -p ");
+    try shellQuote(out, std.fs.path.dirname(target).?);
+    try out.writeAll("\n  cp ");
+    try shellQuote(out, source);
+    try out.writeByte(' ');
+    try shellQuote(out, target);
+    try out.writeByte('\n');
+}
+
+fn shellQuote(out: *Io.Writer, path: []const u8) !void {
+    try out.writeByte(39);
+    for (path) |byte| {
+        if (byte == 39) try out.writeAll("'\\''") else try out.writeByte(byte);
+    }
+    try out.writeByte(39);
+}
+
+fn applyTheme(arena: std.mem.Allocator, io: Io, dir: Io.Dir, token: []const u8, selected: []const u8, stderr: *Io.Writer) !?[]const u8 {
     const label = selected;
     const stat = dir.statFile(io, selected, .{}) catch |err| {
         try stderr.print("statusbar-theme: cannot read {s}: {t}\n", .{ label, err });
-        return 1;
+        return null;
     };
     if (stat.kind != .file) {
         try stderr.print("statusbar-theme: {s}: not a regular file\n", .{label});
-        return 1;
+        return null;
     }
     const text = dir.readFileAlloc(io, selected, arena, .limited(protocol.max_config)) catch |err| {
         try stderr.print("statusbar-theme: cannot read {s} (limit {d} bytes): {t}\n", .{ label, protocol.max_config, err });
-        return 1;
+        return null;
     };
-    return @import("cli").commands.config.sendText(arena, io, token, text, label, stderr);
+    return if (try @import("cli").commands.config.sendText(arena, io, token, text, label, stderr) == 0) text else null;
 }
 
 fn discover(arena: std.mem.Allocator, io: Io, dir: Io.Dir) ![][]const u8 {
@@ -187,7 +220,8 @@ const Model = struct {
     }
 };
 
-fn choose(arena: std.mem.Allocator, io: Io, dir: Io.Dir, token: []const u8, path: []const u8, names: []const []const u8) !void {
+fn choose(arena: std.mem.Allocator, io: Io, dir: Io.Dir, token: []const u8, path: []const u8, names: []const []const u8, initial: ?[]const u8) !?[]const u8 {
+    var changed: ?[]const u8 = null;
     var ui = try zooi.Ui.init(arena, .{});
     defer ui.deinit();
     var model: Model = .{ .count = names.len, .size = ui.size() };
@@ -204,14 +238,17 @@ fn choose(arena: std.mem.Allocator, io: Io, dir: Io.Dir, token: []const u8, path
                     const alloc = scratch.allocator();
                     var diagnostic: Io.Writer.Allocating = .init(alloc);
                     const name = names[model.view.cursor];
-                    const code = try applyTheme(alloc, io, dir, token, name, &diagnostic.writer);
-                    const message = if (code == 0)
+                    const applied = try applyTheme(alloc, io, dir, token, name, &diagnostic.writer);
+                    if (applied) |text| {
+                        changed = if (initial == null or !std.mem.eql(u8, initial.?, text)) name else null;
+                    }
+                    const message = if (applied != null)
                         try std.fmt.allocPrint(alloc, "Applied: {s}", .{name})
                     else
                         diagnostic.written();
-                    model.setMessage(message, code != 0);
+                    model.setMessage(message, applied == null);
                 },
-                .cancel => return,
+                .cancel => return changed,
                 .continue_ => {},
             }
             if (batch == 63) break;
@@ -219,6 +256,7 @@ fn choose(arena: std.mem.Allocator, io: Io, dir: Io.Dir, token: []const u8, path
         }
         try model.render(ui.screen(), path, names);
     }
+    return changed;
 }
 
 test "selection stays visible across paging and tiny resizes" {

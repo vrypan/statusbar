@@ -111,6 +111,8 @@ pub fn build(b: *std.Build) void {
     theme_mod.addImport("zooi", zooi);
     theme_mod.addImport("cli", layers.get(.cli));
     theme_mod.addImport("terminal", layers.get(.terminal));
+    theme_mod.addImport("session", layers.get(.session));
+    theme_mod.addImport("platform", layers.get(.platform));
     theme_mod.addOptions("build_options", options);
     const theme_options = b.addOptions();
     theme_options.addOption(?[]const u8, "default_themes_dir", b.option([]const u8, "default-themes-dir", "Default directory for statusbar-theme when no argument is given"));

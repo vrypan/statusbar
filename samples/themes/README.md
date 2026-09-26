@@ -81,6 +81,10 @@ in the given directory, including symlinks to regular files. It does not
 recurse. Use arrows or `j`/`k`, Page Up/Down, and Home/End to navigate.
 Enter validates and applies the selected config while keeping the picker open.
 Esc, `q`, or Ctrl-C closes it, leaving the last applied theme active.
+After a change, the picker prints a copy command to make the selected theme
+your startup config. The destination respects `STATUSBAR_CONFIG` and
+`XDG_CONFIG_HOME`, otherwise using `~/.config/statusbar/config`. It only
+prints the command; run it yourself to save the theme.
 Invalid or oversized configs report an error and leave the session unchanged.
 Selecting a theme replaces the entire session config, just like
 `statusbar config < FILE`, without modifying your saved config. Commands in
