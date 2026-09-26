@@ -4,6 +4,10 @@ Changes are grouped by version, newest first. Each section summarizes changes
 since the previous version. Within each release, changes are listed in the
 order they were added.
 
+## Unreleased
+
+- Add a packaged guide for AI agents setting up statusbar and custom themes
+
 ## v0.4.2
 
 - Add terminal-palette variants of all six sample themes

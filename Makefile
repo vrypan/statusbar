@@ -32,7 +32,7 @@ all: $(TARGETS)
 
 $(TARGETS):
 	@echo "==> $@"
-	$(ZIG) build -Dtarget=$@ -Doptimize=$(OPTIMIZE) -Dthemes-dir=themes --prefix $(DIST)/statusbar-$(VERSION)-$@
+	$(ZIG) build -Dtarget=$@ -Doptimize=$(OPTIMIZE) -Dthemes-dir=themes -Dguide-dir=. --prefix $(DIST)/statusbar-$(VERSION)-$@
 
 package: all
 	@for target in $(TARGETS); do \
@@ -40,6 +40,7 @@ package: all
 		dir="$(DIST)/$$root"; \
 		test -x "$$dir/bin/statusbar" || exit 1; \
 		test -x "$$dir/bin/statusbar-theme" || exit 1; \
+		cmp AGENT_SETUP.md "$$dir/AGENT_SETUP.md" || exit 1; \
 		for theme in samples/themes/*.config; do \
 			cmp "$$theme" "$$dir/themes/$${theme##*/}" || exit 1; \
 		done; \

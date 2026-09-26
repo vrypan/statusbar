@@ -26,6 +26,8 @@ class Statusbar < Formula
     <<~EOS
       Browse the bundled themes inside a running statusbar session:
         statusbar-theme
+      For AI-assisted setup and theme design, see:
+        #{opt_pkgshare}/AGENT_SETUP.md
     EOS
   end
 
@@ -34,6 +36,7 @@ class Statusbar < Formula
     assert_path_exists bin/"statusbar-theme"
     assert_path_exists pkgshare/"themes/pure.config"
     assert_path_exists pkgshare/"themes/pure-native.config"
+    assert_path_exists pkgshare/"AGENT_SETUP.md"
     assert_match "Usage: statusbar-theme", shell_output("#{bin}/statusbar-theme --help")
     assert_match "Default directory: #{opt_pkgshare}/themes", shell_output("#{bin}/statusbar-theme --help")
     assert_match version.to_s, shell_output("#{bin}/statusbar --version")

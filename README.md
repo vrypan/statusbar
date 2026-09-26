@@ -39,6 +39,11 @@ statusbar
 Each config line has a left and right side. Add text, a clock, or a command's
 output; [the guide](docs/README.md) starts with small examples.
 
+If you want an AI agent to help set up statusbar and make a personal theme,
+give it [AGENT_SETUP.md](AGENT_SETUP.md). This file is at the root of a release
+tarball or at `$(brew --prefix statusbar)/share/statusbar/AGENT_SETUP.md`
+after a Homebrew install.
+
 Inside a statusbar session, scripts can set a slot with `statusbar set 1 "Ready"`.
 For live output, `statusbar push -t build -- make` adds a temporary line;
 `statusbar pop` removes it. You can also move Starship's prompt details into

@@ -69,6 +69,8 @@ pub fn build(b: *std.Build) void {
         .install_subdir = themes_dir,
         .include_extensions = &.{".config"},
     });
+    const guide_dir = b.option([]const u8, "guide-dir", "Agent guide directory relative to the install prefix") orelse "share/statusbar";
+    b.installFile("AGENT_SETUP.md", b.pathJoin(&.{ guide_dir, "AGENT_SETUP.md" }));
 
     const options = b.addOptions();
     options.addOption([]const u8, "version", manifest.version);
