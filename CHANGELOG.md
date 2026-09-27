@@ -6,6 +6,8 @@ order they were added.
 
 ## Unreleased
 
+## v0.4.3
+
 - Add a packaged guide for AI agents setting up statusbar and custom themes
 
 ## v0.4.2
