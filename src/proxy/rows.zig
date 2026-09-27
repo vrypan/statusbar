@@ -92,6 +92,8 @@ pub fn resizeForPushedRows(self: *Proxy, now_ms: i64) !void {
 }
 
 pub fn controlRequest(self: *Proxy, request: push_protocol.Request, owner: []const u8, now_ms: i64) push_protocol.Reply {
+    if (request == .fifo_create) return self.createFifo(request.fifo_create.name, request.fifo_create.slot, now_ms);
+    if (request == .fifo_remove) return self.removeFifo(request.fifo_remove, now_ms);
     if (request == .create) {
         if (@as(usize, self.runtime.lines) + self.pushed.items.items.len >= 65533) return .rejected;
         const tag = request.create;
@@ -117,6 +119,7 @@ pub fn controlRequest(self: *Proxy, request: push_protocol.Request, owner: []con
     if (request == .pop_all) {
         const previous = self.pushed.items.items;
         if (previous.len == 0) return .ok;
+        for (self.fifos.items.items) |*binding| if (binding.target == .row and !binding.ownedPath()) return .rejected;
         // Keep storage and IDs so a failed resize can restore all lines.
         self.pushed.items.items.len = 0;
         self.resizeForPushedRows(now_ms) catch {
@@ -124,15 +127,29 @@ pub fn controlRequest(self: *Proxy, request: push_protocol.Request, owner: []con
             self.composeRows(self.runtime, self.layout, true) catch {};
             return .rejected;
         };
-        return .ok;
+        var i = self.fifos.items.items.len;
+        var cleanup_failed = false;
+        while (i > 0) {
+            i -= 1;
+            if (self.fifos.items.items[i].target == .row) self.fifos.remove(i) catch {
+                cleanup_failed = true;
+            };
+        }
+        return if (cleanup_failed) .rejected else .ok;
     }
     const id = switch (request) {
-        .create, .pop_all => unreachable,
+        .create, .pop_all, .fifo_create, .fifo_remove => unreachable,
         .update => |update| update.id,
         .finish => |finish| finish.id,
         .pop => |id| id orelse self.pushed.latestId() orelse return .empty,
     };
     if (id == 0 or id >= self.pushed.next_id) return .rejected;
+    if (request == .pop) if (self.fifos.findRow(id)) |fifo_index| {
+        var name: [64]u8 = undefined;
+        const found = self.fifos.items.items[fifo_index].nameSlice();
+        @memcpy(name[0..found.len], found);
+        return self.removeFifo(name[0..found.len], now_ms);
+    };
     if (request == .update or request == .finish) {
         if (request == .finish and !self.pushed.exists(id)) return .ok;
         if (!self.pushed.ownedBy(id, owner)) return .rejected;
@@ -199,7 +216,7 @@ pub fn drainControl(self: *Proxy, now_ms: i64) void {
             break :reply self.controlRequest(request, owner, now_ms);
         };
         if (envelope.needsReply()) {
-            var response: [64]u8 = undefined;
+            var response: [256]u8 = undefined;
             const encoded = push_protocol.encodeReply(&response, reply) catch "ERR";
             self.control_endpoint.reply(&from, from_len, encoded);
         }

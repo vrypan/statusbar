@@ -1,5 +1,8 @@
 # Add and remove temporary lines
 
+To redirect commands into a stable named path across writes, see
+[named FIFOs](fifo.md). A FIFO pushed row remains running until removed.
+
 Use `statusbar push` when a command needs its own line. For a quick example,
 send it a line of text:
 

@@ -85,6 +85,9 @@ printf '\e]1337;SetUserVar=StatusBarSlot4=%s\a' "$(printf %s 'build ✓' | base6
 The receiver also accepts `StatusBarSlotLiteralN` in the same OSC envelope for
 external senders that need literal text without statusbar markup.
 
+For a program that writes repeated output to a file path, create a
+[named FIFO](fifo.md) with `statusbar fifo --slot N NAME`.
+
 statusbar consumes valid numbered slot variables and drops malformed or
 out-of-range variables under its `StatusBar` namespace. It forwards unrelated
 OSC sequences and user variables to the terminal. Updates are one-way and

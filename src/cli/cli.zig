@@ -102,6 +102,25 @@ const commands = [_]zecli.CommandSpec{
         .examples = &.{ "tail -n 0 -f app.log | statusbar push -t app.log &", "statusbar push -t 100Mb.dat -- curl --progress-bar -o /dev/null URL", "id=$(printf 'Done\\n' | statusbar push)" },
     },
     .{
+        .name = "fifo",
+        .description = "Create or remove a named FIFO for a slot or pushed row",
+        .usage = "statusbar fifo [--slot N] NAME | statusbar fifo --remove NAME",
+        .flags = &.{
+            .{ .name = "slot", .value = .string, .value_name = "N", .description = "Existing configured slot to receive FIFO text" },
+            .{ .name = "remove", .description = "Remove the named FIFO" },
+        },
+        .arguments = &.{.{ .name = "NAME", .description = "FIFO name", .required = true }},
+        .double_dash = .positionals,
+        .extra_help =
+        \\Without --slot, create a pushed row tagged NAME. Creation prints its
+        \\absolute FIFO path. The session also exports STATUSBAR_SLOTS; create
+        \\a FIFO before redirecting output to that directory.
+        \\A writer's latest nonempty line stays visible after it closes.
+        \\Removal prints nothing; open writers may receive EPIPE.
+        ++ "\n",
+        .examples = &.{ "statusbar fifo build", "statusbar fifo --slot 3 prompt", "make > \"$STATUSBAR_SLOTS/build\" 2>&1", "statusbar fifo --remove build" },
+    },
+    .{
         .name = "pop",
         .description = "Remove pushed lines",
         .usage = "statusbar pop [ID | --all]",

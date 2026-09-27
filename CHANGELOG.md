@@ -6,6 +6,7 @@ order they were added.
 
 ## Unreleased
 
+- Add on-demand named FIFOs for configured slots and pushed rows
 - Add `#(datetime:FORMAT)` and terminal size properties to templates
 - Update bundled themes to use `#(datetime:FORMAT)`
 

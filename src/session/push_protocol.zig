@@ -2,19 +2,23 @@
 const std = @import("std");
 const rows = @import("pushed_rows.zig");
 pub const max_packet = 1536;
-pub const Operation = enum { create, update, finish, pop, pop_all };
+pub const Operation = enum { create, update, finish, pop, pop_all, fifo_create, fifo_remove };
 pub const Request = union(Operation) {
     create: []const u8,
     update: struct { id: u64, value: []const u8 },
     finish: struct { id: u64, result: rows.Completion = .done },
     pop: ?u64,
     pop_all,
+    fifo_create: struct { name: []const u8, slot: ?usize },
+    fifo_remove: []const u8,
 };
 pub const Reply = union(enum) {
     ok,
     rejected,
     empty,
     created: struct { id: u64, columns: usize },
+    fifo_path: []const u8,
+    fifo_error: []const u8,
 };
 const Invalid = error{InvalidPacket};
 
@@ -30,7 +34,7 @@ pub const Envelope = struct {
         if (!std.mem.eql(u8, fields.next() orelse return error.InvalidPacket, "1")) return error.InvalidPacket;
         const token = fields.next() orelse return error.InvalidPacket;
         const code = fields.next() orelse return error.InvalidPacket;
-        const operation: Operation = if (std.mem.eql(u8, code, "C")) .create else if (std.mem.eql(u8, code, "U")) .update else if (std.mem.eql(u8, code, "F")) .finish else if (std.mem.eql(u8, code, "P")) .pop else if (std.mem.eql(u8, code, "A")) .pop_all else return error.InvalidPacket;
+        const operation: Operation = if (std.mem.eql(u8, code, "C")) .create else if (std.mem.eql(u8, code, "U")) .update else if (std.mem.eql(u8, code, "F")) .finish else if (std.mem.eql(u8, code, "P")) .pop else if (std.mem.eql(u8, code, "A")) .pop_all else if (std.mem.eql(u8, code, "N")) .fifo_create else if (std.mem.eql(u8, code, "R")) .fifo_remove else return error.InvalidPacket;
         return .{ .token = token, .operation = operation, .fields = fields };
     }
 
@@ -57,6 +61,8 @@ pub const Envelope = struct {
             .finish => .{ .finish = .{ .id = try parseId(self.fields.next()), .result = try self.decodeCompletion() } },
             .pop_all => .pop_all,
             .pop => .{ .pop = if (self.fields.next()) |value| try parseId(value) else null },
+            .fifo_create => .{ .fifo_create = .{ .name = try decodeValue(self.fields.next() orelse return error.InvalidPacket, buffer[0..64]), .slot = if (self.fields.next()) |value| std.fmt.parseInt(usize, value, 10) catch return error.InvalidPacket else null } },
+            .fifo_remove => .{ .fifo_remove = try decodeValue(self.fields.next() orelse return error.InvalidPacket, buffer[0..64]) },
         };
         if (self.fields.next() != null) return error.InvalidPacket;
         return request;
@@ -103,6 +109,14 @@ pub fn encode(buffer: []u8, token: []const u8, request: Request) ![]const u8 {
             try writer.writeAll("P");
             if (id) |number| try writer.print("|{d}", .{number});
         },
+        .fifo_create => |fifo| {
+            try writer.writeAll("N");
+            value = fifo.name;
+        },
+        .fifo_remove => |name| {
+            try writer.writeAll("R");
+            value = name;
+        },
     }
     if (value) |bytes| {
         try writer.writeByte('|');
@@ -111,6 +125,7 @@ pub fn encode(buffer: []u8, token: []const u8, request: Request) ![]const u8 {
         _ = std.base64.standard.Encoder.encode(buffer[writer.end..][0..len], bytes);
         writer.advance(len);
     }
+    if (request == .fifo_create) if (request.fifo_create.slot) |slot| try writer.print("|{d}", .{slot});
     return writer.buffered();
 }
 
@@ -120,6 +135,8 @@ pub fn encodeReply(buffer: []u8, reply: Reply) ![]const u8 {
         .rejected => "ERR",
         .empty => "EMPTY",
         .created => |row| try std.fmt.bufPrint(buffer, "OK|{d}|{d}", .{ row.id, row.columns }),
+        .fifo_path => |path| try std.fmt.bufPrint(buffer, "PATH|{s}", .{path}),
+        .fifo_error => |reason| try std.fmt.bufPrint(buffer, "FIFOERR|{s}", .{reason}),
     };
 }
 
@@ -127,6 +144,8 @@ pub fn decodeReply(packet: []const u8) Invalid!Reply {
     if (std.mem.eql(u8, packet, "OK")) return .ok;
     if (std.mem.eql(u8, packet, "ERR")) return .rejected;
     if (std.mem.eql(u8, packet, "EMPTY")) return .empty;
+    if (std.mem.startsWith(u8, packet, "PATH|") and packet.len > 5 and std.mem.indexOfScalar(u8, packet[5..], '|') == null) return .{ .fifo_path = packet[5..] };
+    if (std.mem.startsWith(u8, packet, "FIFOERR|") and packet.len > 8 and std.mem.indexOfScalar(u8, packet[8..], '|') == null) return .{ .fifo_error = packet[8..] };
     var parts = std.mem.splitScalar(u8, packet, '|');
     if (!std.mem.eql(u8, parts.next() orelse return error.InvalidPacket, "OK")) return error.InvalidPacket;
     const id = try parseId(parts.next());
@@ -169,4 +188,27 @@ test "push wire format remains compatible and rejects malformed fields" {
     try std.testing.expectEqualStrings(maximum, (try full.decode(&decoded)).update.value);
     var oversized = try Envelope.parse(try encode(&packet, "token", .{ .create = "x" ** (rows.max_tag + 1) }));
     try std.testing.expectError(error.InvalidPacket, oversized.decode(&decoded));
+}
+
+test "FIFO control frames validate fields and bound replies" {
+    var packet: [max_packet]u8 = undefined;
+    var decoded: [rows.max_text]u8 = undefined;
+    for ([_]Request{
+        .{ .fifo_create = .{ .name = "build", .slot = null } },
+        .{ .fifo_create = .{ .name = "prompt", .slot = 3 } },
+        .{ .fifo_remove = "build" },
+    }) |request| {
+        const wire = try encode(&packet, "token", request);
+        var envelope = try Envelope.parse(wire);
+        try std.testing.expect(envelope.needsReply());
+        try std.testing.expectEqualDeep(request, try envelope.decode(&decoded));
+    }
+    for ([_][]const u8{ "1|token|N", "1|token|N|YQ==|0|extra", "1|token|N|YQ==|oops", "1|token|R", "1|token|R|YQ==|extra" }) |wire| {
+        var envelope = try Envelope.parse(wire);
+        try std.testing.expectError(error.InvalidPacket, envelope.decode(&decoded));
+    }
+    var reply_buf: [256]u8 = undefined;
+    const path = "/tmp/statusbar-state-1-2.slots/build";
+    try std.testing.expectEqualStrings(path, (try decodeReply(try encodeReply(&reply_buf, .{ .fifo_path = path }))).fifo_path);
+    try std.testing.expectError(error.NoSpaceLeft, encodeReply(&reply_buf, .{ .fifo_path = "x" ** 256 }));
 }

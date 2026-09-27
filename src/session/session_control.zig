@@ -98,11 +98,11 @@ pub const Client = struct {
         if (c.send(self.fd, message.ptr, message.len, 0) != @as(isize, @intCast(message.len))) return error.SendFailed;
     }
 
-    pub fn request(self: *Client, message: []const u8, result: *[128]u8) ![]const u8 {
+    pub fn request(self: *Client, message: []const u8, result: []u8) ![]const u8 {
         try self.send(message);
         var fds = [_]posix.pollfd{.{ .fd = self.fd, .events = posix.POLL.IN, .revents = 0 }};
         if (try posix.poll(&fds, 2000) != 1) return error.RequestTimeout;
-        const n = c.recv(self.fd, result, result.len, 0);
+        const n = c.recv(self.fd, result.ptr, result.len, 0);
         if (n <= 0) return error.ReceiveFailed;
         return result[0..@intCast(n)];
     }

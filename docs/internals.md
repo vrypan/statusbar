@@ -51,6 +51,10 @@ shell
   datagram socket authenticates and acknowledges line creation and removal;
   bounded stream updates display text literally.
   Their IDs and content are separate from configured slot numbering.
+- Named FIFOs are created on demand under a private session directory. Their
+  readers are polled in the proxy loop with bounded per-pass reads. The session
+  retains a writer descriptor to keep idle pipes open and removes owned paths
+  on binding removal and normal shutdown. See [named FIFOs](fifo.md).
 - Exact OSC 3110 `STATUSBAR` messages are also taken out of the output stream.
   A session token authenticates complete `CONFIG` replacement requests. The
   streaming parser stops at each request boundary so config and slot updates
@@ -246,9 +250,9 @@ this list:
 | `platform/` | System calls, raw mode, process execution, the log file |
 | `terminal/` | Byte-stream filters between the terminal and the child, the palette probe, OSC 3110 framing |
 | `render/` | Markup, styled text, the cell grid, and the `Renderer` in `bar.zig`, with line content in `content.zig`, layout in `row_layout.zig`, highlight scheduling in `effects.zig` and paint bytes in `serialize.zig` |
-| `session/` | The control socket, the session state file, and pushed lines |
+| `session/` | The control socket, the session state file, pushed lines, and FIFO registry in `fifo.zig` |
 | `model/` | Config parsing, status commands, and their content; datetime parsing and formatting in `datetime.zig`, terminal value parsing and snapshots in `terminal_properties.zig` |
-| `proxy/` | Session setup and the `Proxy` state in `proxy.zig`; its methods grouped by concern in `loop.zig`, `rows.zig`, `terminal_input.zig` and `reload.zig` |
+| `proxy/` | Session setup and the `Proxy` state in `proxy.zig`; its methods grouped by concern in `loop.zig`, `rows.zig`, `fifo.zig`, `terminal_input.zig` and `reload.zig` |
 | `cli/` | One file per subcommand in `commands/`, shell integration scripts in `shell/`; `main.zig` stays at the root of `src/` |
 
 `terminal/` and `render/` are independent of each other, as are `shared/` and

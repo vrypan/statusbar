@@ -38,6 +38,7 @@ pub const Completion = union(enum) {
 
 pub const Row = struct {
     completion: ?Completion = null,
+    internal: bool = false,
 
     id: u64,
     owner: [108]u8 = undefined,
@@ -85,8 +86,14 @@ pub const Rows = struct {
         return id;
     }
 
+    pub fn pushInternal(self: *Rows, tag: []const u8) !u64 {
+        const id = try self.push("@session-fifo", tag);
+        self.items.items[self.items.items.len - 1].internal = true;
+        return id;
+    }
+
     pub fn ownedBy(self: *const Rows, id: u64, owner: []const u8) bool {
-        for (self.items.items) |*row| if (row.id == id) return std.mem.eql(u8, row.owner[0..row.owner_len], owner);
+        for (self.items.items) |*row| if (row.id == id) return !row.internal and std.mem.eql(u8, row.owner[0..row.owner_len], owner);
         return false;
     }
 
@@ -142,6 +149,14 @@ test "rows preserve IDs after middle removal and ignore late updates" {
     try std.testing.expect(rows.pop(3));
     try std.testing.expect(rows.pop(1));
     try std.testing.expectEqual(@as(?u64, null), rows.latestId());
+}
+
+test "session-owned FIFO rows reject client updates" {
+    var rows: Rows = .{ .allocator = std.testing.allocator };
+    defer rows.deinit();
+    const id = try rows.pushInternal("build");
+    try std.testing.expect(!rows.ownedBy(id, "@session-fifo"));
+    try std.testing.expect(rows.update(id, "direct session value"));
 }
 
 test "row capacity is bounded and IDs do not wrap" {

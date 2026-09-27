@@ -61,6 +61,7 @@ pub fn main(init: std.process.Init) !u8 {
         .set => commands.set.run(arena, init.io, command, stderr),
         .push => commands.push.run(arena, init.io, command, stdout, stderr),
         .pop => commands.pop.run(init.io, command, stderr),
+        .fifo => commands.fifo.run(init.io, command, stdout, stderr),
         .init => commands.init.run(arena, init.io, args[0], command, stdout, stderr),
         .config => commands.config.run(arena, init.io, command, stdout, stderr, help_output),
         .completion => commands.completion.run(command, stdout, stderr),

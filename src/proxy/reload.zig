@@ -47,6 +47,14 @@ pub fn replaceConfig(self: *Proxy, text: []const u8, now_ms: i64, diag: *config.
         return err;
     };
     std.mem.swap(Runtime, self.runtime, &candidate);
+    var fifo_index = self.fifos.items.items.len;
+    while (fifo_index > 0) {
+        fifo_index -= 1;
+        const binding = &self.fifos.items.items[fifo_index];
+        if (binding.target == .slot and binding.target.slot >= @as(usize, self.runtime.lines) * 2) {
+            self.fifos.remove(fifo_index) catch |err| if (self.log) |log| log.write("FIFO cleanup failed after reload: {t}", .{err});
+        }
+    }
     self.renderer = &self.runtime.renderer;
     self.output.resize(new_layout.bar, new_layout.child.row);
     // DECSTBM homes the cursor. Install the new margins immediately,

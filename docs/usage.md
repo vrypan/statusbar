@@ -19,6 +19,7 @@ statusbar [run] [options] [-- COMMAND...]
 statusbar set <SLOT> [TEXT...]
 statusbar push
 statusbar push -- <COMMAND> [ARG...]
+statusbar fifo [--slot N] NAME | statusbar fifo --remove NAME
 statusbar pop [ID | --all]
 statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
 statusbar config [--print [default|startup|current]] [--default] [--path]
@@ -75,6 +76,13 @@ limits. Pushed lines do not have numbered slots and survive config replacement.
 `statusbar push -t label -- command` shows `[ID] label > stream` by default.
 It starts the command with `COLUMNS` set to the width available for the stream,
 streams its stdout and stderr, and returns its exit status.
+
+## `fifo`
+
+`statusbar fifo NAME` creates a named pipe connected to a new pushed row.
+`statusbar fifo --slot N NAME` sends its output to configured slot N. Both
+print the pipe path; `statusbar fifo --remove NAME` removes it without output.
+See [named FIFOs](fifo.md) for redirection, stream behavior, and cleanup.
 
 ## `init`
 
@@ -216,6 +224,8 @@ working directory or environment of statusbar commands.
 | `STATUSBAR_COLUMNS` | configured commands       | the statusbar width                      |
 | `STATUSBAR_CONFIG`  | read by statusbar         | config file, when `--config` isn't given |
 | `STATUSBAR_STATE`   | the child                  | session indicator and private current line count and config snapshots used by `set` and `config` |
+| `STATUSBAR_SESSION_ID` | the child               | token for authenticated session requests |
+| `STATUSBAR_SLOTS`   | the child                  | private directory for FIFOs created with `statusbar fifo` |
 
 ## Logging
 

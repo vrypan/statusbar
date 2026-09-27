@@ -88,6 +88,10 @@ The new line shows the latest output line and stays visible when `make` ends.
 Use `statusbar pop` without an ID to remove the newest line. See
 [temporary lines](push.md) for pipes, logs, progress bars, and styling.
 
+For repeated output from commands that only know how to write to a file,
+create a [named FIFO](fifo.md) with `statusbar fifo build` or bind one to an
+existing slot with `statusbar fifo --slot 3 prompt`.
+
 ## Use Starship
 
 If you already use [Starship](https://starship.rs), keep its prompt character
@@ -206,6 +210,7 @@ older-config migration details.
 - [Configuration](config.md) — lines, commands, change highlights, colors, markup, and rules.
 - [Updating slots](set.md) — runtime updates from scripts and the terminal protocol.
 - [Pushing lines](push.md) — stream output into a new line and remove it by ID.
+- [Named FIFOs](fifo.md) — redirect output to a named pushed row or configured slot.
 - [Starship](starship.md) — prompt integration and customization.
 - [Display and animation model](display-model.md) — content updates, animation
   ticks, composed frames, and terminal paints.

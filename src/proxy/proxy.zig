@@ -34,6 +34,7 @@ const config_protocol = @import("terminal").config_protocol;
 const SessionState = @import("session").session_state.State;
 const PaletteProbe = @import("terminal").terminal_palette.Probe;
 const PushedRows = @import("session").pushed_rows.Rows;
+const FifoRegistry = @import("session").fifo.Registry;
 const control = @import("session").session_control;
 const process = @import("process.zig");
 const Layout = @import("layout.zig").Layout;
@@ -101,12 +102,15 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     defer endpoint.deinit();
     var pushed: PushedRows = .{ .allocator = gpa };
     defer pushed.deinit();
+    var fifos = try FifoRegistry.init(io, gpa, session_state.path());
+    defer fifos.deinit();
 
     var child_environment = try sys.environMap().clone(gpa);
     defer child_environment.deinit();
     _ = child_environment.swapRemove("STATUSBAR_LINES");
     try child_environment.put("STATUSBAR_STATE", session_state.path());
     try child_environment.put("STATUSBAR_SESSION_ID", &session_token);
+    try child_environment.put("STATUSBAR_SLOTS", fifos.directoryPath());
     const default_argv = [_][]const u8{sys.env("SHELL") orelse "/bin/sh"};
     var executable = try sys.Exec.init(gpa, if (opts.argv.len == 0) &default_argv else opts.argv, &child_environment);
     defer executable.deinit();
@@ -132,6 +136,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         .session_token = session_token,
         .control_endpoint = &endpoint,
         .pushed = &pushed,
+        .fifos = &fifos,
     };
     try proxy.composeRows(&runtime, layout, true);
     defer proxy.releaseRows();
@@ -181,6 +186,8 @@ pub const Proxy = struct {
     session_token: [config_protocol.token_len]u8,
     control_endpoint: *control.Endpoint = undefined,
     pushed: *PushedRows = undefined,
+    fifos: *FifoRegistry = undefined,
+    fifo_rotation: usize = 0,
 
     terminal: TerminalSink = undefined,
     pending_input: PendingInput = .{},
@@ -199,7 +206,7 @@ pub const Proxy = struct {
     /// background jobs still hold the pty open.
     child_status: ?sys.Wait = null,
     child_exited_ms: i64 = 0,
-    control_reply: [64]u8 = undefined,
+    control_reply: [256]u8 = undefined,
 
     pub fn now(self: *const Proxy) i64 {
         return std.Io.Clock.now(.awake, self.io).toMilliseconds();
@@ -215,6 +222,11 @@ pub const Proxy = struct {
     pub const controlRequest = @import("rows.zig").controlRequest;
     pub const drainControl = @import("rows.zig").drainControl;
     pub const controlDue = @import("rows.zig").controlDue;
+    pub const createFifo = @import("fifo.zig").create;
+    pub const removeFifo = @import("fifo.zig").remove;
+    pub const fifoTimeout = @import("fifo.zig").timeout;
+    pub const publishFifos = @import("fifo.zig").publish;
+    pub const drainFifos = @import("fifo.zig").drain;
     pub const makeRoomForGrowth = @import("rows.zig").makeRoomForGrowth;
     pub const eraseRows = @import("rows.zig").eraseRows;
     // terminal_input.zig
@@ -291,6 +303,7 @@ test {
     _ = @import("process.zig");
     _ = @import("terminal_input.zig");
     _ = @import("rows.zig");
+    _ = @import("fifo.zig");
     _ = @import("reload.zig");
     _ = @import("loop.zig");
 }

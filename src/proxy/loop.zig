@@ -87,7 +87,8 @@ pub fn pump(self: *Proxy, sig_r: sys.Fd, pid: c.pid_t) !void {
         .{ .fd = self.master, .events = posix.POLL.IN, .revents = 0 },
         .{ .fd = sig_r, .events = posix.POLL.IN, .revents = 0 },
         .{ .fd = self.control_endpoint.fd, .events = posix.POLL.IN, .revents = 0 },
-    } ++ [_]posix.pollfd{undefined} ** config.max_commands;
+    } ++ [_]posix.pollfd{undefined} ** (config.max_commands + @import("session").fifo.max_bindings);
+    var fifo_snapshots: [@import("session").fifo.max_bindings]@import("fifo.zig").Snapshot = undefined;
     const in = &fds[0];
     const out = &fds[1];
     const sig = &fds[2];
@@ -98,10 +99,17 @@ pub fn pump(self: *Proxy, sig_r: sys.Fd, pid: c.pid_t) !void {
         out.events = posix.POLL.IN;
         if (self.pending_input.len > 0) out.events |= posix.POLL.OUT;
         const command_fds = self.runtime.source.pollFds(fds[4..]);
+        const fifo_offset = 4 + command_fds.len;
+        for (self.fifos.items.items, 0..) |item, index| {
+            fds[fifo_offset + index] = .{ .fd = if (item.read_failed) -1 else item.read_fd, .events = posix.POLL.IN, .revents = 0 };
+            fifo_snapshots[index] = .{ .fd = item.read_fd, .generation = item.generation };
+        }
+        const fifo_count = self.fifos.items.items.len;
 
         var now_ms = self.now();
         ctl.fd = if (self.controlDue(now_ms)) self.control_endpoint.fd else -1;
         var timeout = minTimeout(self.paintTimeout(now_ms), self.runtime.source.timeout(now_ms));
+        timeout = minTimeout(timeout, self.fifoTimeout(now_ms));
         if (ctl.fd < 0 and self.output.atBoundary()) timeout = minTimeout(timeout, @max(self.last_output_ms + paint_quiet_ms - now_ms, 0));
         timeout = minTimeout(timeout, self.runtime.renderer.nextFrameTimeout(now_ms));
         timeout = minTimeout(timeout, self.runtime.composition.spinnerTimeout(&self.runtime.source, self.pushed.items.items, self.layout.bar, now_ms));
@@ -110,7 +118,7 @@ pub fn pump(self: *Proxy, sig_r: sys.Fd, pid: c.pid_t) !void {
         if (self.held_config_len != null and self.output.atBoundary()) timeout = minTimeout(timeout, @max(self.last_output_ms + paint_quiet_ms - now_ms, 0));
         if (self.palette_probe.holding()) timeout = minTimeout(timeout, @max(self.last_input_ms + input_hold_ms - now_ms, 0));
         if (self.input.holding()) timeout = minTimeout(timeout, @max(self.last_input_ms + input_hold_ms - now_ms, 0));
-        _ = posix.poll(fds[0 .. 4 + command_fds.len], @intCast(@min(timeout, std.math.maxInt(c_int)))) catch return;
+        _ = posix.poll(fds[0 .. fifo_offset + fifo_count], @intCast(@min(timeout, std.math.maxInt(c_int)))) catch return;
         now_ms = self.now();
         if (self.palette_deadline_ms) |deadline| {
             if (now_ms >= deadline) {
@@ -186,6 +194,9 @@ pub fn pump(self: *Proxy, sig_r: sys.Fd, pid: c.pid_t) !void {
         }
 
         if (self.heldConfigDue(now_ms)) runtime_replaced = self.applyHeldConfig(now_ms) or runtime_replaced;
+
+        self.drainFifos(fds[fifo_offset .. fifo_offset + fifo_count], fifo_snapshots[0..fifo_count], now_ms);
+        try self.publishFifos(now_ms);
 
         if (!runtime_replaced) {
             const source_update = self.runtime.source.update(command_fds, now_ms);

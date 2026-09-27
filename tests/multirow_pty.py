@@ -1370,6 +1370,165 @@ print('PUSH_POP_OK', flush=True)
     print('push/pop streams, command width, stable IDs, reloads, pop --all, active removal, and authentication passed')
 
 
+def check_fifo(binary):
+    child = r'''
+import os, stat, subprocess, sys, tempfile, time
+b = sys.argv[1]
+directory = os.environ['STATUSBAR_SLOTS']
+assert directory == os.environ['STATUSBAR_STATE'] + '.slots'
+assert not os.path.exists(directory)
+def run(*args, env=None, input=None):
+    p = subprocess.run([b, *args], input=input, capture_output=True, env=env, timeout=4)
+    assert p.returncode == 0, (args, p.returncode, p.stderr)
+    return p.stdout.strip().decode()
+slot = run('fifo', '--slot', '3', 'prompt')
+assert slot == directory + '/prompt' and stat.S_ISFIFO(os.stat(slot).st_mode)
+assert os.stat(slot).st_mode & 0o777 == 0o600
+assert os.stat(directory).st_mode & 0o777 == 0o700
+assert run('fifo', '--slot', '3', 'prompt') == slot
+with open(slot, 'wb') as writer:
+    writer.write(b'one '); writer.flush(); writer.write(b'two\n')
+time.sleep(.12)
+run('set', '3', 'manual')
+time.sleep(.12)
+with open(slot, 'wb') as writer: writer.write(b'one two\n')
+time.sleep(.12)
+with open(slot, 'wb') as writer: writer.write(b'\x1b[31mRED\x1b[0m\rBLUE\n')
+time.sleep(.12)
+with open(slot, 'wb') as writer: writer.write(b'PARTIAL')
+time.sleep(.12)
+with open(slot, 'wb') as writer: writer.write(b'\n#[bold]LITERAL\n')
+time.sleep(.12)
+row = run('fifo', 'build')
+assert row == directory + '/build' and stat.S_ISFIFO(os.stat(row).st_mode)
+assert run('fifo', 'build') == row
+with open(row, 'wb') as writer: writer.write('Καλημέρα\n'.encode())
+time.sleep(.12)
+fd, nested_info = tempfile.mkstemp(); os.close(fd)
+try:
+    nested_code = ('import os,subprocess,sys; '
+        'p=subprocess.run([sys.argv[2],"fifo","nested"],capture_output=True,check=True).stdout.strip().decode(); '
+        'open(sys.argv[1],"w").write(os.environ["STATUSBAR_SLOTS"]+"\\n"+p); '
+        'open(p,"wb").write(b"NESTED\\n")')
+    assert subprocess.run([b, '--', sys.executable, '-c', nested_code, nested_info, b], timeout=8).returncode == 0
+    nested_dir, nested_path = open(nested_info).read().splitlines()
+    assert nested_dir != directory and nested_path.startswith(nested_dir + '/')
+    assert not os.path.exists(nested_path) and not os.path.exists(nested_dir)
+    assert os.path.exists(row) and os.path.exists(slot)
+finally:
+    os.unlink(nested_info)
+flood = subprocess.Popen([sys.executable, '-c',
+    'import sys; f=open(sys.argv[1],"wb"); f.write(b"flood\\n"*30000); f.close()', row])
+run('set', '1', 'RESPONSIVE')
+spare = run('fifo', '--slot', '4', 'spare')
+with open(spare, 'wb') as writer: writer.write(b'SPARE\n')
+assert flood.wait(timeout=4) == 0
+run('fifo', '--remove', 'spare')
+run('config', input=b'[line.1]\nleft = CHANGED\n[line.2]\nleft = NEWBASE\n')
+time.sleep(.12)
+assert os.path.exists(slot) and os.path.exists(row)
+assert subprocess.run([b, 'config'], input=b'[bad]\n', capture_output=True).returncode != 0
+assert os.path.exists(slot) and os.path.exists(row)
+run('set', '3', 'AFTER_FIFO')
+run('fifo', '--remove', 'prompt')
+time.sleep(.12)
+assert not os.path.exists(slot)
+assert run('fifo', '--slot', '3', 'prompt') == slot
+assert subprocess.run([b, 'fifo', '--slot', '1', 'prompt'], capture_output=True).returncode != 0
+assert subprocess.run([b, 'fifo', '--slot', '3', 'other'], capture_output=True).returncode != 0
+assert subprocess.run([b, 'fifo', '--slot', '9', 'outside'], capture_output=True).returncode != 0
+assert subprocess.run([b, 'fifo', '123'], capture_output=True).returncode != 0
+assert subprocess.run([b, 'fifo', '../escape'], capture_output=True).returncode != 0
+assert subprocess.run([b, 'fifo', '--slot', '3', '--remove', 'prompt'], capture_output=True).returncode != 0
+wrong = os.environ.copy(); wrong['STATUSBAR_SESSION_ID'] = '0' * 32
+assert subprocess.run([b, 'fifo', 'wrong'], env=wrong, capture_output=True).returncode != 0
+assert not os.path.exists(directory + '/wrong')
+outside = os.environ.copy(); outside.pop('STATUSBAR_SESSION_ID'); outside.pop('STATUSBAR_STATE')
+assert subprocess.run([b, 'fifo', 'outside'], env=outside, capture_output=True).returncode != 0
+run('pop', '--all')
+assert not os.path.exists(row) and os.path.exists(slot)
+row2 = run('fifo', 'build')
+assert row2 == row
+old_writer = os.open(row2, os.O_WRONLY)
+os.write(old_writer, b'REBUILT\n')
+time.sleep(.12)
+run('fifo', '--remove', 'build')
+assert not os.path.exists(row)
+try:
+    os.write(old_writer, b'OLD\n')
+    raise AssertionError('removed FIFO writer stayed connected')
+except BrokenPipeError:
+    pass
+os.close(old_writer)
+assert run('fifo', 'build') == row
+run('pop')
+assert not os.path.exists(row)
+run('config', input=b'[line.1]\nleft = SHRUNK\n')
+deadline = time.monotonic() + 2
+while os.path.exists(slot) and time.monotonic() < deadline: time.sleep(.02)
+assert not os.path.exists(slot)
+run('fifo', '--remove', 'prompt')
+assert not os.path.exists(slot)
+assert run('fifo', '--remove', 'prompt') == ''
+with open(directory + '/collision', 'wb') as file: file.write(b'keep')
+assert subprocess.run([b, 'fifo', 'collision'], capture_output=True).returncode != 0
+assert open(directory + '/collision', 'rb').read() == b'keep'
+os.unlink(directory + '/collision')
+end = run('fifo', 'end')
+print('FIFO_CLEANUP=' + end, flush=True)
+print('FIFO_OK', flush=True)
+'''
+    config = b'[line.1]\nleft = BASE\n[line.2]\nleft = SLOTBASE\n'
+    with tempfile.NamedTemporaryFile(delete=False) as cfg:
+        cfg.write(config)
+        path = cfg.name
+    try:
+        code, data = capture_pty([binary, '-c', path, '--', sys.executable,
+                                  '-c', child, binary], timeout=15)
+        assert code == 0 and b'FIFO_OK' in data, data[-2500:]
+        assert b'one two' in data and b'manual' in data, data[-2500:]
+        assert data.find(b'one two', data.find(b'manual')) > data.find(b'manual'), data[-2500:]
+        assert b'BLUE' in data and b'PARTIAL' in data, data[-2500:]
+        assert b'#[bold]LITERAL' in data, data[-2500:]
+        assert 'Καλημέρα'.encode() in data and b'REBUILT' in data, data[-2500:]
+        assert b'RESPONSIVE' in data and b'SPARE' in data, data[-2500:]
+        assert b'NEWBASE' in data, data[-2500:]
+        cleanup = re.search(rb'FIFO_CLEANUP=([^\r\n]+)', data)
+        assert cleanup and not os.path.exists(cleanup.group(1).decode()), data[-2500:]
+        assert not os.path.exists(os.path.dirname(cleanup.group(1).decode())), data[-2500:]
+    finally:
+        os.unlink(path)
+    print('named FIFOs for slots and pushed rows passed')
+
+
+def check_fifo_signal_cleanup(binary):
+    child = r'''
+import os, subprocess, sys, time
+path = subprocess.run([sys.argv[1], 'fifo', 'signal'], capture_output=True, check=True).stdout.strip().decode()
+print('SIGNAL_FIFO=' + path, flush=True)
+time.sleep(30)
+'''
+    pid, master = spawn([binary, '--', sys.executable, '-c', child, binary])
+    reaped = False
+    try:
+        data = read_until(master, b'', b'SIGNAL_FIFO=', timeout=5)
+        data = read_until(master, data, b'\r\n', timeout=5)
+        path = re.search(rb'SIGNAL_FIFO=([^\r\n]+)', data)
+        assert path and os.path.exists(path.group(1).decode()), data[-500:]
+        os.kill(pid, signal.SIGTERM)
+        reap_while_draining(pid, master, timeout=5)
+        reaped = True
+        assert not os.path.exists(path.group(1).decode())
+        assert not os.path.exists(os.path.dirname(path.group(1).decode()))
+    finally:
+        if not reaped:
+            try: os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+            reap_while_draining(pid, master, timeout=5)
+        os.close(master)
+    print('named FIFO signal cleanup passed')
+
+
 def check_push_completion(binary):
     child = r'''
 import os, signal, subprocess, sys, time
@@ -1521,6 +1680,8 @@ def main():
     check_theme_growth(binary)
     check_background_job_exit(binary)
     check_push_pop(binary)
+    check_fifo(binary)
+    check_fifo_signal_cleanup(binary)
     check_push_completion(binary)
     check_push_spinner(binary)
     config = """\

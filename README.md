@@ -98,6 +98,10 @@ For live output, `statusbar push -t build -- make` adds a temporary line;
 `statusbar pop` removes it. You can also move Starship's prompt details into
 a statusbar slot.
 
+For shell redirection, `statusbar fifo build` creates a named pipe and a
+pushed row; `statusbar fifo --slot 3 prompt` binds one to an existing slot.
+See [named FIFOs](docs/fifo.md).
+
 Run `statusbar --help` for the full command list.
 
 ## Use Starship in statusbar
@@ -124,7 +128,8 @@ statusbar init fish | source
 
 The [user guide](docs/README.md) covers layouts, live updates, and themes.
 See [configuration](docs/config.md), [slot updates](docs/set.md),
-[temporary lines](docs/push.md), or [how statusbar works](docs/internals.md)
+[temporary lines](docs/push.md), [named FIFOs](docs/fifo.md), or
+[how statusbar works](docs/internals.md)
 when you need more detail. The guide also covers [shell completions](docs/usage.md#completion).
 
 ## How I use statusbar
