@@ -259,7 +259,7 @@ pub const application = application: {
 
 pub const CommandName = zecli.CommandEnum(application);
 
-/// zecli 0.4.3 parses the optional --print choice as a positional. Present it
+/// zecli parses the optional --print choice as a positional. Present it
 /// as part of --print in help, without changing parsing or completion metadata.
 pub fn printCommandHelp(allocator: std.mem.Allocator, writer: anytype, spec: zecli.CommandSpec) !void {
     if (!std.mem.eql(u8, spec.name, "config")) return zecli.printCommandHelp(allocator, writer, spec);
