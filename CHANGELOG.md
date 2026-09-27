@@ -6,6 +6,9 @@ order they were added.
 
 ## Unreleased
 
+- Add `#(datetime:FORMAT)` and terminal size properties to templates
+- Update bundled themes to use `#(datetime:FORMAT)`
+
 ## v0.4.3
 
 - Add a packaged guide for AI agents setting up statusbar and custom themes

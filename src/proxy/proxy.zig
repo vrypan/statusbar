@@ -92,6 +92,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
 
     var runtime = try Runtime.initInitial(gpa, io, opts.cfg, layout.bar, layout.cols);
     defer runtime.deinit();
+    runtime.source.setTerminalSize(.{ .rows = outer_ws.row, .cols = outer_ws.col, .content_rows = layout.child.row });
     const session_token = config_protocol.makeToken(io);
     var session_state = try SessionState.init(io, runtime.lines, opts.config_text, session_token);
     defer session_state.deinit();
@@ -132,6 +133,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         .control_endpoint = &endpoint,
         .pushed = &pushed,
     };
+    try proxy.composeRows(&runtime, layout, true);
     defer proxy.releaseRows();
     try proxy.reserveRows(outer_ws.row);
     proxy.output.osc7_handler = .{ .context = &proxy.terminal, .callback = receiveOsc7 };

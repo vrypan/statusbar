@@ -272,6 +272,7 @@ pub fn drainSignals(self: *Proxy, sig_r: sys.Fd, pid: c.pid_t, now_ms: i64) !voi
     const ws = sys.getWinsize(stdin_fd) catch return;
     const width_changed = ws.col != self.layout.cols;
     self.layout = Layout.of(ws, @intCast(@as(usize, self.runtime.lines) + self.pushed.items.items.len));
+    self.runtime.source.setTerminalSize(.{ .rows = ws.row, .cols = ws.col, .content_rows = self.layout.child.row });
     sys.setWinsize(self.master, &self.layout.child) catch {};
     self.output.resize(self.layout.bar, self.layout.child.row);
     self.setInputGeometry(self.layout);

@@ -3,6 +3,8 @@
 
 pub const composition = @import("composition.zig");
 pub const config = @import("config.zig");
+pub const datetime = @import("datetime.zig");
+pub const terminal_properties = @import("terminal_properties.zig");
 pub const display = @import("display.zig");
 pub const runtime_config = @import("runtime_config.zig");
 pub const source = @import("source.zig");
@@ -13,6 +15,8 @@ test {
     _ = composition;
     _ = config;
     _ = display;
+    _ = datetime;
+    _ = terminal_properties;
     _ = runtime_config;
     _ = source;
     _ = status;

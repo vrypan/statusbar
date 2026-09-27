@@ -247,7 +247,7 @@ this list:
 | `terminal/` | Byte-stream filters between the terminal and the child, the palette probe, OSC 3110 framing |
 | `render/` | Markup, styled text, the cell grid, and the `Renderer` in `bar.zig`, with line content in `content.zig`, layout in `row_layout.zig`, highlight scheduling in `effects.zig` and paint bytes in `serialize.zig` |
 | `session/` | The control socket, the session state file, and pushed lines |
-| `model/` | Config parsing, status commands, and the content they produce |
+| `model/` | Config parsing, status commands, and their content; datetime parsing and formatting in `datetime.zig`, terminal value parsing and snapshots in `terminal_properties.zig` |
 | `proxy/` | Session setup and the `Proxy` state in `proxy.zig`; its methods grouped by concern in `loop.zig`, `rows.zig`, `terminal_input.zig` and `reload.zig` |
 | `cli/` | One file per subcommand in `commands/`, shell integration scripts in `shell/`; `main.zig` stays at the root of `src/` |
 
@@ -260,6 +260,12 @@ reach another directory by path. Cross-layer imports name the module, as in
 Zig runs only the tests of a compilation's root module, so `zig build test`
 builds one test binary per layer. Each `root.zig` lists its files in a `test`
 block; a new file must be added there, or its tests will not run.
+
+Give a new feature a focused source file within its owning layer when its
+parsing, state, or formatting can stand on its own. Keep the feature's unit
+tests beside that implementation. Config compilation, source scheduling, and
+proxy lifecycle files should call into it and retain the integration logic
+they already own. A feature file does not require a new build module.
 
 ## Limitations
 

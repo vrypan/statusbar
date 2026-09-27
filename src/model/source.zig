@@ -1,7 +1,8 @@
 //! Where the bar's text comes from.
 //!
-//! With a config file, each line is built from its templates: text through
-//! strftime(3), and the latest first line of each command it refers to. Every
+//! Each line combines template values, terminal geometry, and the latest
+//! first line of each command it refers to. Datetime formatting lives in
+//! datetime.zig; terminal property values live in terminal_properties.zig. Every
 //! command runs on its own interval, so a slow one never holds up the rest,
 //! and the clock is re-read at the start of each second.
 //!
@@ -10,7 +11,8 @@
 
 const std = @import("std");
 const posix = std.posix;
-const c = std.c;
+const datetime = @import("datetime.zig");
+const terminal_properties = @import("terminal_properties.zig");
 const bar = @import("render").bar;
 const Content = @import("render").content.Content;
 const Tracks = @import("render").content.Tracks;
@@ -44,13 +46,17 @@ pub const Source = struct {
     dirty_rows: []bool = &.{},
     push_dependency: Dependency = .{},
     push_dirty: bool = false,
+    terminal: TerminalSize = .{},
     /// Deterministic test/benchmark evidence for avoided formatting work.
     rows_formatted: usize = 0,
 
     const Dependency = struct {
         commands: [2]u16 = .{ 0, 0 },
         clock: [2]bool = .{ false, false },
+        terminal: [2]bool = .{ false, false },
     };
+
+    pub const TerminalSize = terminal_properties.Size;
 
     pub const Update = struct {
         content_changed: bool = false,
@@ -88,9 +94,10 @@ pub const Source = struct {
             const templates = [2]*const config.Template{ &line.left, &line.right };
             for (templates, 0..) |template, side| {
                 dependency.clock[side] = template.usesClock();
+                dependency.terminal[side] = template.usesTerminal();
                 for (template.items()) |part| switch (part) {
                     .command => |n| dependency.commands[side] |= @as(u16, 1) << @intCast(n),
-                    .text, .tag, .id, .stream, .spinner, .exit_code, .signal, .track_start, .track_end => {},
+                    .text, .datetime, .terminal, .tag, .id, .stream, .spinner, .exit_code, .signal, .track_start, .track_end => {},
                 };
             }
         }
@@ -101,7 +108,7 @@ pub const Source = struct {
                 push_dependency.clock[side] = push_dependency.clock[side] or template.usesClock();
                 for (template.items()) |part| switch (part) {
                     .command => |n| push_dependency.commands[side] |= @as(u16, 1) << @intCast(n),
-                    .text, .tag, .id, .stream, .spinner, .exit_code, .signal, .track_start, .track_end => {},
+                    .text, .datetime, .terminal, .tag, .id, .stream, .spinner, .exit_code, .signal, .track_start, .track_end => {},
                 };
             }
         }
@@ -123,6 +130,17 @@ pub const Source = struct {
 
     pub fn setColumns(self: *Source, cols: u16) void {
         for (self.commands) |*command| command.setColumns(cols) catch {};
+    }
+
+    /// Rebuild geometry-dependent content before the caller composes its layout.
+    /// Geometry establishes a baseline and does not enqueue a source event.
+    pub fn setTerminalSize(self: *Source, size: TerminalSize) void {
+        if (std.meta.eql(self.terminal, size)) return;
+        self.terminal = size;
+        for (self.dependencies, 0..) |dependency, row| for (0..2) |side| {
+            if (dependency.terminal[side] and self.override_lens[row * 2 + side] == null) self.markDirty(row);
+        };
+        if (self.dirtyAny()) _ = self.rebuild();
     }
 
     pub fn refreshNow(self: *Source, now_ms: i64) void {
@@ -302,13 +320,14 @@ pub const Source = struct {
                 if (!self.output_seen[n]) return false;
                 if (baseline & bit != 0) return false;
             },
-            .text, .tag, .id, .stream, .spinner, .exit_code, .signal, .track_start, .track_end => {},
+            .text, .datetime, .terminal, .tag, .id, .stream, .spinner, .exit_code, .signal, .track_start, .track_end => {},
         };
         return true;
     }
 
     pub const TemplateContext = struct {
-        time: Tm,
+        time: datetime.Time,
+        terminal: TerminalSize = .{},
         tag: []const u8 = "",
         id: []const u8 = "",
         stream: []const u8 = "",
@@ -320,7 +339,7 @@ pub const Source = struct {
 
     /// Capture once for every slot that belongs to the same composition.
     pub fn templateContext(self: *const Source) TemplateContext {
-        return .{ .time = currentTime(self.io) };
+        return .{ .time = datetime.now(self.io), .terminal = self.terminal };
     }
 
     fn rebuild(self: *Source) bool {
@@ -358,7 +377,9 @@ pub const Source = struct {
 
     fn writeTemplate(self: *const Source, w: *std.Io.Writer, template: *const config.Template, context: *const TemplateContext, tracks: *Tracks, owner: cells.Owner) void {
         for (template.items()) |part| switch (part) {
-            .text => |text| formatTime(w, text, &context.time),
+            .text => |text| datetime.write(w, text, &context.time),
+            .datetime => |format| datetime.write(w, format, &context.time),
+            .terminal => |property| context.terminal.write(w, property),
             .command => |n| writeOneLine(w, self.outputs[n][0..self.output_lens[n]]),
             .tag => writeLiteralMarkup(w, context.tag),
             .id => w.writeAll(context.id) catch {},
@@ -446,38 +467,6 @@ fn minTimeout(a: i64, b: i64) i64 {
     return @min(a, b);
 }
 
-// --- strftime ----------------------------------------------------------------
-
-/// Opaque storage for libc's `struct tm`, which is smaller than this on every
-/// supported platform.
-const Tm = extern struct { storage: [16]i64 };
-
-extern "c" fn localtime_r(t: *const c.time_t, result: *Tm) ?*Tm;
-extern "c" fn strftime(s: [*]u8, max: usize, format: [*:0]const u8, tm: *const Tm) usize;
-
-fn currentTime(io: std.Io) Tm {
-    var tm: Tm = std.mem.zeroes(Tm);
-    const now: c.time_t = @intCast(std.Io.Clock.now(.real, io).toSeconds());
-    _ = localtime_r(&now, &tm);
-    return tm;
-}
-
-/// Writes `text` with its `%` conversions filled in. Text without any is
-/// copied as is, without a trip through libc.
-fn formatTime(w: *std.Io.Writer, text: []const u8, tm: *const Tm) void {
-    if (std.mem.indexOfScalar(u8, text, '%') == null) {
-        writeOneLine(w, text);
-        return;
-    }
-    var format: [1024]u8 = undefined;
-    if (text.len >= format.len) return;
-    @memcpy(format[0..text.len], text);
-    format[text.len] = 0;
-    var out: [2048]u8 = undefined;
-    const n = strftime(&out, out.len, format[0..text.len :0], tm);
-    writeOneLine(w, out[0..n]);
-}
-
 /// Templates always occupy one status-bar row. A block template may be laid
 /// out over several source lines, so fold its layout whitespace at render time.
 fn writeOneLine(w: *std.Io.Writer, text: []const u8) void {
@@ -512,32 +501,55 @@ test "clock scheduling ignores escaped percents and pauses under overrides" {
     try std.testing.expect(!std.mem.startsWith(u8, source.content.line(0), "left"));
 }
 
-test "strftime conversions and literal percent signs" {
-    var tm = std.mem.zeroes(Tm);
-    const t: c.time_t = 0;
-    _ = localtime_r(&t, &tm);
-    var buf: [64]u8 = undefined;
-    var w: std.Io.Writer = .fixed(&buf);
-    formatTime(&w, "%Y 100%% up", &tm);
-    try std.testing.expect(std.mem.endsWith(u8, w.buffered(), " 100% up"));
-    try std.testing.expect(std.mem.startsWith(u8, w.buffered(), "19"));
-    w.end = 0;
-    formatTime(&w, "plain #[bold]", &tm);
-    try std.testing.expectEqualStrings("plain #[bold]", w.buffered());
-    w.end = 0;
-    formatTime(&w, "first\n\tsecond", &tm);
-    try std.testing.expectEqualStrings("first  second", w.buffered());
+test "datetime and terminal values render and update with size changes" {
+    const gpa = std.testing.allocator;
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(gpa, "[line.1]\nleft = #(datetime:%Y) #(terminal:rows)x#(terminal:cols) shell:#(terminal:content_rows)\nright = static\n[line.2]\nleft = #(terminal:content_rows)\n", &diag);
+    defer cfg.deinit();
+    var source = try Source.initConfig(gpa, std.testing.io, &cfg, 80);
+    defer source.deinit();
+    source.setTerminalSize(.{ .rows = 24, .cols = 80, .content_rows = 22 });
+    try std.testing.expect(std.mem.indexOf(u8, source.content.line(0), " 24x80 shell:22\tstatic") != null);
+    try std.testing.expectEqualStrings("22\t", source.content.line(1));
+    const before = source.rows_formatted;
+    source.setTerminalSize(.{ .rows = 30, .cols = 60, .content_rows = 27 });
+    try std.testing.expectEqual(before + 2, source.rows_formatted);
+    try std.testing.expect(std.mem.indexOf(u8, source.content.line(0), " 30x60 shell:27\tstatic") != null);
+    try std.testing.expectEqualStrings("27\t", source.content.line(1));
+    source.setOverride(0, "override");
+    _ = source.update(&.{}, 0);
+    const overridden = source.rows_formatted;
+    source.setTerminalSize(.{ .rows = 30, .cols = 60, .content_rows = 26 });
+    try std.testing.expectEqual(overridden + 1, source.rows_formatted);
+    try std.testing.expectEqualStrings("override\tstatic", source.content.line(0));
+    try std.testing.expectEqualStrings("26\t", source.content.line(1));
+}
+
+test "geometry rebuild does not enqueue a second content update" {
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(std.testing.allocator, "[line.1]\nleft = #(terminal:content_rows)\n[line.push]\nright = #(terminal:rows)\n", &diag);
+    defer cfg.deinit();
+    var source = try Source.initConfig(std.testing.allocator, std.testing.io, &cfg, 80);
+    defer source.deinit();
+    source.setTerminalSize(.{ .rows = 24, .cols = 80, .content_rows = 23 });
+    _ = source.update(&.{}, 0);
+    source.setTerminalSize(.{ .rows = 30, .cols = 80, .content_rows = 29 });
+    try std.testing.expectEqualStrings("29\t", source.content.line(0));
+    const formatted = source.rows_formatted;
+    try std.testing.expect(!source.update(&.{}, 1).content_changed);
+    try std.testing.expectEqual(formatted, source.rows_formatted);
+    try std.testing.expectEqual(@as(i64, -1), source.timeout(1));
 }
 
 test "pushed slots use the supplied time and named template values" {
     var diag: config.Diagnostic = .{};
-    var cfg = try config.parse(std.testing.allocator, "[line.1]\n[line.push]\nleft = %Y [#(id)] #(tag) #(stream)\nright = %Y #(tag)\n", &diag);
+    var cfg = try config.parse(std.testing.allocator, "[line.1]\n[line.push]\nleft = #(datetime:%Y) [#(id)] #(tag) #(stream)\nright = #(datetime:%Y) #(terminal:cols) #(tag)\n", &diag);
     defer cfg.deinit();
     var source = try Source.initConfig(std.testing.allocator, std.testing.io, &cfg, 80);
     defer source.deinit();
-    const timestamp: c.time_t = 1577880000; // 2020-01-01 noon UTC, also 2020 in every timezone.
-    var context: Source.TemplateContext = .{ .time = undefined, .tag = "file", .id = "7", .stream = "50%" };
-    try std.testing.expect(localtime_r(&timestamp, &context.time) != null);
+    const timestamp = 1577880000; // 2020-01-01 noon UTC, also 2020 in every timezone.
+    var context: Source.TemplateContext = .{ .time = undefined, .terminal = .{ .cols = 80 }, .tag = "file", .id = "7", .stream = "50%" };
+    context.time = datetime.fromSeconds(timestamp);
     var buf: [128]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buf);
     var tracks: Tracks = .{};
@@ -545,7 +557,7 @@ test "pushed slots use the supplied time and named template values" {
     try std.testing.expectEqualStrings("2020 [7] file 50%", writer.buffered());
     writer.end = 0;
     source.writePushRight(&writer, &context, &tracks);
-    try std.testing.expectEqualStrings("2020 file", writer.buffered());
+    try std.testing.expectEqualStrings("2020 80 file", writer.buffered());
 }
 
 test "values stay on one line in their slot" {

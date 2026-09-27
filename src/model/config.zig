@@ -13,7 +13,7 @@
 //!
 //!     [line.2]
 //!     left  = " #[fg=accent,bold]#(hostname -s)#[default] · #(load)"
-//!     right = "%a %d %b  #[bold]%H:%M "
+//!     right = "#(datetime:%a %d %b)  #[bold]#(datetime:%H:%M) "
 //!
 //!     [command.load]
 //!     run      = sysctl -n vm.loadavg | awk '{print $2}'
@@ -27,13 +27,16 @@
 //!
 //! Templates mix text, markup and command output. `#(name)` is the first line
 //! of the named command's output; `#(anything else)` runs as a shell command
-//! at the default interval. `%` sequences are strftime(3) conversions, and
-//! `%%` is a literal percent sign.
+//! at the default interval. `#(datetime:FORMAT)` formats local date/time and
+//! `#(terminal:PROPERTY)` reads terminal geometry. Legacy `%` conversions
+//! remain supported; `%%` is a literal percent sign.
 //!
 //! Strings returned by the parser borrow from the source text. The `line`
 //! slice is allocator-owned and must be released with `deinit`.
 
 const std = @import("std");
+const datetime = @import("datetime.zig");
+const terminal_properties = @import("terminal_properties.zig");
 pub const Spinner = @import("spinner.zig").Spinner;
 pub const PushState = @import("session").pushed_rows.State;
 const markup = @import("render").markup;
@@ -44,8 +47,12 @@ pub const max_colors = 32;
 const max_parts = 32;
 pub const max_regions = 16;
 
+pub const TerminalProperty = terminal_properties.Property;
+
 pub const Part = union(enum) {
     text: []const u8,
+    datetime: []const u8,
+    terminal: TerminalProperty,
     command: u8,
     tag,
     id,
@@ -74,15 +81,16 @@ pub const Template = struct {
 
     pub fn usesClock(self: *const Template) bool {
         for (self.items()) |part| switch (part) {
-            .text => |text| {
-                var i: usize = 0;
-                while (std.mem.indexOfScalarPos(u8, text, i, '%')) |percent| {
-                    if (percent + 1 >= text.len or text[percent + 1] != '%') return true;
-                    i = percent + 2;
-                }
+            .datetime, .text => |format| if (datetime.usesClock(format)) {
+                return true;
             },
-            .command, .tag, .id, .stream, .spinner, .exit_code, .signal, .track_start, .track_end => {},
+            .terminal, .command, .tag, .id, .stream, .spinner, .exit_code, .signal, .track_start, .track_end => {},
         };
+        return false;
+    }
+
+    pub fn usesTerminal(self: *const Template) bool {
+        for (self.items()) |part| if (part == .terminal) return true;
         return false;
     }
 };
@@ -109,6 +117,25 @@ test "clock dependencies distinguish escaped percents from conversions" {
         template.parts[0] = .{ .text = case.text };
         template.len = 1;
         try std.testing.expectEqual(case.dynamic, template.usesClock());
+    }
+}
+
+test "datetime and terminal expressions compile as built-ins" {
+    var diag: Diagnostic = .{};
+    var cfg = try parse(std.testing.allocator, "[line.1]\nleft = #(datetime:%Y-%m-%d) #(terminal:rows) #(terminal:cols) #(terminal:content_rows)\n", &diag);
+    defer cfg.deinit();
+    const parts = cfg.line[0].left.items();
+    try std.testing.expectEqualStrings("%Y-%m-%d", parts[0].datetime);
+    try std.testing.expectEqual(TerminalProperty.rows, parts[2].terminal);
+    try std.testing.expectEqual(TerminalProperty.cols, parts[4].terminal);
+    try std.testing.expectEqual(TerminalProperty.content_rows, parts[6].terminal);
+    try std.testing.expect(cfg.line[0].left.usesClock());
+    try std.testing.expect(cfg.line[0].left.usesTerminal());
+    try std.testing.expectEqual(@as(usize, 0), cfg.commandList().len);
+    for ([_][]const u8{ "#(datetime:)", "#(terminal:)", "#(terminal:color)" }) |expression| {
+        const text = try std.fmt.allocPrint(std.testing.allocator, "[line.1]\nleft = {s}\n", .{expression});
+        defer std.testing.allocator.free(text);
+        try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, text, &diag));
     }
 }
 
@@ -544,6 +571,18 @@ fn compile(config: *Config, text: []const u8, diag: *Diagnostic, kind: TemplateK
         };
         if (i > start) try append(&template, .{ .text = text[start..i] }, diag);
         const body = std.mem.trim(u8, text[i + 2 .. close], " \t");
+        if (datetime.parse(body) catch return fail(diag, "#(datetime:FORMAT) needs a format shorter than 1024 bytes")) |format| {
+            try append(&template, .{ .datetime = format }, diag);
+            i = close + 1;
+            start = i;
+            continue;
+        }
+        if (terminal_properties.parse(body) catch return fail(diag, "unknown terminal property; expected rows, cols or content_rows")) |property| {
+            try append(&template, .{ .terminal = property }, diag);
+            i = close + 1;
+            start = i;
+            continue;
+        }
         if (kind != .ordinary) {
             const value: ?Part = if (eql(body, "tag")) .tag else if (eql(body, "id")) .id else if (eql(body, "stream")) .stream else if (eql(body, "spinner")) .spinner else if (eql(body, "exit_code")) .exit_code else if (eql(body, "signal")) .signal else null;
             if (value) |part| {
@@ -566,7 +605,7 @@ fn compile(config: *Config, text: []const u8, diag: *Diagnostic, kind: TemplateK
 
 fn append(template: *Template, part: Part, diag: *Diagnostic) Error!void {
     switch (part) {
-        .text, .command, .tag, .id, .stream, .spinner, .exit_code, .signal => {
+        .text, .datetime, .terminal, .command, .tag, .id, .stream, .spinner, .exit_code, .signal => {
             if (template.ordinary_parts == max_parts) return fail(diag, "too many parts in one slot");
             template.ordinary_parts += 1;
         },

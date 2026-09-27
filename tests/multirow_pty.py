@@ -733,6 +733,42 @@ interval = 60
     print("commands rerun only for width changes")
 
 
+def check_datetime_and_terminal_properties(binary):
+    with tempfile.TemporaryDirectory(prefix="statusbar-template-properties-") as folder:
+        config_path = os.path.join(folder, "config")
+        replacement_path = os.path.join(folder, "replacement")
+        with open(config_path, "w") as cfg:
+            cfg.write("[line.1]\nleft = STAMP#(datetime:%Y) WINDOW#(terminal:rows)x#(terminal:cols) SHELL#(terminal:content_rows)\n[line.2]\nleft = second\n")
+        with open(replacement_path, "w") as cfg:
+            cfg.write("[line.1]\nleft = STAMP#(datetime:%Y) WINDOW#(terminal:rows)x#(terminal:cols) SHELL#(terminal:content_rows)\n[line.2]\nleft = second\n[line.3]\nleft = third\n")
+        child = (
+            'while IFS= read -r action; do case "$action" in '
+            f'PUSH) printf "payload\\n" | {shlex.quote(binary)} push -t extra ;; '
+            f'POP) {shlex.quote(binary)} pop ;; '
+            f'RELOAD) {shlex.quote(binary)} config < {shlex.quote(replacement_path)} ;; '
+            'EXIT) exit 0 ;; esac; done'
+        )
+        pid, master = spawn([binary, "-c", config_path, "--", "/bin/sh", "-c", child])
+        try:
+            initial = read_until(master, b"", b"WINDOW24x80 SHELL22")
+            assert re.search(rb"STAMP[0-9]{4} WINDOW24x80 SHELL22", initial), initial
+
+            resize(master, 30, 60)
+            os.kill(pid, signal.SIGWINCH)
+            read_until(master, b"", b"WINDOW30x60 SHELL28")
+
+            os.write(master, b"PUSH\n")
+            read_until(master, b"", b"WINDOW30x60 SHELL27")
+            os.write(master, b"POP\n")
+            read_until(master, b"", b"WINDOW30x60 SHELL28")
+            os.write(master, b"RELOAD\n")
+            read_until(master, b"", b"WINDOW30x60 SHELL27")
+            os.write(master, b"EXIT\n")
+        finally:
+            stop(pid, master)
+    print("datetime and terminal size templates follow resize, pushed rows, and reload")
+
+
 def check_adaptive_palette(binary):
     """Emulate terminal queries, including a subsequent child-owned query."""
     with tempfile.TemporaryDirectory(prefix="statusbar-palette-") as folder:
@@ -1477,6 +1513,7 @@ def main():
     check_tracking(binary, colors=True)
     check_geometry_results_do_not_highlight(binary)
     check_resize_command_runs(binary)
+    check_datetime_and_terminal_properties(binary)
     check_adaptive_palette(binary)
     check_logging(binary)
     check_config_snapshots(binary)

@@ -68,15 +68,18 @@ pub fn resizeForPushedRows(self: *Proxy, now_ms: i64) !void {
     const count = @as(usize, self.runtime.lines) + self.pushed.items.items.len;
     if (count > 65533) return error.RowLimit;
     const old = self.layout;
+    const previous_terminal = self.runtime.source.terminal;
     const next = Layout.of(outer, @intCast(count));
     try self.runtime.renderer.resize(next.bar, next.cols);
     errdefer {
         self.layout = old;
+        self.runtime.source.setTerminalSize(previous_terminal);
         self.runtime.renderer.resize(old.bar, old.cols) catch {};
         self.composeRows(self.runtime, old, true) catch {};
         self.output.damaged = true;
         self.requestPaint(now_ms);
     }
+    self.runtime.source.setTerminalSize(.{ .rows = outer.row, .cols = outer.col, .content_rows = next.child.row });
     try self.composeRows(self.runtime, next, true);
     self.makeRoomForGrowth(old, next);
     self.eraseRows(old);

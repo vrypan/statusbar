@@ -15,7 +15,7 @@ small config directly:
 ```sh
 statusbar --config - <<'EOF'
 [line.1]
-right = %H:%M
+right = #(datetime:%H:%M)
 EOF
 ```
 
@@ -38,13 +38,13 @@ replace the starter config with this two-line example:
 ```ini
 [line.1]
 left = " Ready "
-right = %H:%M
+right = #(datetime:%H:%M)
 
 [line.2]
 left = "Host #(hostname)"
 ```
 
-`%H:%M` shows the current time. `#(hostname)` runs the command and shows its
+`#(datetime:%H:%M)` shows the current time. `#(hostname)` runs the command and shows its
 first output line. By default, commands run every five seconds. You can add
 colors, change intervals, and fill the space between sides with a `rule`;
 see [configuration](config.md).

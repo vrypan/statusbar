@@ -134,7 +134,7 @@ pub const Composition = struct {
         const number = std.fmt.bufPrint(&id_text, "{d}", .{row.id}) catch unreachable;
         var exit_buf: [3]u8 = undefined;
         var signal_buf: [3]u8 = undefined;
-        var context: Source.TemplateContext = .{ .time = snapshot.time, .tag = row.tag(), .id = number, .stream = row.value(), .state = row.state(), .spinner_frame = self.spinner_frame };
+        var context: Source.TemplateContext = .{ .time = snapshot.time, .terminal = snapshot.terminal, .tag = row.tag(), .id = number, .stream = row.value(), .state = row.state(), .spinner_frame = self.spinner_frame };
         if (row.completion) |result| {
             if (result.exitCode()) |code| context.exit_code = std.fmt.bufPrint(&exit_buf, "{d}", .{code}) catch unreachable;
             if (result == .signal) context.signal = std.fmt.bufPrint(&signal_buf, "{d}", .{result.signal}) catch unreachable;

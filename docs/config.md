@@ -5,11 +5,11 @@ A config file decides what each statusbar line shows. Start with a small one:
 ```ini
 [line.1]
 left = " Ready "
-right = %H:%M
+right = #(datetime:%H:%M)
 ```
 
 Each `[line.N]` section adds a line. `left` and `right` place text on either
-side. `%H:%M` shows the current time. Run `statusbar` to use the built-in
+side. `#(datetime:%H:%M)` shows the current time. Run `statusbar` to use the built-in
 config, or save this example as `~/.config/statusbar/config` to use it instead.
 
 ## Add colors and a command
@@ -28,7 +28,7 @@ style = fg=rule
 
 [line.2]
 left  = " #[fg=accent,bold]#(host)#[default] #[fg=dim]· ready#[default]"
-right = "%a %d %b  #[bold]%H:%M#[default] "
+right = "#(datetime:%a %d %b)  #[bold]#(datetime:%H:%M)#[default] "
 
 [command.host]
 run      = hostname
@@ -98,8 +98,14 @@ Templates mix text, markup and command output:
 - `#(NAME)`: the first line of `[command.NAME]`'s latest output
 - `#(anything else)`: runs as a shell command at the top-level `interval`,
   as in tmux; the same text used twice runs once
-- `%H:%M`, `%a %d %b`: strftime(3) conversions, re-read every second;
-  `%%` is a literal `%`
+- `#(datetime:FORMAT)`: local date and time using strftime(3), re-read every
+  second; for example `#(datetime:%H:%M)` or `#(datetime:%a %d %b)`
+- `#(terminal:rows)` and `#(terminal:cols)`: outer terminal window size;
+  `#(terminal:content_rows)`: rows available to the child shell after the bar
+  reserves its visible rows. These update on window resize. `content_rows`
+  also updates when pushed rows or a replacement config change the bar height.
+- Legacy `%H:%M` and `%a %d %b` formats still work throughout template text;
+  `%%` writes a literal `%`. Within `#(datetime:FORMAT)`, use `%%` for `%`.
 - `#[...]`: [markup](#markup)
 - `#[track]...#[notrack]`: an independently [highlighted region](#highlight-changes)
 
@@ -312,7 +318,7 @@ Mark the part of a left/right template you want to watch:
 
 ```ini
 [line.1]
-left = "Weather #[track]#(weather)#[notrack]  Time #[track]%H:%M#[notrack]"
+left = "Weather #[track]#(weather)#[notrack]  Time #[track]#(datetime:%H:%M)#[notrack]"
 
 [command.weather]
 run = curl -fsS 'https://wttr.in/?format=%c%t'
