@@ -2,7 +2,7 @@
 const std = @import("std");
 const rows = @import("pushed_rows.zig");
 pub const max_packet = 1536;
-pub const Operation = enum { create, update, finish, pop, pop_all, fifo_create, fifo_remove };
+pub const Operation = enum { create, update, finish, pop, pop_all, fifo_create, fifo_remove, fifo_finish, fifo_start };
 pub const Request = union(Operation) {
     create: []const u8,
     update: struct { id: u64, value: []const u8 },
@@ -11,6 +11,8 @@ pub const Request = union(Operation) {
     pop_all,
     fifo_create: struct { name: []const u8, slot: ?usize },
     fifo_remove: []const u8,
+    fifo_finish: struct { name: []const u8, result: rows.Completion = .done },
+    fifo_start: []const u8,
 };
 pub const Reply = union(enum) {
     ok,
@@ -34,7 +36,7 @@ pub const Envelope = struct {
         if (!std.mem.eql(u8, fields.next() orelse return error.InvalidPacket, "1")) return error.InvalidPacket;
         const token = fields.next() orelse return error.InvalidPacket;
         const code = fields.next() orelse return error.InvalidPacket;
-        const operation: Operation = if (std.mem.eql(u8, code, "C")) .create else if (std.mem.eql(u8, code, "U")) .update else if (std.mem.eql(u8, code, "F")) .finish else if (std.mem.eql(u8, code, "P")) .pop else if (std.mem.eql(u8, code, "A")) .pop_all else if (std.mem.eql(u8, code, "N")) .fifo_create else if (std.mem.eql(u8, code, "R")) .fifo_remove else return error.InvalidPacket;
+        const operation: Operation = if (std.mem.eql(u8, code, "C")) .create else if (std.mem.eql(u8, code, "U")) .update else if (std.mem.eql(u8, code, "F")) .finish else if (std.mem.eql(u8, code, "P")) .pop else if (std.mem.eql(u8, code, "A")) .pop_all else if (std.mem.eql(u8, code, "N")) .fifo_create else if (std.mem.eql(u8, code, "R")) .fifo_remove else if (std.mem.eql(u8, code, "D")) .fifo_finish else if (std.mem.eql(u8, code, "S")) .fifo_start else return error.InvalidPacket;
         return .{ .token = token, .operation = operation, .fields = fields };
     }
 
@@ -63,6 +65,8 @@ pub const Envelope = struct {
             .pop => .{ .pop = if (self.fields.next()) |value| try parseId(value) else null },
             .fifo_create => .{ .fifo_create = .{ .name = try decodeValue(self.fields.next() orelse return error.InvalidPacket, buffer[0..64]), .slot = if (self.fields.next()) |value| std.fmt.parseInt(usize, value, 10) catch return error.InvalidPacket else null } },
             .fifo_remove => .{ .fifo_remove = try decodeValue(self.fields.next() orelse return error.InvalidPacket, buffer[0..64]) },
+            .fifo_finish => .{ .fifo_finish = .{ .name = try decodeValue(self.fields.next() orelse return error.InvalidPacket, buffer[0..64]), .result = try self.decodeCompletion() } },
+            .fifo_start => .{ .fifo_start = try decodeValue(self.fields.next() orelse return error.InvalidPacket, buffer[0..64]) },
         };
         if (self.fields.next() != null) return error.InvalidPacket;
         return request;
@@ -117,6 +121,14 @@ pub fn encode(buffer: []u8, token: []const u8, request: Request) ![]const u8 {
             try writer.writeAll("R");
             value = name;
         },
+        .fifo_finish => |finish| {
+            try writer.writeAll("D");
+            value = finish.name;
+        },
+        .fifo_start => |name| {
+            try writer.writeAll("S");
+            value = name;
+        },
     }
     if (value) |bytes| {
         try writer.writeByte('|');
@@ -126,6 +138,11 @@ pub fn encode(buffer: []u8, token: []const u8, request: Request) ![]const u8 {
         writer.advance(len);
     }
     if (request == .fifo_create) if (request.fifo_create.slot) |slot| try writer.print("|{d}", .{slot});
+    if (request == .fifo_finish) switch (request.fifo_finish.result) {
+        .done => {},
+        .exited => |code| try writer.print("|exit|{d}", .{code}),
+        .signal => |number| try writer.print("|signal|{d}", .{number}),
+    };
     return writer.buffered();
 }
 
@@ -197,13 +214,17 @@ test "FIFO control frames validate fields and bound replies" {
         .{ .fifo_create = .{ .name = "build", .slot = null } },
         .{ .fifo_create = .{ .name = "prompt", .slot = 3 } },
         .{ .fifo_remove = "build" },
+        .{ .fifo_finish = .{ .name = "build" } },
+        .{ .fifo_finish = .{ .name = "build", .result = .{ .exited = 0 } } },
+        .{ .fifo_finish = .{ .name = "build", .result = .{ .exited = 7 } } },
+        .{ .fifo_start = "build" },
     }) |request| {
         const wire = try encode(&packet, "token", request);
         var envelope = try Envelope.parse(wire);
         try std.testing.expect(envelope.needsReply());
         try std.testing.expectEqualDeep(request, try envelope.decode(&decoded));
     }
-    for ([_][]const u8{ "1|token|N", "1|token|N|YQ==|0|extra", "1|token|N|YQ==|oops", "1|token|R", "1|token|R|YQ==|extra" }) |wire| {
+    for ([_][]const u8{ "1|token|N", "1|token|N|YQ==|0|extra", "1|token|N|YQ==|oops", "1|token|R", "1|token|R|YQ==|extra", "1|token|D", "1|token|D|YQ==|exit|256", "1|token|D|YQ==|extra", "1|token|S", "1|token|S|YQ==|extra" }) |wire| {
         var envelope = try Envelope.parse(wire);
         try std.testing.expectError(error.InvalidPacket, envelope.decode(&decoded));
     }

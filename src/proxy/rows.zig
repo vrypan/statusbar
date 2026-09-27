@@ -93,6 +93,8 @@ pub fn resizeForPushedRows(self: *Proxy, now_ms: i64) !void {
 pub fn controlRequest(self: *Proxy, request: push_protocol.Request, owner: []const u8, now_ms: i64) push_protocol.Reply {
     if (request == .fifo_create) return self.createFifo(request.fifo_create.name, request.fifo_create.slot, now_ms);
     if (request == .fifo_remove) return self.removeFifo(request.fifo_remove, now_ms);
+    if (request == .fifo_finish) return self.finishFifo(request.fifo_finish.name, request.fifo_finish.result, now_ms);
+    if (request == .fifo_start) return self.startFifo(request.fifo_start, now_ms);
     if (request == .create) {
         if (@as(usize, self.runtime.lines) + self.pushed.items.items.len >= 65533) return .rejected;
         const tag = request.create;
@@ -137,7 +139,7 @@ pub fn controlRequest(self: *Proxy, request: push_protocol.Request, owner: []con
         return if (cleanup_failed) .rejected else .ok;
     }
     const id = switch (request) {
-        .create, .pop_all, .fifo_create, .fifo_remove => unreachable,
+        .create, .pop_all, .fifo_create, .fifo_remove, .fifo_finish, .fifo_start => unreachable,
         .update => |update| update.id,
         .finish => |finish| finish.id,
         .pop => |id| id orelse self.pushed.latestId() orelse return .empty,

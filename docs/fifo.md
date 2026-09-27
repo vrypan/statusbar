@@ -30,8 +30,29 @@ The latest nonempty line is displayed. Carriage returns work for progress
 updates, and a final partial line appears after a short pause. Separate writes
 without a newline join into one line; end each independent update with `\n`.
 Closing a writer leaves the last value visible. Pushed FIFO rows stay in their
-running state until removed. Multiple writers share one byte stream, so their
-output can interleave.
+running state until you finish or remove them. Multiple writers share one byte
+stream, so their output can interleave.
+
+To give a pushed FIFO row the same completion style as a command started with
+`push --`, report the producer's exit code after it closes the pipe:
+
+```sh
+statusbar fifo build
+make > "$STATUSBAR_SLOTS/build" 2>&1
+result=$?
+statusbar fifo --finish build --exit-code "$result"
+```
+
+`--exit-code 0` selects `[line.push.success]`; a nonzero code selects
+`[line.push.failed]`. `statusbar fifo --finish build` selects
+`[line.push.done]` without an exit code. The last output remains visible.
+The session reads pending FIFO output before marking the row complete.
+Later writes do not change a completed row. To reuse the same pipe, run
+`statusbar fifo --start build` before the next producer; this clears the old
+text and returns the row to its running state. Stop old writers before
+finishing or restarting the row. These options apply only to pushed-row FIFOs,
+not to `--slot` bindings. The commands use the session's authenticated Unix
+datagram socket; state markers are never part of FIFO output.
 
 An ordinary `statusbar set` may replace a slot's displayed value. The next
 FIFO input takes precedence again. Removing a slot FIFO restores the configured

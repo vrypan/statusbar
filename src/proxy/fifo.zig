@@ -87,6 +87,83 @@ pub fn remove(self: *Proxy, name: []const u8, now_ms: i64) protocol.Reply {
     return .ok;
 }
 
+/// A control datagram can arrive before bytes already written to the FIFO.
+/// Read that binding to EAGAIN before applying its completion state.
+fn drainPending(item: *fifo.Binding, now_ms: i64) bool {
+    if (item.read_failed) return false;
+    var total: usize = 0;
+    var buffer: [4096]u8 = undefined;
+    while (total < 1024 * 1024) {
+        switch (sys.readNonBlocking(item.read_fd, &buffer) catch return false) {
+            .bytes => |n| {
+                item.feed(buffer[0..n], now_ms);
+                total += n;
+            },
+            .would_block, .eof => return true,
+        }
+    }
+    return false;
+}
+
+fn pushedBinding(self: *Proxy, name: []const u8) ?struct { binding: *fifo.Binding, row_index: usize } {
+    const binding_index = self.fifos.find(name) orelse return null;
+    const binding = &self.fifos.items.items[binding_index];
+    if (binding.target != .row or !binding.ownedPath()) return null;
+    for (self.pushed.items.items, 0..) |row, index| {
+        if (row.id == binding.target.row) return .{ .binding = binding, .row_index = index };
+    }
+    return null;
+}
+
+pub fn finish(self: *Proxy, name: []const u8, result: @import("session").pushed_rows.Completion, now_ms: i64) protocol.Reply {
+    if (!fifo.validName(name)) return .{ .fifo_error = "invalid name" };
+    const target = pushedBinding(self, name) orelse return .{ .fifo_error = "pushed FIFO not found" };
+    const row = &self.pushed.items.items[target.row_index];
+    if (row.completion) |previous| {
+        return if (std.meta.eql(previous, result)) .ok else .{ .fifo_error = "row already completed; use --start first" };
+    }
+    if (!drainPending(target.binding, now_ms)) return .{ .fifo_error = "FIFO is still receiving output; retry after writers close" };
+    const before = row.*;
+    if (target.binding.stream.candidate_valid) {
+        const value = target.binding.stream.value();
+        @memcpy(row.text[0..value.len], value);
+        row.len = value.len;
+    }
+    row.completion = result;
+    const visible = self.composePushedUpdate(self.runtime, self.layout, target.row_index) catch {
+        row.* = before;
+        self.composeRows(self.runtime, self.layout, true) catch {};
+        return .{ .fifo_error = "cannot update pushed row" };
+    };
+    if (visible) self.requestPaint(now_ms);
+    if (target.binding.stream.candidate_valid) target.binding.stream.markSent(now_ms);
+    target.binding.sent_revision = target.binding.input_revision;
+    return .ok;
+}
+
+pub fn restart(self: *Proxy, name: []const u8, now_ms: i64) protocol.Reply {
+    if (!fifo.validName(name)) return .{ .fifo_error = "invalid name" };
+    const target = pushedBinding(self, name) orelse return .{ .fifo_error = "pushed FIFO not found" };
+    const row = &self.pushed.items.items[target.row_index];
+    if (row.completion == null) return .ok;
+    if (!drainPending(target.binding, now_ms)) return .{ .fifo_error = "FIFO is still receiving output; retry after writers close" };
+    const before = row.*;
+    row.completion = null;
+    row.len = 0;
+    const visible = self.composePushedUpdate(self.runtime, self.layout, target.row_index) catch {
+        row.* = before;
+        self.composeRows(self.runtime, self.layout, true) catch {};
+        return .{ .fifo_error = "cannot update pushed row" };
+    };
+    if (visible) self.requestPaint(now_ms);
+    target.binding.stream = .{};
+    target.binding.input_revision = 0;
+    target.binding.sent_revision = 0;
+    target.binding.utf8_len = 0;
+    target.binding.utf8_expected = 0;
+    return .ok;
+}
+
 pub fn timeout(self: *const Proxy, now_ms: i64) i64 {
     var next: i64 = -1;
     for (self.fifos.items.items) |*item| next = @import("loop.zig").minTimeout(next, item.stream.timeout(now_ms));

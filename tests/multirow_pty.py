@@ -1404,6 +1404,23 @@ assert row == directory + '/build' and stat.S_ISFIFO(os.stat(row).st_mode)
 assert run('fifo', 'build') == row
 with open(row, 'wb') as writer: writer.write('Καλημέρα\n'.encode())
 time.sleep(.12)
+with open(row, 'wb') as writer: writer.write(b'FINAL_SUCCESS')
+run('fifo', '--finish', 'build', '--exit-code', '0')
+time.sleep(.12)
+assert run('fifo', '--finish', 'build', '--exit-code', '0') == ''
+assert subprocess.run([b, 'fifo', '--finish', 'build', '--exit-code', '7'], capture_output=True).returncode != 0
+run('fifo', '--start', 'build')
+with open(row, 'wb') as writer: writer.write(b'FINAL_FAILED\n')
+run('fifo', '--finish', '--exit-code', '7', 'build')
+time.sleep(.12)
+run('fifo', '--start', 'build')
+with open(row, 'wb') as writer: writer.write(b'FINAL_DONE\n')
+run('fifo', '--finish', 'build')
+time.sleep(.12)
+run('fifo', '--start', 'build')
+assert subprocess.run([b, 'fifo', '--finish', 'prompt'], capture_output=True).returncode != 0
+assert subprocess.run([b, 'fifo', '--start', 'prompt'], capture_output=True).returncode != 0
+assert subprocess.run([b, 'fifo', '--exit-code', '0', 'build'], capture_output=True).returncode != 0
 fd, nested_info = tempfile.mkstemp(); os.close(fd)
 try:
     nested_code = ('import os,subprocess,sys; '
@@ -1478,7 +1495,11 @@ end = run('fifo', 'end')
 print('FIFO_CLEANUP=' + end, flush=True)
 print('FIFO_OK', flush=True)
 '''
-    config = b'[line.1]\nleft = BASE\n[line.2]\nleft = SLOTBASE\n'
+    config = (b'[line.1]\nleft = BASE\n[line.2]\nleft = SLOTBASE\n'
+              b'[line.push]\nleft = #(stream)\nright = FIFO_RUNNING\n'
+              b'[line.push.done]\nright = FIFO_DONE\n'
+              b'[line.push.success]\nright = FIFO_SUCCESS #(exit_code)\n'
+              b'[line.push.failed]\nright = FIFO_FAILED #(exit_code)\n')
     with tempfile.NamedTemporaryFile(delete=False) as cfg:
         cfg.write(config)
         path = cfg.name
@@ -1491,6 +1512,10 @@ print('FIFO_OK', flush=True)
         assert b'BLUE' in data and b'PARTIAL' in data, data[-2500:]
         assert b'#[bold]LITERAL' in data, data[-2500:]
         assert 'Καλημέρα'.encode() in data and b'REBUILT' in data, data[-2500:]
+        assert b'FINAL_SUCCESS' in data and b'FIFO_SUCCESS 0' in data, data[-2500:]
+        assert b'FINAL_FAILED' in data and b'FIFO_FAILED 7' in data, data[-2500:]
+        assert b'FINAL_SUCCESSFINAL_FAILED' not in data, data[-2500:]
+        assert b'FINAL_DONE' in data and b'FIFO_DONE' in data, data[-2500:]
         assert b'RESPONSIVE' in data and b'SPARE' in data, data[-2500:]
         assert b'NEWBASE' in data, data[-2500:]
         cleanup = re.search(rb'FIFO_CLEANUP=([^\r\n]+)', data)

@@ -103,11 +103,14 @@ const commands = [_]zecli.CommandSpec{
     },
     .{
         .name = "fifo",
-        .description = "Create or remove a named FIFO for a slot or pushed row",
-        .usage = "statusbar fifo [--slot N] NAME | statusbar fifo --remove NAME",
+        .description = "Create a FIFO or change a pushed FIFO row",
+        .usage = "statusbar fifo [--slot N] NAME | statusbar fifo (--remove | --start | --finish [--exit-code N]) NAME",
         .flags = &.{
             .{ .name = "slot", .value = .string, .value_name = "N", .description = "Existing configured slot to receive FIFO text" },
             .{ .name = "remove", .description = "Remove the named FIFO" },
+            .{ .name = "start", .description = "Restart a pushed FIFO row" },
+            .{ .name = "finish", .description = "Complete a pushed FIFO row" },
+            .{ .name = "exit-code", .value = .string, .value_name = "N", .description = "Command exit code (0–255) for --finish" },
         },
         .arguments = &.{.{ .name = "NAME", .description = "FIFO name", .required = true }},
         .double_dash = .positionals,
@@ -116,9 +119,11 @@ const commands = [_]zecli.CommandSpec{
         \\absolute FIFO path. The session also exports STATUSBAR_SLOTS; create
         \\a FIFO before redirecting output to that directory.
         \\A writer's latest nonempty line stays visible after it closes.
+        \\--finish applies done, success or failed styling; --start resets
+        \\a completed row for another run. These require a pushed-row FIFO.
         \\Removal prints nothing; open writers may receive EPIPE.
         ++ "\n",
-        .examples = &.{ "statusbar fifo build", "statusbar fifo --slot 3 prompt", "make > \"$STATUSBAR_SLOTS/build\" 2>&1", "statusbar fifo --remove build" },
+        .examples = &.{ "statusbar fifo build", "statusbar fifo --slot 3 prompt", "make > \"$STATUSBAR_SLOTS/build\" 2>&1", "statusbar fifo --finish --exit-code 0 build", "statusbar fifo --start build", "statusbar fifo --remove build" },
     },
     .{
         .name = "pop",

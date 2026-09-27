@@ -19,7 +19,8 @@ statusbar [run] [options] [-- COMMAND...]
 statusbar set <SLOT> [TEXT...]
 statusbar push
 statusbar push -- <COMMAND> [ARG...]
-statusbar fifo [--slot N] NAME | statusbar fifo --remove NAME
+statusbar fifo [--slot N] NAME
+statusbar fifo (--finish [--exit-code N] | --start | --remove) NAME
 statusbar pop [ID | --all]
 statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
 statusbar config [--print [default|startup|current]] [--default] [--path]
@@ -81,7 +82,9 @@ streams its stdout and stderr, and returns its exit status.
 
 `statusbar fifo NAME` creates a named pipe connected to a new pushed row.
 `statusbar fifo --slot N NAME` sends its output to configured slot N. Both
-print the pipe path; `statusbar fifo --remove NAME` removes it without output.
+print the pipe path. `statusbar fifo --finish NAME [--exit-code N]` completes a
+pushed FIFO row, and `statusbar fifo --start NAME` resets it for another run.
+`statusbar fifo --remove NAME` removes it without output.
 See [named FIFOs](fifo.md) for redirection, stream behavior, and cleanup.
 
 ## `init`

@@ -1,7 +1,8 @@
 # Add and remove temporary lines
 
 To redirect commands into a stable named path across writes, see
-[named FIFOs](fifo.md). A FIFO pushed row remains running until removed.
+[named FIFOs](fifo.md). A FIFO pushed row remains running until explicitly
+finished or removed.
 
 Use `statusbar push` when a command needs its own line. For a quick example,
 send it a line of text:
@@ -72,8 +73,9 @@ right = "exit #(exit_code) · #(tag) [#(id)]"
 
 `done` applies to every completed stream. Commands started with `push --`
 also apply `success` for exit status zero or `failed` for a nonzero status
-or signal. A pipe does not report the producer's exit status, so it uses
-only `done`. These sections inherit settings from `[line.push]`; the final
+or signal. A pipe does not report the producer's exit status on its own;
+`statusbar fifo --finish NAME --exit-code N` supplies one for a named FIFO row.
+These sections inherit settings from `[line.push]`; the final
 text stays visible unless you replace `left`.
 See [completion settings](config.md#completion-settings) for inheritance,
 styles, and `#(signal)`.
