@@ -61,12 +61,12 @@ pub const Exec = struct {
     /// Returns only when execution fails; callers report the failure and exit.
     pub fn exec(self: *Exec) void {
         for (self.paths) |path| {
-            switch (std.posix.errno(std.c.execve(path.ptr, self.argv.ptr, self.environment.slice.ptr))) {
+            switch (std.posix.errno(std.posix.system.execve(path.ptr, self.argv.ptr, self.environment.slice.ptr))) {
                 .NOENT, .NOTDIR, .ACCES => continue,
                 .NOEXEC => {
                     if (musl) return;
                     self.shell_argv[1] = path.ptr;
-                    _ = std.c.execve("/bin/sh", self.shell_argv.ptr, self.environment.slice.ptr);
+                    _ = std.posix.system.execve("/bin/sh", self.shell_argv.ptr, self.environment.slice.ptr);
                     return;
                 },
                 else => return,

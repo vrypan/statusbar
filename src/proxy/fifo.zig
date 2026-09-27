@@ -159,7 +159,7 @@ pub fn drain(self: *Proxy, fds: []const posix.pollfd, snapshots: []const Snapsho
 
 test "stale poll snapshot cannot update a recreated FIFO" {
     var state_buf: [96]u8 = undefined;
-    const state = try std.fmt.bufPrint(&state_buf, "/tmp/statusbar-fifo-snapshot-{d}", .{std.c.getpid()});
+    const state = try std.fmt.bufPrint(&state_buf, "/tmp/statusbar-fifo-snapshot-{d}", .{std.posix.system.getpid()});
     var registry = try fifo.Registry.init(std.testing.io, std.testing.allocator, state);
     defer registry.deinit();
     _ = try registry.create("old", .{ .slot = 0 });
@@ -167,7 +167,7 @@ test "stale poll snapshot cannot update a recreated FIFO" {
     try registry.remove(0);
     _ = try registry.create("new", .{ .slot = 0 });
     const current = &registry.items.items[0];
-    try std.testing.expectEqual(@as(isize, 3), std.c.write(current.keepalive_fd, "new", 3));
+    try sys.writeAll(std.testing.io, current.keepalive_fd, "new");
     var proxy = @import("proxy.zig").schedulerProxy();
     proxy.fifos = &registry;
     proxy.log = null;

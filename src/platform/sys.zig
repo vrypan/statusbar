@@ -8,15 +8,15 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const c = std.c;
 const posix = std.posix;
+const system = posix.system;
 const environment = @import("environment.zig");
 
 pub const Exec = @import("child.zig").Exec;
 pub const environMap = environment.map;
 pub const env = environment.get;
 
-pub const Fd = c.fd_t;
+pub const Fd = posix.fd_t;
 
 // --- declarations std does not provide at all ------------------------------
 //
@@ -27,8 +27,8 @@ extern "c" fn grantpt(fd: c_int) c_int;
 extern "c" fn unlockpt(fd: c_int) c_int;
 extern "c" fn ptsname(fd: c_int) ?[*:0]const u8;
 // Zig 0.16's std.posix.tcgetpgrp uses the Linux syscall signature and
-// has no std.c backend, so it cannot replace this libc call on macOS.
-extern "c" fn tcgetpgrp(fd: c_int) c.pid_t;
+// has no macOS backend, so it cannot replace this libc call there.
+extern "c" fn tcgetpgrp(fd: c_int) posix.pid_t;
 
 /// std.posix.T only carries the terminal ioctl numbers on some targets, so the
 /// ones statusbar needs are spelled out here.
@@ -84,16 +84,16 @@ pub fn openPty(io: std.Io, term: ?*const posix.termios, size: ?*const posix.wins
 
 pub fn getWinsize(fd: Fd) Error!posix.winsize {
     var ws: posix.winsize = undefined;
-    if (c.ioctl(fd, request(Ioctl.GWINSZ), &ws) != 0) return error.Syscall;
+    if (system.ioctl(fd, request(Ioctl.GWINSZ), &ws) != 0) return error.Syscall;
     return ws;
 }
 
 pub fn setWinsize(fd: Fd, ws: *const posix.winsize) Error!void {
-    if (c.ioctl(fd, request(Ioctl.SWINSZ), ws) != 0) return error.Syscall;
+    if (system.ioctl(fd, request(Ioctl.SWINSZ), ws) != 0) return error.Syscall;
 }
 
 pub fn setControllingTty(fd: Fd) Error!void {
-    if (c.ioctl(fd, request(Ioctl.SCTTY), @as(c_int, 0)) != 0) return error.Syscall;
+    if (system.ioctl(fd, request(Ioctl.SCTTY), @as(c_int, 0)) != 0) return error.Syscall;
 }
 
 /// Asked before any terminal query, because std's tcgetattr treats ENOTTY as
@@ -145,16 +145,16 @@ pub fn selfPipe() Error![2]Fd {
 /// Changes only the descriptor's nonblocking flag, preserving every other
 /// status flag inherited from the terminal or pty setup.
 pub fn setNonBlocking(fd: Fd, enabled: bool) Error!void {
-    const flags = c.fcntl(fd, posix.F.GETFL, @as(c_int, 0));
+    const flags = system.fcntl(fd, posix.F.GETFL, @as(c_int, 0));
     if (flags < 0) return error.Syscall;
     const updated = if (enabled) flags | O_NONBLOCK else flags & ~O_NONBLOCK;
-    if (c.fcntl(fd, posix.F.SETFL, updated) < 0) return error.Syscall;
+    if (system.fcntl(fd, posix.F.SETFL, updated) < 0) return error.Syscall;
 }
 
 /// Keeps a proxy-private descriptor out of every exec'd process. dup2 onto a
 /// standard descriptor clears the flag, so redirections still work.
 pub fn setCloexec(fd: Fd) Error!void {
-    if (c.fcntl(fd, posix.F.SETFD, FD_CLOEXEC) < 0) return error.Syscall;
+    if (system.fcntl(fd, posix.F.SETFD, FD_CLOEXEC) < 0) return error.Syscall;
 }
 
 const O_NONBLOCK: c_int = @bitCast(@as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
@@ -231,10 +231,10 @@ fn decodeWaitStatus(status: c_int) Wait {
     return .{ .code = 128 +| sig };
 }
 
-pub fn waitFor(pid: c.pid_t) Wait {
+pub fn waitFor(pid: posix.pid_t) Wait {
     var status: c_int = 0;
     while (true) {
-        const r = c.waitpid(pid, &status, 0);
+        const r = system.waitpid(pid, &status, 0);
         if (r < 0) {
             if (posix.errno(r) == .INTR) continue;
             return .{ .code = 1 };
@@ -245,10 +245,10 @@ pub fn waitFor(pid: c.pid_t) Wait {
 }
 
 /// Reaps `pid` if it has exited, without waiting for a live process.
-pub fn tryWaitFor(pid: c.pid_t) ?Wait {
+pub fn tryWaitFor(pid: posix.pid_t) ?Wait {
     var status: c_int = 0;
     while (true) {
-        const r = c.waitpid(pid, &status, @intCast(c.W.NOHANG));
+        const r = system.waitpid(pid, &status, @intCast(posix.W.NOHANG));
         if (r == 0) return null;
         if (r < 0) {
             if (posix.errno(r) == .INTR) continue;
@@ -258,7 +258,7 @@ pub fn tryWaitFor(pid: c.pid_t) ?Wait {
     }
 }
 
-pub fn killGroup(pid: c.pid_t, sig: posix.SIG) void {
+pub fn killGroup(pid: posix.pid_t, sig: posix.SIG) void {
     posix.kill(-pid, sig) catch {};
 }
 

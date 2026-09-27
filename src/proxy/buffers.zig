@@ -3,7 +3,6 @@
 
 const std = @import("std");
 const posix = std.posix;
-const c = std.c;
 const sys = @import("platform").sys;
 const osc7 = @import("terminal").osc7;
 const stdout_fd = @import("proxy.zig").stdout_fd;
@@ -112,11 +111,10 @@ pub const WriterSink = struct {
 };
 
 test "input readiness is refreshed after another reader consumes input" {
-    var fds: [2]c_int = undefined;
-    try std.testing.expectEqual(@as(c_int, 0), c.pipe(&fds));
-    defer _ = c.close(fds[0]);
-    defer _ = c.close(fds[1]);
-    try std.testing.expectEqual(@as(isize, 1), c.write(fds[1], "x", 1));
+    const fds = try std.Io.Threaded.pipe2(.{ .ACCMODE = .RDONLY });
+    defer sys.close(std.testing.io, fds[0]);
+    defer sys.close(std.testing.io, fds[1]);
+    try sys.writeAll(std.testing.io, fds[1], "x");
     try std.testing.expect(inputReady(fds[0]));
     var buf: [1]u8 = undefined;
     try std.testing.expectEqual(@as(usize, 1), try sys.read(fds[0], &buf));

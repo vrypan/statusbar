@@ -2,7 +2,6 @@
 //! and pushed-row requests from the control socket.
 
 const std = @import("std");
-const c = std.c;
 const sys = @import("platform").sys;
 const config = @import("model").config;
 const Runtime = @import("model").runtime_config.Runtime;
@@ -202,7 +201,7 @@ pub fn drainControl(self: *Proxy, now_ms: i64) void {
     for (0..16) |_| {
         var packet: [control.max_packet]u8 = undefined;
         var from: control.Address = undefined;
-        var from_len: c.socklen_t = undefined;
+        var from_len: std.posix.socklen_t = undefined;
         const message = self.control_endpoint.receive(&packet, &from, &from_len) orelse break;
         const owner = control.senderPath(&from, from_len) orelse continue;
         var envelope = push_protocol.Envelope.parse(message) catch {

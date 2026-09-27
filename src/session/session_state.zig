@@ -16,7 +16,7 @@ pub const State = struct {
         var self: State = .{ .io = io, .path_len = 0, .startup = startup, .token = token };
         var nonce: u64 = undefined;
         io.random(std.mem.asBytes(&nonce));
-        const state_path = try std.fmt.bufPrint(&self.path_buf, "/tmp/statusbar-state-{d}-{x}", .{ std.c.getpid(), nonce });
+        const state_path = try std.fmt.bufPrint(&self.path_buf, "/tmp/statusbar-state-{d}-{x}", .{ std.posix.system.getpid(), nonce });
         self.path_len = state_path.len;
         var pending = try self.prepareFile(lines, startup, false);
         defer pending.deinit(io);

@@ -8,7 +8,7 @@
 
 const std = @import("std");
 const posix = std.posix;
-const c = std.c;
+const system = posix.system;
 const sys = @import("platform").sys;
 const display = @import("display.zig");
 
@@ -23,7 +23,7 @@ pub const Command = struct {
     interval_ms: i64,
     devnull: sys.Fd,
 
-    pid: ?c.pid_t = null,
+    pid: ?posix.pid_t = null,
     fd: ?sys.Fd = null,
     termination_requested: bool = false,
     started_ms: i64 = 0,
@@ -169,17 +169,17 @@ pub const Command = struct {
             return;
         };
 
-        const pid = c.fork();
+        const pid = system.fork();
         if (pid < 0) {
             sys.close(io, fds[0]);
             sys.close(io, fds[1]);
             return;
         }
         if (pid == 0) {
-            _ = c.setsid();
-            _ = c.dup2(self.devnull, 0);
-            _ = c.dup2(fds[1], 1);
-            _ = c.dup2(self.devnull, 2);
+            _ = system.setsid();
+            _ = system.dup2(self.devnull, 0);
+            _ = system.dup2(fds[1], 1);
+            _ = system.dup2(self.devnull, 2);
             const dfl: posix.Sigaction = .{
                 .handler = .{ .handler = posix.SIG.DFL },
                 .mask = posix.sigemptyset(),
@@ -187,7 +187,7 @@ pub const Command = struct {
             };
             posix.sigaction(.PIPE, &dfl, null);
             exec.exec();
-            c._exit(127);
+            system._exit(127);
         }
         sys.close(io, fds[1]);
         self.pid = pid;

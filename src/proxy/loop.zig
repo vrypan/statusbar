@@ -3,7 +3,6 @@
 
 const std = @import("std");
 const posix = std.posix;
-const c = std.c;
 const sys = @import("platform").sys;
 const Output = @import("terminal").output.Output;
 const bar = @import("render").bar;
@@ -77,7 +76,7 @@ pub fn paintTimeout(self: *const Proxy, now_ms: i64) i64 {
     return @max(@min(quiet, forced) - now_ms, 0);
 }
 
-pub fn pump(self: *Proxy, sig_r: sys.Fd, pid: c.pid_t) !void {
+pub fn pump(self: *Proxy, sig_r: sys.Fd, pid: posix.pid_t) !void {
     var out_buf: [io_buf_size]u8 = undefined;
     var in_buf: [4096]u8 = undefined;
     var stdin_open = true;
@@ -260,7 +259,7 @@ pub fn exitTimeout(self: *const Proxy, now_ms: i64) i64 {
     return @max(@min(quiet, self.child_exited_ms + exit_drain_ms) - now_ms, 0);
 }
 
-pub fn drainSignals(self: *Proxy, sig_r: sys.Fd, pid: c.pid_t, now_ms: i64) !void {
+pub fn drainSignals(self: *Proxy, sig_r: sys.Fd, pid: posix.pid_t, now_ms: i64) !void {
     var buf: [64]u8 = undefined;
     const n = sys.read(sig_r, &buf) catch return;
     var resized = false;

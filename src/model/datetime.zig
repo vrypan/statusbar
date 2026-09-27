@@ -4,7 +4,7 @@ const std = @import("std");
 pub const max_format = 1024;
 /// Opaque storage large enough for libc's struct tm on supported platforms.
 pub const Time = extern struct { storage: [16]i64 };
-extern "c" fn localtime_r(t: *const std.c.time_t, result: *Time) ?*Time;
+extern "c" fn localtime_r(t: *const std.posix.time_t, result: *Time) ?*Time;
 extern "c" fn strftime(s: [*]u8, max: usize, format: [*:0]const u8, tm: *const Time) usize;
 
 pub fn parse(expression: []const u8) error{InvalidFormat}!?[]const u8 {
@@ -24,7 +24,7 @@ pub fn usesClock(format: []const u8) bool {
     return false;
 }
 
-pub fn fromSeconds(seconds: std.c.time_t) Time {
+pub fn fromSeconds(seconds: std.posix.time_t) Time {
     var result = std.mem.zeroes(Time);
     _ = localtime_r(&seconds, &result);
     return result;

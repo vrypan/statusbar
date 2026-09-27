@@ -21,7 +21,7 @@
 
 const std = @import("std");
 const posix = std.posix;
-const c = std.c;
+const system = posix.system;
 const sys = @import("platform").sys;
 const tty = @import("platform").tty;
 const Output = @import("terminal").output.Output;
@@ -53,7 +53,7 @@ var panic_restore: ?tty.Saved = null;
 /// saved line discipline.
 pub fn restoreOnPanic() void {
     if (panic_restore) |saved| {
-        _ = c.write(stdout_fd, "\x1b7\x1b[r\x1b8", 8);
+        _ = system.write(stdout_fd, "\x1b7\x1b[r\x1b8", 8);
         tty.restore(saved);
     }
 }
@@ -143,7 +143,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     try proxy.reserveRows(outer_ws.row);
     proxy.output.osc7_handler = .{ .context = &proxy.terminal, .callback = receiveOsc7 };
 
-    const pid = c.fork();
+    const pid = system.fork();
     if (pid < 0) return error.ForkFailed;
     if (pid == 0) childExec(pty, &executable);
     if (opts.log) |log| log.write("session started: pid={d}, rows={d}", .{ pid, runtime.lines });

@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const posix = std.posix;
-const c = std.c;
+const system = posix.system;
 const sys = @import("platform").sys;
 const stderr_fd = @import("proxy.zig").stderr_fd;
 const stdin_fd = @import("proxy.zig").stdin_fd;
@@ -13,33 +13,33 @@ pub var sig_pipe_w: std.atomic.Value(c_int) = .init(-1);
 pub const forwarded_signals = [_]posix.SIG{ .TERM, .HUP, .INT, .QUIT };
 
 pub fn onSignal(sig: posix.SIG) callconv(.c) void {
-    const saved_errno = c._errno().*;
+    const saved_errno = system._errno().*;
     const w = sig_pipe_w.load(.monotonic);
     if (w >= 0) {
         const byte = [1]u8{@truncate(@intFromEnum(sig))};
-        _ = c.write(w, &byte, 1);
+        _ = system.write(w, &byte, 1);
     }
-    c._errno().* = saved_errno;
+    system._errno().* = saved_errno;
 }
 
 /// Everything here runs between fork and exec.
 pub fn childExec(pty: sys.Pty, executable: *sys.Exec) noreturn {
-    _ = c.close(pty.master);
-    _ = c.setsid();
+    _ = system.close(pty.master);
+    _ = system.setsid();
     sys.setControllingTty(pty.slave) catch {};
-    _ = c.dup2(pty.slave, stdin_fd);
-    _ = c.dup2(pty.slave, stdout_fd);
-    _ = c.dup2(pty.slave, stderr_fd);
-    if (pty.slave > stderr_fd) _ = c.close(pty.slave);
+    _ = system.dup2(pty.slave, stdin_fd);
+    _ = system.dup2(pty.slave, stdout_fd);
+    _ = system.dup2(pty.slave, stderr_fd);
+    if (pty.slave > stderr_fd) _ = system.close(pty.slave);
     resetSignal(.PIPE);
 
     executable.exec();
 
     const name = std.mem.span(executable.argv[0].?);
-    _ = c.write(stderr_fd, "statusbar: cannot execute ", 26);
-    _ = c.write(stderr_fd, name.ptr, name.len);
-    _ = c.write(stderr_fd, "\r\n", 2);
-    c._exit(127);
+    _ = system.write(stderr_fd, "statusbar: cannot execute ", 26);
+    _ = system.write(stderr_fd, name.ptr, name.len);
+    _ = system.write(stderr_fd, "\r\n", 2);
+    system._exit(127);
 }
 
 pub fn resetSignal(sig: posix.SIG) void {
@@ -75,7 +75,7 @@ pub fn installChildHandler() void {
     const act: posix.Sigaction = .{
         .handler = .{ .handler = onSignal },
         .mask = posix.sigemptyset(),
-        .flags = c.SA.NOCLDSTOP,
+        .flags = posix.SA.NOCLDSTOP,
     };
     posix.sigaction(.CHLD, &act, null);
 }
