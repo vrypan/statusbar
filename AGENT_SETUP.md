@@ -31,14 +31,19 @@ or `built-in`. Selection follows this order:
 
 1. An explicit `statusbar --config PATH` launch option.
 2. `$STATUSBAR_CONFIG`.
-3. `$XDG_CONFIG_HOME/statusbar/config` if set; otherwise
-   `~/.config/statusbar/config`.
+3. `$XDG_CONFIG_HOME/statusbar/config.statusbar` if set; otherwise
+   `~/.config/statusbar/config.statusbar`.
 
 `--path` does not recover a running session's `--config` argument. A missing
-file at the default location uses the built-in config; a missing explicit
-file is an error. Inside a session, `statusbar config --print current` and
-`statusbar config --print startup` show the active and original configs.
-These snapshots exclude temporary slot overrides.
+file at the default location uses the built-in config. A config that cannot
+be read or parsed, including an explicit one, starts the built-in config with
+a warning line; the shell always starts. The pre-`.statusbar` default file
+(`statusbar/config`) is never loaded: if it exists, convert it with the
+[migration guide](https://github.com/vrypan/statusbar/blob/main/docs/migration.md)
+and save the result as `config.statusbar`. Inside a session, `statusbar
+config --print current` and `statusbar config --print startup` show the
+active and original configs. These snapshots exclude values and statuses set
+at runtime.
 
 Locate bundled themes:
 
@@ -51,13 +56,13 @@ Locate bundled themes:
 ## 2. Draft the theme
 
 Create a draft in a user-owned directory, for example
-`~/.config/statusbar/themes/my-theme.config`, creating its parent if needed.
+`~/.config/statusbar/themes/my-theme.statusbar`, creating its parent if needed.
 Copy a suitable bundled theme or use `statusbar config --default` as a
-starting point. Prefer a `-native.config` sample for terminal palette colors.
+starting point. Prefer a `-native.statusbar` sample for terminal palette colors.
 Installed themes may be replaced on upgrade, so customize the copy.
 
-Inspect commands before loading a theme: `#(command)` and `[command.NAME]`
-execute shell commands. Include network requests, authenticated `gh` calls,
+Inspect commands before loading a theme: every `[command.NAME]` executes a
+shell command, shown with `#(command:NAME)`. Include network requests, authenticated `gh` calls,
 and other dependencies only when they serve features the user wants. Check
 that each command works on their OS.
 
@@ -68,13 +73,13 @@ This small theme uses the terminal palette and needs no network access:
 accent = colour12
 muted = colour8
 
-[line.1]
-rule = ─
-style = fg=muted,dim
+[line.rule]
+text = "#[fg=muted,dim]#(fill:─)"
 
-[line.2]
-left = " #[fg=accent,bold]#(host)#[default] "
-right = " %a %d %b  %H:%M "
+[line.prompt]
+text = " #(value)#[fg=accent,bold]#(command:host)#[default] "
+text .= "#(fill: )"
+text .= " #(datetime:%a %d %b)  #(datetime:%H:%M) "
 
 [command.host]
 run = hostname
@@ -83,34 +88,44 @@ interval = 60
 
 Keep these rules in mind:
 
-- **Layout:** `[line.N]` sections must be consecutive from 1. Each supports
-  `left`, `right`, `rule`, and `style`. Slots count left then right: line 1
-  uses 1 and 2; line 2 uses 3 and 4. The right side clips first on narrow
-  terminals. Reserve a slot for each shell hook so it does not overwrite
-  another feature.
+- **Layout:** each `[line.NAME]` adds a line, in declaration order. Names use
+  letters, digits, `_` and `-` and are not only digits. `text` is the
+  template: text before `#(fill:PATTERN)` is left-aligned, text after it
+  right-aligned, and a template that is only a fill draws a rule. The right
+  side clips first on narrow terminals (`keep = right` reverses that). Give
+  each shell hook its own line, shown with `#(value)`, so hooks never
+  overwrite each other. `left`, `right`, `rule`, and line `style` keys no
+  longer exist.
 - **Colors:** `colour0`–`colour15` follow the terminal's palette; `#rrggbb`
   fixes a color. `default` uses the terminal's foreground for `fg` and its
   background for `bg`. Use `[colors]` names in styles and markup. Ghostty's
   palette entry 7 maps to `colour7`; cursor colors have no native alias.
 - **Styling:** `#[fg=accent,bold]text#[default]` styles text; `#[default]`
-  restores the line's style. Use `dim` for subtle rules and `#[nodim]` for
+  restores the top-level `style`, and `#[default,fg=muted]` resets then sets a
+  color. Styles carry through the fill, so a line background needs a leading
+  style and a fill of spaces. Use `dim` for subtle rules and `#[nodim]` for
   text on the same line. Check glyph alignment and contrast in the actual
   font. Powerline layouts may need a Nerd Font.
-- **Templates:** `%H:%M` is a clock; `%%` is a literal percent sign. `#(NAME)`
-  uses a matching `[command.NAME]`; otherwise its contents run as a shell
-  command. Quote values to retain edge spaces. Put comments on their own
-  lines, not after values.
+- **Templates:** `#(datetime:%H:%M)` is a clock; inside it `%%` is a literal
+  percent sign, and `%` elsewhere is plain text. `#(command:NAME)` shows a
+  `[command.NAME]`; any other unknown `#(...)` is an error, never a shell
+  command. `##` is a literal `#`. Status templates (`running`, `done`,
+  `success`, `failed`) replace `text` while a line has that status. Quote
+  values to retain edge spaces; `text .= "..."` appends. Put comments on their
+  own lines, not after values.
 - **Commands:** They run with `/bin/sh -c` in statusbar's starting directory,
   with the inherited environment, not the interactive shell's aliases or
   functions. Only their first output line is displayed; stderr is discarded.
-  Prefer named commands with an appropriate `interval`. Use a shell hook
-  and `statusbar set SLOT TEXT` for data that must follow the shell's `cd`.
-- **Starship:** The default destination is slot 3. Leave that slot available
-  if using prompt relocation. A one-line Starship prompt stays in the
+  Output is displayed literally (ANSI colors work, `#[...]` does not). Give
+  each command an appropriate `interval`. Use a shell hook and
+  `statusbar set NAME TEXT` for data that must follow the shell's `cd`.
+- **Starship:** The default destination is the line named `prompt`; its
+  template must contain `#(value)`. Keep that line if using prompt
+  relocation. A one-line Starship prompt stays in the
   terminal; multiline prompts move all but the final line into the bar.
   Starship keeps its own colors even with a native statusbar theme.
-- **Temporary lines:** Keep `[line.push]` and its completion sections when
-  the user wants the sample's styling for `statusbar push`.
+- **Temporary lines:** Keep the `[push]` section and its status templates
+  when the user wants the sample's styling for `statusbar push`.
 
 For more options, consult the
 [configuration reference](https://github.com/vrypan/statusbar/blob/main/docs/config.md).
@@ -155,8 +170,8 @@ Choose the flags for the user's setup:
 
 - Remove `--starship=false` only if they want Starship prompt relocation.
   Initialize Starship normally; for Fish, place statusbar's hook after
-  `starship init fish | source`. Use `--starship-slot N` for a destination
-  other than slot 3; it cannot be combined with `--starship=false`.
+  `starship init fish | source`. Use `--starship-line NAME` for a destination
+  other than the `prompt` line; it cannot be combined with `--starship=false`.
 - Add `--report-cwd=false` if the terminal's integration already emits OSC 7
   working-directory reports **inside the statusbar child shell**. This
   includes Ghostty with working shell integration; see the next section.
@@ -173,18 +188,18 @@ be active in the child. More detail:
 
 There is no `statusbar init bash`. Keep the existing prompt and terminal
 integration. When the theme needs data from the interactive shell, add a
-prompt hook even for manual launches. For example, **only if slot 1 is
-reserved for the directory**:
+prompt hook even for manual launches. For example, **only if the theme has a
+`[line.cwd]` line for the directory**:
 
 ```bash
 __statusbar_cwd() {
     local previous_status=$?
-    statusbar set 1 -- "${PWD//#/##}"
+    statusbar set cwd -- "$PWD"
     return "$previous_status"
 }
 ```
 
-The substitution escapes `#` for statusbar markup. Register the function once
+Values are displayed literally, so paths need no escaping. Register the function once
 through the existing prompt framework. If `PROMPT_COMMAND` is unset, use
 `PROMPT_COMMAND=__statusbar_cwd`; if it is a string, append the function call
 on a new line; if it is an array, append an element. Preserve existing
@@ -304,20 +319,20 @@ Save a copy of `statusbar config --print current` before replacing a live
 layout. Then preview:
 
 ```sh
-statusbar config < ~/.config/statusbar/themes/my-theme.config
+statusbar config < ~/.config/statusbar/themes/my-theme.statusbar
 ```
 
-Outside a session, launch `statusbar --config /absolute/path/to/my-theme.config`
+Outside a session, launch `statusbar --config /absolute/path/to/my-theme.statusbar`
 in an interactive terminal. Both methods execute the draft's commands.
 The live command validates and sends the config; a zero exit status confirms
 sending, not that the session applied it. Check the bar and
 `statusbar config --print current` afterward. Invalid configs leave the
 active layout intact.
 
-Existing `statusbar set` overrides survive replacement when their slots still
-exist. If one hides the draft, clear that specific override with
-`statusbar set N`; an active prompt hook may write it again at the next prompt.
-The saved config does not include these overrides.
+Values set with `statusbar set` survive replacement for lines whose names
+still exist. If one hides the draft's default, restore it with
+`statusbar set NAME --reset`; an active prompt hook may write it again at the
+next prompt. The saved config does not include these values.
 
 For interactive browsing, use `statusbar-theme /path/to/themes` inside a
 session. Homebrew builds default to their bundled directory. Enter applies a
@@ -329,7 +344,7 @@ in section 1, preserving the existing file first. For the usual location:
 
 ```sh
 mkdir -p ~/.config/statusbar
-cp ~/.config/statusbar/themes/my-theme.config ~/.config/statusbar/config
+cp ~/.config/statusbar/themes/my-theme.statusbar ~/.config/statusbar/config.statusbar
 ```
 
 Respect `$STATUSBAR_CONFIG`, `$XDG_CONFIG_HOME`, and any explicit `--config`
@@ -342,9 +357,9 @@ Verify in a fresh terminal:
 - Automatic launch appears once; for manual use, start statusbar yourself.
 - The saved theme loads, commands return useful output, and the layout works
   at normal and narrow widths.
-- Changing directories updates the intended title or slots. Existing prompt
+- Changing directories updates the intended title or lines. Existing prompt
   behavior and terminal integration still work; Starship uses its reserved
-  slot and shows command failures correctly.
+  line and shows command failures correctly.
 - Native colors and glyphs look right. Restart statusbar after switching
   terminal themes to refresh the color cache used for change highlights.
 

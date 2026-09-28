@@ -65,7 +65,7 @@ Applying a theme changes only the current session. **To use it every time**,
 run the copy command the picker prints when you exit after changing themes.
 
 Homebrew builds find their bundled themes automatically. You can also pass
-a directory of your own `.config` themes:
+a directory of your own `.statusbar` themes:
 
 ```sh
 statusbar-theme ~/.config/statusbar/themes
@@ -81,26 +81,29 @@ Edit your saved config, or create one from the built-in layout:
 
 ```sh
 mkdir -p ~/.config/statusbar
-statusbar config --default > ~/.config/statusbar/config
+statusbar config --default > ~/.config/statusbar/config.statusbar
 ```
 
 After editing the file, apply it to the running session:
 
 ```sh
-statusbar config < ~/.config/statusbar/config
+statusbar config < ~/.config/statusbar/config.statusbar
 ```
 
-Each config line has a left and right side. Add text, a clock, or a command's
-output; [the guide](docs/README.md) starts with small examples.
+Each `[line.NAME]` section adds a named line with a template of text, dates,
+command output, and styles; `#(fill: )` pushes what follows to the right.
+[The guide](docs/README.md) starts with small examples. Upgrading from a
+config with `left`, `right` and `rule`? See the
+[migration guide](docs/migration.md).
 
-Inside a statusbar session, scripts can set a slot with `statusbar set 1 "Ready"`.
-For live output, `statusbar push -t build -- make` adds a temporary line;
-`statusbar pop` removes it. You can also move Starship's prompt details into
-a statusbar slot.
+Inside a statusbar session, scripts can change a line with
+`statusbar set build "Ready" --status success`. For live output,
+`statusbar push build -- make` adds a temporary line; `statusbar pop build`
+removes it. You can also move Starship's prompt details into a statusbar line.
 
-For shell redirection, `statusbar fifo build` creates a named pipe and a
-pushed row; `statusbar fifo --slot 3 prompt` binds one to an existing slot.
-See [named FIFOs](docs/fifo.md).
+For shell redirection, `statusbar push build --fifo` creates a line and a
+named pipe; `statusbar bind prompt` gives an existing line one.
+See [FIFOs](docs/bind.md).
 
 Run `statusbar --help` for the full command list.
 
@@ -112,9 +115,10 @@ To put Starship's prompt in statusbar, add this to `~/.zshrc`:
 eval "$(statusbar init zsh)"
 ```
 
-This moves Starship's information into slot 3 and leaves the prompt character
-in the terminal. It also updates the terminal title when you change directory.
-[Starship setup](docs/starship.md) covers other slots and options.
+This moves Starship's information into the line named `prompt` and leaves the
+prompt character in the terminal. It also updates the terminal title when you
+change directory. [Starship setup](docs/starship.md) covers other lines and
+options.
 
 Fish uses its native prompt function; put these after one another in
 `~/.config/fish/config.fish`:
@@ -127,8 +131,8 @@ statusbar init fish | source
 ## More examples and details
 
 The [user guide](docs/README.md) covers layouts, live updates, and themes.
-See [configuration](docs/config.md), [slot updates](docs/set.md),
-[temporary lines](docs/push.md), [named FIFOs](docs/fifo.md), or
+See [configuration](docs/config.md), [changing lines](docs/set.md),
+[temporary lines](docs/push.md), [FIFOs](docs/bind.md), or
 [how statusbar works](docs/internals.md)
 when you need more detail. The guide also covers [shell completions](docs/usage.md#completion).
 

@@ -13,7 +13,7 @@ The statusbar itself has no scheduled external commands or clock updates. Starsh
 updates it through the shell integration when the prompt is drawn, so the
 default stays very light.
 
-Here's my `~/.config/statusbar/config`:
+Here's my `~/.config/statusbar/config.statusbar`:
 
 ```ini
 interval = 5
@@ -24,12 +24,12 @@ muted = #737b91
 blue = #82aaff
 
 
-[line.1]
-right = "#[fg=green]⡎⠉⠉⢱#[default]" 
+[line.ornament]
+text = "#(fill: )#[fg=green]⡎⠉⠉⢱#[default]"
 
-[line.2]
-left = "<starship placeholder>"
-right = "#[fg=green]⢇⣒⣒⡸#[default]"
+[line.prompt]
+default = "<starship placeholder>"
+text = "#(value)#(fill: )#[fg=green]⢇⣒⣒⡸#[default]"
 
 ```
 
@@ -39,11 +39,11 @@ Ghostty launches my shell through statusbar. In my Ghostty config:
 command = statusbar -- /bin/zsh -l
 ```
 
-And in `.zshrc`, I send Starship's information to slot 3—the left side of the
-second line:
+And in `.zshrc`, I send Starship's information to the `prompt` line, which
+replaces the placeholder:
 
 ```sh
-eval "$(statusbar init zsh --starship-slot 3)"
+eval "$(statusbar init zsh)"
 ```
 
 ![screenshot default](screenshot-default.png)
@@ -53,7 +53,7 @@ eval "$(statusbar init zsh --starship-slot 3)"
 When I settle into a terminal, I type `sbx`:
 
 ```sh
-alias sbx='statusbar config < "$HOME/.config/statusbar/extra.config"'
+alias sbx='statusbar config < "$HOME/.config/statusbar/extra.statusbar"'
 ```
 
 This replaces statusbar's config in that session, without restarting my shell.
@@ -63,7 +63,7 @@ temperature, weather, and the date and time. Tracked values briefly highlight
 when they change.
 
 <details>
-<summary>This is my ~/.config/statusbar/extra.config:</summary>
+<summary>This is my ~/.config/statusbar/extra.statusbar:</summary>
 
 ```ini
 interval = 5
@@ -81,57 +81,38 @@ good = colour2
 success = colour10
 failure = colour1
 
-[line.push]
+[push]
 spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-style = fg=muted
-left = "#[fg=accent]#(spinner)#[default] [#(id)] #[bold]#(tag)#[default] › #(stream)"
-right = ""
+text = "#[fg=muted]#[fg=accent]#(spinner)#[default,fg=muted] #[bold]#(name)#[default,fg=muted] › #(value)#(fill: )"
+done = "#[fg=muted]· #[bold]#(name)#[default,fg=muted] › #(value)#(fill: )"
+success = "#[fg=muted]#[fg=success]✔#[default,fg=muted] #[bold]#(name)#[default,fg=muted] › #(value)#(fill: )"
+failed = "#[fg=muted]#[fg=failure]✗#[default,fg=muted] #[bold]#(name)#[default,fg=muted] › #(value)#(fill: )#[fg=failure]failed#[default]"
 
-[line.push.done]
-left = "· [#(id)] #[bold]#(tag)#[default] › #(stream)"
+[line.rule]
+# text = "#[fg=muted] Random: #[track]#(command:random)#[notrack]#[default]#(fill: )#[track]#[fg=red] #(command:random) #[default]#[notrack]"
+text = "#[fg=xmuted,dim]#(fill:─)"
 
-[line.push.success]
-left = "#[fg=success]✔#[default] [#(id)] #[bold]#(tag)#[default] › #(stream)"
+# Starship fills this line's value.
+[line.prompt]
+text = "#[fg=text]#(value)"
+# text .= "#(fill: )#[fg=muted] (load #(command:load))#[default]"
 
-[line.push.failed]
-left = "#[fg=failure]✗#[default] [#(id)] #[bold]#(tag)#[default] › #(stream)"
-right = "#[fg=failure]exit #(exit_code)#[default]"
+[line.hn]
+  text = "#[fg=rule,dim]#[nodim]#[track]#[fg=muted,bold]* HN: #[fg=muted,nobold]#(command:hn)#[notrack]"
+  text .= "#[default,fg=rule,dim]#(fill:·)"
 
-[line.1]
-# left = "#[fg=muted] Random: #[track]#(random)#[notrack]#[default]"
-# right = "#[track]#[fg=red] #(random) #[default]#[notrack]"
-# rule = " "
-rule = ─
-style = fg=xmuted,dim
+[line.github]
+  text = "#[fg=rule,dim]#[nodim]#[track]#[fg=muted,bold]* GH: #[fg=muted,nobold]#(command:gh-statusbar-stars) #[notrack]"
+  text .= "#[default,fg=rule,dim]#(fill:·)"
 
-# Slot 3 is intentionally empty here: Starship fills it.
-[line.2]
-left = ""
-# right = "#[fg=muted] (load #(load))#[default]"
-style = fg=text
+[line.system]
+  text = "#[fg=rule,dim]#[nodim]#[fg=muted,bold]*#[fg=muted,nobold] #[track]#(command:system-stats)#[notrack]#[default,fg=rule,dim] "
+  text .= "#(fill:·)"
+  text .= "#[nodim] #[fg=muted] #(command:weather) #(datetime:%a %d) #[track]#(datetime:%H:%M)#[notrack]"
 
-[line.3]
-  left = "#[nodim]#[track]#[fg=muted,bold]* HN: #[fg=muted,nobold]#(hn)#[notrack]"
-  right = ""
-  rule = ·
-  style = fg=rule,dim
-
-[line.4]
-  left = "#[nodim]#[track]#[fg=muted,bold]* GH: #[fg=muted,nobold]#(gh-statusbar-stars) #[notrack]"
-  right = ""
-  rule = ·
-  style = fg=rule,dim
-
-[line.5]
-  left = "#[nodim]#[fg=muted,bold]*#[fg=muted,nobold] #[track]#(system-stats)#[notrack]#[default] "
-  right = "#[nodim] #[fg=muted] #(weather) %a %d #[track]%H:%M#[notrack]"
-  rule = ·
-  style = fg=rule,dim
-
-[line.6]
-  left = "#[nodim]#[fg=muted]#[track]#(tailscale)#[notrack]#[default] "
-  rule = ·
-  style = fg=rule,dim
+[line.tailscale]
+  text = "#[fg=rule,dim]#[nodim]#[fg=muted]#[track]#(command:tailscale)#[notrack]#[default,fg=rule,dim] "
+  text .= "#(fill:·)"
 
 [command.hn]
 run = |
@@ -220,10 +201,11 @@ interval = 30
 run = |
   name=$(/Applications/Tailscale.app/Contents/MacOS/Tailscale status --json 2>/dev/null |
     jq -r 'if .BackendState == "Running" then (.Self.DNSName) else "" end' 2>/dev/null)
+  # Command output is shown literally; ANSI colors still work.
   if [ -n "$name" ]; then
-    printf '#[fg=good]*#[fg=muted] Tailscale: %s\n' "$name"
+    printf '\033[32m*\033[90m Tailscale: %s\n' "$name"
   else
-    printf '#[fg=failure]*#[fg=muted] Tailscale\n'
+    printf '\033[31m*\033[90m Tailscale\n'
   fi
 interval = 10
 

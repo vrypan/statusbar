@@ -45,27 +45,31 @@ shell
   directories.
 - Statusbar is painted with autowrap off, so text that the terminal draws wider
   than statusbar measured is clipped at the right edge rather than wrapping.
-- Numbered `StatusBarSlotN` and `StatusBarSlotLiteralN` user variables are taken out of the
-  output stream; see [set.md](set.md).
-- Pushed lines are session-owned and survive config replacement. A private local
-  datagram socket authenticates and acknowledges line creation and removal;
-  bounded stream updates display text literally.
-  Their IDs and content are separate from configured slot numbering.
+- Lines are session-owned: configured lines in declaration order, then pushed
+  lines in creation order. Each has a stable, never-reused ID, an optional
+  name, a value and a status. A private local datagram socket authenticates
+  and acknowledges every line request (`set`, `push`, `pop`, `bind`); bounded
+  stream updates display text literally. Streaming producers are tied to the
+  line instance they created, so a retired or removed producer cannot change
+  a later line with the same name. See [set.md](set.md#protocol).
 - Named FIFOs are created on demand under a private session directory. Their
   readers are polled in the proxy loop with bounded per-pass reads. The session
   retains a writer descriptor to keep idle pipes open and removes owned paths
-  on binding removal and normal shutdown. See [named FIFOs](fifo.md).
+  on binding removal and normal shutdown. A binding belongs to a line ID and
+  is named after the line. See [FIFOs](bind.md).
 - Exact OSC 3110 `STATUSBAR` messages are also taken out of the output stream.
   A session token authenticates complete `CONFIG` replacement requests. The
-  streaming parser stops at each request boundary so config and slot updates
-  in one PTY read remain ordered. Foreign ELLO messages pass through. See
+  streaming parser stops at each request boundary so a config request and the
+  output after it in one PTY read remain ordered. Foreign ELLO messages pass through. See
   [the protocol](osc-3110.md).
 - On a resize the child's pty follows the terminal. The visible line count is
   the smaller of the configured count and the terminal height minus two.
-  Hidden lines retain their content and numbered-slot overrides.
+  Hidden lines retain their values and statuses.
 - A config replacement request is parsed into a complete runtime generation,
-  which is swapped in after the old poll snapshot has been consumed. Failed
-  preparation leaves the old source, renderer, commands, and geometry intact.
+  prepared against a reconciled copy of the lines, and swapped in with that
+  copy after the old poll snapshot has been consumed. Surviving configured
+  names keep their ID, value and status. Failed preparation leaves the lines,
+  bindings, source, renderer, commands, and geometry intact.
 - A successful config replacement updates the child pty size and every input
   and output bound for terminal rows together. The previous command runners
   stop after the swap. The streaming terminal parsers, palette probe, OSC 7 observer, and
@@ -89,20 +93,21 @@ model](display-model.md).
 Only the statusbar has a cell grid; the child's output remains a proxied byte
 stream. Each visible line keeps three owned versions: base content, desired
 appearance, and the last queued paint. Cells record graphemes, terminal width,
-style, hyperlink, left/right/fill ownership, and optional tracking-region ID.
+style, hyperlink, prefix/suffix/fill ownership, and optional tracking-region ID.
 Wide graphemes also have a continuation cell, so clipping and appearance changes
 cannot split them.
 
 Compiled templates record per-side command and clock dependencies. Accepted
 command output is normalized before comparison and dirties only dependent lines
-whose slots are not overridden; clock ticks likewise dirty only live clock
-templates. Overrides dirty their own line. Identical command
+whose active template shows them; clock ticks likewise dirty only lines whose
+active template shows a date. A value or status change dirties its own line.
+A value never disables a line's other expressions. Identical command
 updates format no lines. Dirty lines compare their cells, and only lines whose
 appearance changed are repainted. Startup, resize and screen damage repaint all visible lines. Damage
 repair uses existing cells without parsing content again. Paints still use the
 same safe output boundaries and cursor-save timing as before.
 
-Internal slot, region, and column-range operations can patch and restore styles
+Internal part, region, and column-range operations can patch and restore styles
 without changing content. Patches survive unrelated-line updates, equivalent content
 rebuilds, and damage repair. A semantic base change resets that line's patches;
 resize rebuilds the grid. Each tracked region has a monotonic deadline
@@ -114,7 +119,7 @@ the deadline.
 Command results retain why their process ran. First results and reruns requested
 by a terminal resize establish a new baseline silently; ordinary interval
 results and clock changes may start a region highlight after every command used
-in the slot has produced a first result. Step boundaries and expiry share one proxy
+in the line's active template has produced a first result. Step boundaries and expiry share one proxy
 poll deadline and one composition pass. Within-line selective writes are not
 implemented yet.
 
@@ -161,11 +166,14 @@ Color-space reference: [OKLab](https://bottosson.github.io/posts/oklab/).
 
 Static template markers compile to ordinal boundaries. Source lines own raw-byte
 spans; markup expansion and ANSI filtering map those boundaries into graphemes.
-Each visible line also retains full semantic slot snapshots before clipping.
+Each visible line also retains full semantic snapshots of its prefix and
+suffix before clipping.
 Regions compare glyph bytes, width, resolved style, and hyperlink values. Both
-versions are projected into the target's final available column budget to
-exclude changes in hidden suffixes and movement caused by neighboring values.
-Override transitions carry per-slot epochs so identical-text activation/clearing
+versions are compared only over the region columns the new layout shows,
+counted from the region's start, which excludes changes in clipped parts and
+movement caused by neighboring values.
+Each line carries its ID and an epoch that advances with every value or status
+change, so an identical-looking change, or another line moving into the row,
 still cancels effects and establishes a silent baseline. Hidden lines discard
 their snapshots and baseline silently when revealed.
 
@@ -184,7 +192,8 @@ Styles are semantic values, not replayed escape strings. Supported attributes
 include default/indexed/RGB foreground and background, underline color and
 style, bold, dim, italic, blink, reverse, hidden, strikethrough and overline.
 Unknown SGR attributes are ignored. Invalid escapes and unsafe hyperlinks are
-filtered. Left, right and rule text have independent style/link state. Terminal
+filtered. The suffix continues the style and region active before the fill,
+and the fill repeats in that style. Terminal
 default colors remain defaults rather than being guessed as RGB values.
 
 ### Resource limits and measurement
@@ -207,7 +216,7 @@ Adaptive workloads are independently labeled `colors` and `regions`:
 - `colors` uses 1, 16, 17, or 64 distinct visible, resolved foreground/background
   pairs on 80-column lines (up to 16 pairs per line, within input limits).
 - `regions` uses 1, 8, or 32 active regions sharing one pair on a 512-column line,
-  split across left/right slots with no more than 16 regions per slot.
+  split across the fill, within the 16 regions a template allows.
 - `cold` averages 20 independent preparations and first nonzero effect frames.
   Preparation time is reported separately from frame time. Restoration is
   checked separately, outside these measurements.
@@ -246,14 +255,14 @@ this list:
 
 | Directory | Contents |
 |---|---|
-| `shared/` | Leaf types used across layers: slot limits and terminal colors |
+| `shared/` | Leaf types used across layers: terminal colors |
 | `platform/` | System calls, raw mode, process execution, the log file |
 | `terminal/` | Byte-stream filters between the terminal and the child, the palette probe, OSC 3110 framing |
-| `render/` | Markup, styled text, the cell grid, and the `Renderer` in `bar.zig`, with line content in `content.zig`, layout in `row_layout.zig`, highlight scheduling in `effects.zig` and paint bytes in `serialize.zig` |
-| `session/` | The control socket, the session state file, pushed lines, and FIFO registry in `fifo.zig` |
-| `model/` | Config parsing, status commands, and their content; datetime parsing and formatting in `datetime.zig`, terminal value parsing and snapshots in `terminal_properties.zig` |
-| `proxy/` | Session setup and the `Proxy` state in `proxy.zig`; its methods grouped by concern in `loop.zig`, `rows.zig`, `fifo.zig`, `terminal_input.zig` and `reload.zig` |
-| `cli/` | One file per subcommand in `commands/`, shell integration scripts in `shell/`; `main.zig` stays at the root of `src/` |
+| `render/` | Markup, styled text, the cell grid, and the `Renderer` in `bar.zig`, with line content in `content.zig`, fill placement and clipping in `line_layout.zig`, highlight scheduling in `effects.zig` and paint bytes in `serialize.zig` |
+| `session/` | Line names, statuses and value operations in `line_types.zig`, the line store in `lines.zig`, the control protocol in `line_protocol.zig` and socket in `session_control.zig`, the session state file, stream pacing, and the FIFO registry in `fifo.zig` |
+| `model/` | The config parser in `config.zig`, with statements and `.=` fragments in `config_statements.zig` and template compilation in `templates.zig`; line evaluation and dependencies in `line_source.zig`, runtime generations in `runtime_config.zig`, status commands, datetime formatting in `datetime.zig`, terminal values in `terminal_properties.zig`, and the parser test of every shipped config in `shipped_configs_test.zig` |
+| `proxy/` | Session setup and the `Proxy` state in `proxy.zig`; its methods grouped by concern in `loop.zig`, `rows.zig`, `line_control.zig`, `fifo.zig`, `terminal_input.zig` and `reload.zig` |
+| `cli/` | One file per subcommand in `commands/`, config discovery in `config_source.zig`, startup recovery in `startup_config.zig`, shell integration scripts in `shell/`; `main.zig` stays at the root of `src/` |
 
 `terminal/` and `render/` are independent of each other, as are `shared/` and
 `platform/`. `build.zig` lists the modules each layer may import, and the
@@ -283,4 +292,8 @@ they already own. A feature file does not require a new build module.
   the child's area until it is overwritten.
 - Character widths are estimated using zunic's presentation-aware grapheme
   policy. A terminal using another Unicode
-  version or width policy can still misalign the right slot.
+  version or width policy can still misalign text after a fill.
+- On macOS, `poll` does not report a FIFO readable while a single large
+  blocking write to it is in progress. The data is read on the proxy's next
+  wakeup, which a clock, command or other activity provides; line-by-line
+  producers are unaffected.

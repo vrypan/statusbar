@@ -1,33 +1,104 @@
 # Add and remove temporary lines
 
-To redirect commands into a stable named path across writes, see
-[named FIFOs](fifo.md). A FIFO pushed row remains running until explicitly
-finished or removed.
-
 Use `statusbar push` when a command needs its own line. For a quick example,
 send it a line of text:
 
 ```sh
-printf 'Build complete\n' | statusbar push -t build
+printf 'Build complete\n' | statusbar push build
 ```
 
-The line appears below your configured lines. `push` prints its ID when input
-ends; the line stays visible until you remove it with `statusbar pop`. To watch
-a log, keep the pipeline running in the background:
+The line appears below your configured lines. `push` prints its name when
+input ends; the line stays visible until you remove it with `statusbar pop`.
+To watch a log, keep the pipeline running in the background:
 
 ```sh
-tail -n 0 -f app.log | statusbar push -t app.log &
+tail -n 0 -f app.log | statusbar push applog &
 ```
 
-By default, the line shows its ID, optional tag, and latest line on the left:
+With the built-in config, the line shows its latest text on the left and its
+name on the right:
 
 ```text
-[1] app.log > Server ready
+Server ready                                                         [applog]
 ```
 
-Use `-t TEXT` or `--tag TEXT` to label a line. For a background pipeline, read
-the ID on statusbar and run `statusbar pop ID` to remove that line. Without an ID,
-`statusbar pop` removes the newest line. To remove all pushed lines at once:
+## Names and IDs
+
+NAME is optional. Names follow the same rules as configured lines: letters,
+digits, `_` and `-`, not only digits, and unique among all lines. Without a
+name, `push` prints the line's numeric ID, such as `5`, and `#(name)` shows
+it. IDs are assigned by statusbar, increase through the session, and are never
+reused. A decimal target always means an ID, so `statusbar pop 5` removes the
+line with ID 5 even if it has a name. A script can save the printed name:
+
+```sh
+name=$(printf 'Build complete\n' | statusbar push)
+statusbar pop "$name"
+```
+
+## Commands
+
+To let a width-aware command draw for the space available to its value,
+start it with `push --`:
+
+```sh
+statusbar push download -- curl --progress-bar --limit-rate 1M \
+  -o /dev/null https://proof.ovh.net/files/100Mb.dat &
+```
+
+`push` sets the command's `COLUMNS` to the space the line's template leaves
+for its value. It captures both stdout and stderr, so curl's progress output
+reaches the line. The width is measured when the command starts; resizing the
+terminal does not change the running command's `COLUMNS`. `push` prints the
+name at the end and exits with the command's status (128 + the signal number
+if it was killed). Specify an output file for commands whose stdout contains
+data you want to save.
+
+When reading a pipe, `push` cannot change the width reported to the command
+that wrote to it. Output wider than the space left is clipped.
+
+## Status
+
+Pushed lines start with status `running`. When input ends, a pipe or file
+sets `done`; a command sets `success` for exit status 0 and `failed`
+otherwise, including termination by a signal. Give each status its own look
+in `[push]`:
+
+```ini
+[push]
+text    = "#(spinner) #(value)#(fill: )[#(name)]"
+done    = "· #(value)#(fill: )[#(name)]"
+success = "#[fg=green]✓#[default] #(value)#(fill: )[#(name)]"
+failed  = "#[fg=red]✗#[default] #(value)#(fill: )failed [#(name)]"
+```
+
+The final text stays in `#(value)`. `statusbar set NAME --status STATE`
+changes the status of a pushed line too, and any change is allowed. To show
+activity while a command is quiet, add a [spinner](config.md#spinner). A
+complete example is in [samples/spinner.statusbar](../samples/spinner.statusbar).
+See [`[push]`](config.md#push) for all settings.
+
+## Input
+
+`push` reads a pipe or file. It displays the latest line as it arrives,
+including partial lines and `\r` progress updates. Short input bursts are
+combined; updates are sent at most every 50 ms, plus a final update at EOF.
+Identical redraws are skipped. Each line is limited to 1024 bytes without
+splitting a UTF-8 character. Stream text is literal: `##`, `#(value)` and
+`#[bold]` display as written. ANSI colors and hyperlinks work, while cursor
+movement and backspace editing are not interpreted. The final value remains
+on screen when input ends.
+
+For programs that write to a path, or several runs that should share one
+line, use a FIFO: `statusbar push build --fifo` creates the line and a named
+pipe together and prints the pipe's path. See [FIFOs](bind.md).
+
+## Remove lines
+
+`statusbar pop NAME` removes a pushed line, by name or ID, even while its
+input is still flowing. Without NAME, `statusbar pop` removes the newest
+pushed line and reports an error when there is none. To remove every pushed
+line at once:
 
 ```sh
 statusbar pop --all
@@ -35,91 +106,21 @@ statusbar pop --all
 ```
 
 `--all` succeeds even when there are no pushed lines. It cannot be combined
-with an ID. Configured lines stay in place, and active producers keep running;
-their later output is ignored.
+with NAME. Removing a line also removes its FIFO. Configured lines cannot be
+popped. Up to 128 pushed lines may exist at once.
 
-A script can save the returned ID to remove its own line later:
+A producer keeps running after its line is removed, and its later output is
+ignored, even if a new line takes the same name: each line belongs to the
+`push` that created it, and a finished or removed producer can no longer
+change any line.
 
-```sh
-id=$(printf 'Build complete\n' | statusbar push -t build)
-statusbar pop "$id"
-```
-
-Tags must be plain UTF-8 text without control characters and may contain up
-to 128 bytes. A theme can place the tag and ID in either slot.
-
-Set the base style of pushed lines with `[line.push]` in the config. Use its
-`left` template with `#(stream)`, `#(tag)`, and `#(id)` to format the line;
-the `right` template can place values on the other side. Templates are
-reapplied to each `\r` progress update. See
-[configuration](config.md#linepush).
-
-To show activity even when a command is quiet, add a
-[spinner](config.md#spinner) to its line. A complete example is available in
-[samples/spinner.config](../samples/spinner.config).
-
-To show when work finishes, add completion sections to your config:
-
-```ini
-[line.push.done]
-right = "done · #(tag) [#(id)]"
-
-[line.push.success]
-right = "✓ #(tag) [#(id)]"
-
-[line.push.failed]
-right = "exit #(exit_code) · #(tag) [#(id)]"
-```
-
-`done` applies to every completed stream. Commands started with `push --`
-also apply `success` for exit status zero or `failed` for a nonzero status
-or signal. A pipe does not report the producer's exit status on its own;
-`statusbar fifo --finish NAME --exit-code N` supplies one for a named FIFO row.
-These sections inherit settings from `[line.push]`; the final
-text stays visible unless you replace `left`.
-See [completion settings](config.md#completion-settings) for inheritance,
-styles, and `#(signal)`.
-
-When reading a pipe, `push` cannot change the width reported to the command
-that wrote to it. Output wider than the space left for the stream is clipped.
-
-To let a width-aware command draw for the stream's available space, start it with
-`push --`:
-
-```sh
-statusbar push -t 100Mb.dat -- curl --progress-bar --limit-rate 1M \
-  -o /dev/null https://proof.ovh.net/files/100Mb.dat &
-```
-
-`push` sets the command's `COLUMNS` to the space available for the stream. It
-captures both stdout and stderr, so curl's progress output reaches the line.
-The width is measured when the command starts; resizing the terminal does not
-change the running command's `COLUMNS`. `push` returns the command's exit
-status after printing the line ID. Specify an output file for commands whose
-stdout contains data you want to save.
-
-`push` reads a pipe or file. It displays the latest line as it arrives,
-including partial lines and `\r` progress updates. Short input bursts are
-combined; updates are sent at most every 50 ms, plus a final update at EOF.
-Identical redraws are skipped. Each line is limited to 1024 bytes without
-splitting a UTF-8 character. Stream text is literal: `##` and `#[bold]`
-display as written. ANSI colors and hyperlinks work, while cursor movement
-and backspace editing are not interpreted. The final value remains on screen
-when input ends. At EOF, `push` prints the ID to stdout and exits.
-
-`pop` can remove any pushed line by ID, even while its input is still flowing.
-The producer keeps running and future updates to that removed line are ignored.
-Removing the same ID again succeeds. IDs are never reused during a session.
-`pop` cannot remove a configured line. Up to 128 pushed lines may exist at once.
-`statusbar pop` reports an error when there are no pushed lines to remove.
-
-Pushed lines survive a replacement of the running config. They do not add
-numbered slots, and `statusbar config --print current` prints only config text.
-As with configured lines, lines that do not fit a short terminal remain stored
-and reappear when there is room. A push may therefore succeed while its line is
-hidden.
+Pushed lines survive a replacement of the running config, keeping their
+values and statuses; the new `[push]` templates apply. `statusbar config
+--print current` prints only config text. As with configured lines, lines
+that do not fit a short terminal remain stored and reappear when there is
+room, so a push may succeed while its line is hidden.
 
 If `push` loses its input or exits unexpectedly, the last value accepted by
-the running statusbar stays visible; its ID remains on the line. Neither `push`
-nor `pop` works outside a live statusbar session. A missing, stale, or
-incompatible session is reported as an error.
+the running statusbar stays visible. Neither `push` nor `pop` works outside a
+live statusbar session. A missing, stale, or incompatible session is reported
+as an error.

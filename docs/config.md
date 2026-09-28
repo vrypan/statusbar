@@ -3,14 +3,17 @@
 A config file decides what each statusbar line shows. Start with a small one:
 
 ```ini
-[line.1]
-left = " Ready "
-right = #(datetime:%H:%M)
+[line.status]
+text = " Ready#(fill: )#(datetime:%H:%M) "
 ```
 
-Each `[line.N]` section adds a line. `left` and `right` place text on either
-side. `#(datetime:%H:%M)` shows the current time. Run `statusbar` to use the built-in
-config, or save this example as `~/.config/statusbar/config` to use it instead.
+Each `[line.NAME]` section adds a line. `text` is its template: `Ready` on the
+left, the time on the right, and `#(fill: )` repeating a space between them.
+Run `statusbar` to use the built-in config, or save this example as
+`~/.config/statusbar/config.statusbar` to use it instead.
+
+Coming from an older config with `[line.1]`, `left`, `right` and `rule`? See
+the [migration guide](migration.md).
 
 ## Add colors and a command
 
@@ -22,21 +25,23 @@ accent = #89b4fa
 dim    = #7f849c
 rule   = #45475a
 
-[line.1]
-rule  = ─
-style = fg=rule
+[line.rule]
+text = "#[fg=rule]#(fill:─)"
 
-[line.2]
-left  = " #[fg=accent,bold]#(host)#[default] #[fg=dim]· ready#[default]"
-right = "#(datetime:%a %d %b)  #[bold]#(datetime:%H:%M)#[default] "
+[line.host]
+text = " #[fg=accent,bold]#(command:host)#[default] #[fg=dim]· ready#[default]"
+text .= "#(fill: )"
+text .= "#(datetime:%a %d %b)  #[bold]#(datetime:%H:%M)#[default] "
 
 [command.host]
 run      = hostname
 interval = 60
 ```
 
-`[command.host]` runs `hostname`, and `#(host)` puts its latest first line in
-statusbar. `[colors]` names colors used by `style` and `#[...]` markup.
+`[command.host]` runs `hostname`, and `#(command:host)` shows the first line
+of its latest output. `[colors]` names colors used by `#[...]` styles and the
+top-level `style`. `text .=` appends to the template, which keeps long
+templates readable.
 
 ## Where statusbar finds the config
 
@@ -44,27 +49,39 @@ statusbar chooses its config path in this order:
 
 1. `--config PATH` (use `-` to read from stdin)
 2. `$STATUSBAR_CONFIG`
-3. `$XDG_CONFIG_HOME/statusbar/config` if `XDG_CONFIG_HOME` is set; otherwise,
-   `~/.config/statusbar/config`
+3. `$XDG_CONFIG_HOME/statusbar/config.statusbar` if `XDG_CONFIG_HOME` is set;
+   otherwise, `~/.config/statusbar/config.statusbar`
 
-If the selected default file is missing, statusbar uses its built-in config:
-[`samples/default.config`](../samples/default.config). A missing file named by
-`--config` or `$STATUSBAR_CONFIG` is an error. So is a malformed config:
-statusbar reports the file, line, and problem before it touches the terminal.
+Shipped configs and themes use the `.statusbar` extension. An explicit path
+works with any name.
 
-The built-in config is commented. Its regular statusbar colors use the terminal's
-palette, and its change highlight derives a pulse from each grapheme's colors.
-Start from it:
+If the default file is missing, statusbar uses its built-in config:
+[`samples/default.statusbar`](../samples/default.statusbar). The old default
+file, `statusbar/config`, is never loaded. When only that file exists,
+statusbar starts with the built-in config and shows a line asking you to
+migrate it.
+
+A config that cannot be used never keeps your shell from starting. If the
+selected file is missing or unreadable, or if it is invalid, statusbar prints
+the problem, starts the built-in config, and adds a failed line with the
+diagnostic, such as
+`statusbar: line 4: left, right and rule were removed in ~/.config/...`. This
+applies to `--config`, `$STATUSBAR_CONFIG`, stdin and the default path alike,
+so statusbar is safe to use as a login shell. Your file is left untouched. Fix
+it, then load it with `statusbar config < FILE`; a successful replacement
+removes the warning line.
+
+The built-in config is commented. Start from it:
 
 ```sh
 mkdir -p ~/.config/statusbar
-statusbar config --default > ~/.config/statusbar/config
+statusbar config --default > ~/.config/statusbar/config.statusbar
 ```
 
 `statusbar config --print` prints the running session's active config. Use
-`--print startup` for its original config, or `--print default` (also `--default`)
-for the built-in config. `--path` shows the file a new session would load; see
-[usage.md](usage.md#config).
+`--print startup` for its original config, or `--print default` (also
+`--default`) for the built-in config. `--path` shows the file a new session
+would load; see [usage.md](usage.md#config).
 
 For generated configs and here-documents, see
 [reading a config from stdin](usage.md#generate-a-config-on-the-fly).
@@ -75,14 +92,20 @@ Inside a session, you can replace the whole config. From the repository
 checkout, for example:
 
 ```sh
-statusbar config < ./samples/themes/tokyo-night.config
+statusbar config < ./samples/themes/tokyo-night.statusbar
 ```
 
-An invalid config leaves the active statusbar unchanged. A successful replacement
-applies every setting, including its number of `[line.N]` sections. Numbered-slot
-overrides survive only where the same slot number exists in the new layout.
-Lines created by `statusbar push` stay below the configured lines with their
-IDs and content intact; they are separate from numbered slots.
+Replacement is strict: an invalid config leaves the active statusbar unchanged.
+A successful replacement applies every setting, including its lines:
+
+- Lines keep their identity by name. A configured line that is still present
+  keeps its ID, its value set with `statusbar set`, and its status, and moves
+  to its new position. A line still showing its default shows the new default.
+- Lines the new config drops are removed, together with their FIFOs.
+- Lines created by `statusbar push` stay below the configured lines, with their
+  IDs, values and statuses. A replacement cannot add a configured line with the
+  name of a pushed line.
+
 Configured commands restart and establish their first values without a change
 highlight. Because those commands are executable code, load trusted configs.
 
@@ -91,38 +114,35 @@ contents and never needs access to that file. See
 [config replacement details](usage.md#config-replacement-details) for the size
 limit and [the protocol](osc-3110.md) for its terminal sequence.
 
-## Templates
-
-Templates mix text, markup and command output:
-
-- `#(NAME)`: the first line of `[command.NAME]`'s latest output
-- `#(anything else)`: runs as a shell command at the top-level `interval`,
-  as in tmux; the same text used twice runs once
-- `#(datetime:FORMAT)`: local date and time using strftime(3), re-read every
-  second; for example `#(datetime:%H:%M)` or `#(datetime:%a %d %b)`
-- `#(terminal:rows)` and `#(terminal:cols)`: outer terminal window size;
-  `#(terminal:content_rows)`: rows available to the child shell after the bar
-  reserves its visible rows. These update on window resize. `content_rows`
-  also updates when pushed rows or a replacement config change the bar height.
-- Legacy `%H:%M` and `%a %d %b` formats still work throughout template text;
-  `%%` writes a literal `%`. Within `#(datetime:FORMAT)`, use `%%` for `%`.
-- `#[...]`: [markup](#markup)
-- `#[track]...#[notrack]`: an independently [highlighted region](#highlight-changes)
-
 ## Syntax
 
-- Wrap a value in double quotes to keep leading or trailing spaces.
-- Any value may use a `|` block; see [commands](#commandname) for its syntax.
+The config is a small INI-like language:
+
+- `[SECTION]` starts a section. `KEY = VALUE` assigns a key.
+- `KEY .= FRAGMENT` appends to a template key assigned earlier in the same
+  section. Fragments join exactly, without adding spaces or newlines; only
+  `text`, `running`, `done`, `success` and `failed` accept `.=`. Assigning
+  the same key twice with `=` is an error.
+- Wrap a value in double quotes to keep leading or trailing spaces. A quoted
+  value may continue over several lines until a line ending in `"`.
+- `KEY = |` takes the following indented lines as the value; see
+  [commands](#commandname).
 - Lines starting with `#` or `;` are comments. A `#` anywhere else is part of
   the value, since markup and colors use it, so a comment can't follow a
   value on the same line.
+
+Errors name the line they occur on, including the line of the fragment that
+holds a mistake in an appended template. The config is limited to 64 KiB.
 
 ## Top level
 
 | Key        | Meaning                                                        |
 |------------|----------------------------------------------------------------|
 | `interval` | refresh for commands without their own, in seconds (default 5) |
-| `style`    | style for lines without their own, e.g. `bg=#1e1e2e`           |
+| `style`    | base style of the whole bar, e.g. `fg=#cdd6f4,bg=#1e1e2e`      |
+
+The base style applies to every cell a line leaves empty and to text after
+`#[default]`. Style individual lines inline, with `#[...]` in their templates.
 
 ## `[colors]`
 
@@ -130,160 +150,109 @@ Templates mix text, markup and command output:
 in `#[fg=accent]` or `style = fg=rule`. A value is any color the markup
 accepts, but not another name.
 
-## `[line.N]`
+## `[line.NAME]`
 
-At least `[line.1]` is required, even if it is empty.
-Line sections define statusbar's desired height and must be consecutive from
-`[line.1]`. They may appear in any order in the file and render in numeric
-order. An empty section still reserves its line. The maximum is 65533 lines.
+Each section adds one line. Lines appear in the order their sections are
+first declared, whatever other sections come between them. At least one line
+is required. Names are case-sensitive and use letters, digits, `_` and `-`,
+up to 64 characters; names made only of digits are reserved for the IDs
+statusbar assigns. Each name may be declared once.
 
-| Key     | Meaning                                         |
-|---------|-------------------------------------------------|
-| `left`  | template for the left slot                      |
-| `right` | template for the right slot                     |
-| `rule`  | repeat this pattern through space outside the slots, e.g. `─` |
-| `style` | style for this line, e.g. `fg=rule`             |
+| Key       | Meaning                                                            |
+|-----------|--------------------------------------------------------------------|
+| `text`    | the line's template; `#(value)` if omitted                         |
+| `running` | template while the line's status is `running`                      |
+| `done`    | template while its status is `done`                                |
+| `success` | template while its status is `success`; falls back to `done`       |
+| `failed`  | template while its status is `failed`; falls back to `done`        |
+| `default` | initial value, restored by `statusbar set NAME --reset`; empty if omitted |
+| `keep`    | `left` (default) or `right`: which end survives when space runs out |
 
-Every line may have `left`, `right`, and `rule` together. The rule fills the
-gap and any unused edge; without one those cells are spaces. Only complete
-patterns are repeated and a remainder stays blank. When a line is too
-narrow, the right slot is clipped first; the left slot is kept longest.
-[`statusbar set`](set.md) addresses any slot by number.
+### Values and statuses
 
-## `[line.push]`
+Every line has a value and a status. The value starts as `default` and changes
+with [`statusbar set`](set.md) or a [FIFO](bind.md). `#(value)` shows it. A
+value is always displayed as written: its `#(...)` and `#[...]` text is never
+interpreted, while ANSI colors and OSC 8 hyperlinks in it still work. The
+default is a value too, so it is literal text.
 
-Use `style` to set the base style of every line created by `statusbar push`:
+The status is `normal`, `running`, `done`, `success` or `failed`. Configured
+lines start `normal`; `statusbar set NAME --status STATE` changes it, and any
+change is allowed. A status never changes the value.
 
-```ini
-[line.push]
-style = fg=accent,bg=#1e1e2e
-left = "#[fg=accent]› #[default]#(stream)"
-right = "#[fg=#1e1e2e,bg=accent,bold] #(tag) [#(id)] #[default]"
-```
-
-`style` covers the whole line. `left` and `right` work like normal line
-templates, with markup, clock conversions, and named or inline commands.
-`#(stream)` inserts the current stream value in `left`; `#(tag)` and `#(id)`
-insert the tag and numeric line ID in either template. Write `[#(id)]` for a
-bracketed ID. Stream and tag values are inserted literally: their
-`#[...]` text cannot change the template's markup, while stream ANSI colors
-still work. The independent defaults are `left = "[#(id)] #(tag) > #(stream)"`
-and `right = ""`. Either can be overridden without changing the other. If
-`style` is omitted, pushed lines inherit the top-level `style`. This section does not
-reserve a line or change numbered slots. Reloading the config updates pushed
-lines already visible. A carriage-return update re-renders the current stream
-value through `left`.
-
-### Spinner
-
-Set `spinner` to a sequence of characters and insert the current frame with
-`#(spinner)` in either slot:
+The status selects the template. `normal` uses `text`. `running` and `done`
+use their own template if set, otherwise `text`. `success` and `failed` use
+their own template, then `done`, then `text`. A status template replaces
+`text` completely; an explicitly empty one (`failed = ""`) shows nothing.
 
 ```ini
-[line.push]
-spinner = "-\|/"
-spinner_interval = 0.1
-left = "#(spinner) [#(id)] > #(stream)"
-
-[line.push.done]
-left = "· [#(id)] > #(stream)"
-
-[line.push.success]
-left = "✓ [#(id)] > #(stream)"
+[line.build]
+default = "no build yet"
+text    = " #(value)"
+running = " #[fg=yellow]● #(value)"
+success = " #[fg=green]✓ #(value)"
+failed  = " #[fg=red]✗ #(value)"
 ```
 
-Each Unicode grapheme is one frame, so a character and its combining accents
-or a joined emoji stay together. For a braille spinner, use
-`spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"`. Backslashes in config values are literal;
-the ASCII example above needs only one backslash.
+```sh
+statusbar set build "compiling" --status running
+statusbar set build "12 tests passed" --status success
+```
 
-`spinner_interval` is the time between frames in seconds, defaults to `0.1`,
-and accepts values from `0.1` to `86400`. These two settings belong in
-`[line.push]`. An omitted or empty sequence disables the indicator; a single
-character provides a static indicator while running.
+## Templates
 
-Frames share the width of the widest character, with padding after narrower
-frames. This keeps surrounding text steady and reserves the correct space
-when `push --` sets the command's `COLUMNS`. Frames are plain text, not markup;
-put styles around `#(spinner)` in the template. A sequence can contain up to
-128 frames and 1024 bytes, without control characters or standalone characters
-that take no screen space.
+A template is text with explicit expressions:
 
-Only visible, running pushed lines using `#(spinner)` animate. They share one
-animation timer, which stops when no such lines remain. Animation does not
-rerun commands or reformat configured lines. `#(spinner)` becomes empty on
-completion; use completion sections for a static marker. Reloading the config
-starts the new sequence from its first frame. As with other width changes,
-a reload does not update a running command's `COLUMNS`.
+| Expression | Shows |
+|------------|-------|
+| `#(value)` | the line's value |
+| `#(name)` | the line's name, or its numeric ID when unnamed |
+| `#(status)` | its status: `normal`, `running`, `done`, `success` or `failed` |
+| `#(fill:PATTERN)` | repeats PATTERN across the free width; see [fill](#fill-and-alignment) |
+| `#(command:NAME)` | the first line of `[command.NAME]`'s latest output |
+| `#(datetime:FORMAT)` | local date and time using strftime(3), re-read every second, e.g. `#(datetime:%H:%M)` |
+| `#(terminal:rows)`, `#(terminal:cols)` | the outer terminal window size |
+| `#(terminal:content_rows)` | rows available to the child after the bar takes its rows |
+| `#(spinner)` | a spinner frame, in `[push]` templates; see [spinner](#spinner) |
+| `#[...]` | a [style](#markup) |
+| `#[track]...#[notrack]` | a [highlighted region](#highlight-changes) |
+| `##` | a literal `#`: `##(value)` shows `#(value)` |
 
-See [the spinner sample](../samples/spinner.config) for a complete config.
+Anything else in `#(...)` is an error; there is no implicit shell command.
+Define shell commands in `[command.NAME]` and show them with
+`#(command:NAME)`. `%` is plain text outside `#(datetime:...)`; inside it,
+`%%` writes a literal `%`. Command output, dates and names are displayed as
+written, like values.
 
-### Completion settings
+`terminal` values update on window resize; `content_rows` also updates when
+pushed lines or a replacement config change the bar height. A value change
+never stops dates, terminal sizes or commands from updating.
 
-Use `[line.push.done]` to change a line when its input ends. With
-`statusbar push -- command`, `[line.push.success]` applies when the command
-exits with zero, and `[line.push.failed]` applies for any other exit status
-or termination by a signal.
+### Fill and alignment
+
+`#(fill:PATTERN)` divides a template: text before it starts at the left edge,
+text after it ends at the right edge, and the pattern repeats in between.
+Only whole patterns repeat, measured in terminal cells, and any remainder is
+blank. A template may have one fill. A template that is only a fill draws a
+full-width rule:
 
 ```ini
-[line.push]
-left = "#(stream)"
-right = "#(tag) [#(id)]"
+[line.rule]
+text = "#[fg=brightblack]#(fill:─)"
 
-[line.push.done]
-right = "done · #(tag) [#(id)]"
-
-[line.push.success]
-right = "#[fg=green]✓#[default] #(tag) [#(id)]"
-
-[line.push.failed]
-right = "#[fg=red]exit #(exit_code)#[default] #(tag) [#(id)]"
+[line.status]
+text = " left side#(fill:·)right side "
 ```
 
-Each section accepts `left`, `right`, and `style`. Settings inherit in this
-order: `[line.push]`, then `done`, then `success` or `failed` when the command
-result is known. Only specified settings are replaced; `right = ""` clears
-an inherited right slot. A `style` value replaces the inherited style as a
-whole. Section order in the file does not matter.
+Without a fill, the text is left-aligned.
 
-`#(exit_code)` inserts the command's numeric exit status. `#(signal)` inserts
-the signal number if the command was terminated by a signal; the exit status
-is then `128 + signal`. Both values are empty while running. For piped input,
-`push` knows only that input ended: it applies `done` and leaves both values
-empty. A command exiting normally with `130` has no signal value, whereas
-SIGINT produces exit status `130` and signal `2`.
-
-With `push --`, completion waits for both the end of output and the command's
-exit. The final stream text remains available as `#(stream)`. Completion
-settings do not add or remove lines. The result survives config reloads and
-is retained when a line is hidden by a short terminal. If `push` exits before
-sending its completion message, the line keeps its last received state.
-
-## `[command.NAME]`
-
-| Key        | Meaning                                                     |
-|------------|-------------------------------------------------------------|
-| `run`      | shell command, run with `/bin/sh -c`                        |
-| `interval` | seconds between runs (default: the top-level `interval`)    |
-
-For a readable multi-line value, write `= |` followed by indented lines. The
-block ends at the next unindented key or section. Commands keep line breaks
-for the shell; templates fold line breaks and tabs into spaces when rendered.
-Typed values such as `interval` still need one valid value.
-
-```ini
-[command.example]
-run = |
-  first-command || exit
-  second-command
-interval = 60
-```
-
-Only the first line of a command's latest output is displayed. Each command
-runs on its own schedule, so a slow one never holds up the clock or other
-commands. One that runs past its interval (at least five seconds) is killed.
-Commands run in the directory where statusbar started, with stdin and stderr
-connected to `/dev/null`. `STATUSBAR_COLUMNS` gives them the current statusbar width.
+When the text does not fit, `keep` decides which end stays. With a fill,
+`keep = left` shows the whole left side and as much of the right side as
+remains; `keep = right` keeps the right side and shows the start of the left
+side. Without a fill, `keep = left` shows the start and `keep = right` shows
+the end, still starting at the left edge. Configured lines default to `left`,
+pushed lines to `right`, so a pushed line's name stays visible. Clipping never
+splits a character.
 
 ## Markup
 
@@ -294,7 +263,8 @@ Style text with tmux-like markup instead of escape codes:
 ```
 
 Style markup holds attributes separated by commas or spaces. The standalone
-tracking markers described above are template boundaries, not style attributes.
+tracking markers described below are template boundaries, not style
+attributes.
 
 - `fg=COLOR`, `bg=COLOR`, where COLOR is one of
   - `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`,
@@ -306,19 +276,30 @@ tracking markers described above are template boundaries, not style attributes.
   - `default`: the terminal's own foreground or background
 - `bold`, `dim`, `italics`, `underscore`, `blink`, `reverse`,
   `strikethrough`, `overline`, and `no…` (`nobold`) to turn each off
-- `default` or `none`: back to the line's style
+- `default` or `none`: back to the bar's base `style`
 
-`##` is a literal `#`. Unknown attributes are ignored. Styles don't carry
-across slots. Raw SGR escapes and OSC 8 hyperlinks work too; other escape
-sequences are stripped.
+Attributes apply in order, so `#[default,fg=muted]` resets and then sets a
+color. Unknown attributes are ignored. A style carries on to the end of the
+line, across expressions and the fill: the fill repeats in the style active
+where it appears. For a line with its own background, start with the style
+and use a fill, often of spaces, so the background covers the whole row:
+
+```ini
+[line.status]
+text = "#[fg=#cdd6f4,bg=#1e1e2e] main#(fill: )12:00 "
+```
+
+Cells a line without a fill leaves empty use the base style.
+Raw SGR escapes and OSC 8 hyperlinks work too; other escape sequences are
+stripped.
 
 ## Highlight changes
 
-Mark the part of a left/right template you want to watch:
+Mark the part of a template you want to watch:
 
 ```ini
-[line.1]
-left = "Weather #[track]#(weather)#[notrack]  Time #[track]#(datetime:%H:%M)#[notrack]"
+[line.weather]
+text = "Weather #[track]#(command:weather)#[notrack]  Time #[track]#(datetime:%H:%M)#[notrack]"
 
 [command.weather]
 run = curl -fsS 'https://wttr.in/?format=%c%t'
@@ -327,38 +308,33 @@ interval = 300
 
 Each marked region plays the shared `[highlight]` effect when its visible
 content changes, then returns to its normal styling. Labels outside the markers,
-rules, and other regions keep their own appearance. Regions can grow, shrink,
+the fill, and other regions keep their own appearance. Regions can grow, shrink,
 and move; each change restarts only that region's timer.
 
-Use exactly `#[track]` and `#[notrack]`, with up to 16 pairs per slot. Empty
-pairs are valid. Regions cannot nest, and markers cannot be combined with style
-attributes or given names. `#[default]` resets styling without ending tracking;
-write `##[track]` to display the opening marker literally.
+Use exactly `#[track]` and `#[notrack]`, with up to 16 pairs per template.
+Empty pairs are valid. Regions cannot nest, and markers cannot be combined with
+style attributes or given names. A region may span expressions and the fill.
+`#[default]` resets styling without ending tracking; write `##[track]` to
+display the opening marker literally.
 
-Markers are compiled only from static left/right templates. Regions may include
-text, clocks, named commands, and inline shell commands. Command output, rules,
-and `statusbar set` values cannot define regions. A whole grapheme belongs to
-the region containing its first code point, even if a marker falls inside a
-combining sequence.
+Markers come only from templates. Values, defaults and command output cannot
+define regions. A whole grapheme belongs to the region containing its first
+code point, even if a marker falls inside a combining sequence.
 
-All commands used by a slot must produce a first result before its regions can
-highlight. Partial results appear silently; an empty first result also counts.
-Later empty-to-nonempty changes can highlight. Identical content, equivalent
-style escapes, and changes confined to a clipped suffix do nothing. Changes in
-resolved colors, attributes, or hyperlinks count as content changes.
+All commands used by a template must produce a first result before its regions
+can highlight. Partial results appear silently; an empty first result also
+counts. Later empty-to-nonempty changes can highlight. Identical content,
+equivalent style escapes, and changes confined to a clipped part do nothing.
+Changes in resolved colors, attributes, or hyperlinks count as content changes.
 
-A manual slot override cancels its effects. Clearing the override silently
-establishes new baselines, even when the text looks identical. Hidden or empty
-regions store no pending animation to play later. Resize, clipping caused by
-another value, and screen repair never start or restart effects. Still-visible
-active regions retain their deadlines. Command reruns requested by resize
-establish baselines silently; ordinary scheduled results remain eligible.
-Repaints wait for safe terminal-output boundaries, so a busy application may
-delay the effect or prevent a short highlight from appearing.
-
-To migrate an older config, remove `track = true` (or `track = false`) from
-`[command.NAME]` and wrap each desired use in `#[track]...#[notrack]`. The old
-command key is rejected with migration guidance.
+A change of the line's value or status establishes new baselines silently,
+and cancels running effects, even when the text looks identical. Hidden or
+empty regions store no pending animation to play later. Resize, clipping
+caused by another value, and screen repair never start or restart effects.
+Still-visible active regions retain their deadlines. Command reruns requested
+by resize establish baselines silently; ordinary scheduled results remain
+eligible. Repaints wait for safe terminal-output boundaries, so a busy
+application may delay the effect or prevent a short highlight from appearing.
 
 ## `[highlight]`: adaptive pulse
 
@@ -397,14 +373,103 @@ discovery. If either color of a grapheme is unknown, that grapheme uses bold
 for the full effect duration instead of guessing the theme's colors.
 Terminals or multiplexers that block these queries therefore still work.
 Restart statusbar after changing the terminal theme to refresh the cache.
-
-| Key | Meaning |
-|-----|---------|
-| `pulses` | 1–3 adaptive pulses, default 2; each lasts 1.2 seconds |
-
-Older configurations must remove `effect`, `backgrounds`, `foreground`,
-`foregrounds`, and `step`. These keys are rejected rather than ignored or
-migrated. Ordinary markup colors and the `[colors]` palette are unchanged.
 Resize and screen repair preserve an active pulse's position and deadline. If
 safe repainting is temporarily blocked by child output, obsolete frames are
 skipped rather than replayed.
+
+## `[push]`
+
+`[push]` holds the templates of lines created by
+[`statusbar push`](push.md). It accepts the same template keys as a line,
+plus the spinner settings, but no `default`: pushed lines start empty.
+Because it is not a `[line.NAME]` section, `push` remains a valid line name.
+
+```ini
+[push]
+text    = "#[fg=brightblack]#(value)#(fill: )[#(name)]"
+done    = "#[fg=brightblack]#(value)#(fill: )done [#(name)]"
+success = "#[fg=brightblack]#(value)#(fill: )#[fg=green]✓#[fg=brightblack] [#(name)]"
+failed  = "#[fg=brightblack]#(value)#(fill: )#[fg=red]✗#[fg=brightblack] [#(name)]"
+```
+
+Pushed lines start `running`, so they use `running` or `text` while input
+arrives. When input ends, `push` sets `done` for a pipe; `push --` sets
+`success` when the command exits with 0 and `failed` for any other exit
+status or a signal. The statuses fall back as for configured lines. Without
+`[push]`, pushed lines use `text = "#(value)#(fill: )[#(name)]"`. `keep`
+defaults to `right`.
+
+`#(name)` shows the name given to `push`, or the line's numeric ID. Reloading
+the config renders existing pushed lines with the new templates, keeping their
+values and statuses.
+
+### Spinner
+
+Set `spinner` to a sequence of characters and insert the current frame with
+`#(spinner)`:
+
+```ini
+[push]
+spinner = "-\|/"
+spinner_interval = 0.1
+text    = "#(spinner) #(value)#(fill: )[#(name)]"
+done    = "· #(value)#(fill: )[#(name)]"
+success = "✓ #(value)#(fill: )[#(name)]"
+```
+
+Each Unicode grapheme is one frame, so a character and its combining accents
+or a joined emoji stay together. For a braille spinner, use
+`spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"`. Backslashes in config values are literal;
+the ASCII example above needs only one backslash.
+
+`spinner_interval` is the time between frames in seconds, defaults to `0.1`,
+and accepts values from `0.1` to `86400`. Both settings belong in `[push]`.
+An omitted or empty sequence disables the indicator; a single character
+provides a static indicator while running.
+
+Frames share the width of the widest character, with padding after narrower
+frames. This keeps surrounding text steady and reserves the correct space
+when `push --` sets the command's `COLUMNS`. Frames are plain text, not markup;
+put styles around `#(spinner)` in the template. A sequence can contain up to
+128 frames and 1024 bytes, without control characters or standalone characters
+that take no screen space.
+
+Only visible lines whose status is `running` animate. They share one animation
+timer, which stops when no such lines remain. Animation does not rerun commands
+or reformat other lines. `#(spinner)` is empty for any other status; use status
+templates for a static marker. Reloading the config starts the new sequence
+from its first frame. As with other width changes, a reload does not update a
+running command's `COLUMNS`.
+
+See [the spinner sample](../samples/spinner.statusbar) for a complete config.
+
+## `[command.NAME]`
+
+| Key        | Meaning                                                     |
+|------------|-------------------------------------------------------------|
+| `run`      | shell command, run with `/bin/sh -c`                        |
+| `interval` | seconds between runs (default: the top-level `interval`)    |
+
+Show a command with `#(command:NAME)` in any template. A config holds up to
+16 commands.
+
+For a readable multi-line value, write `= |` followed by indented lines. The
+block ends at the next unindented key or section. Commands keep line breaks
+for the shell; templates fold line breaks and tabs into spaces when rendered.
+Typed values such as `interval` still need one valid value.
+
+```ini
+[command.example]
+run = |
+  first-command || exit
+  second-command
+interval = 60
+```
+
+Only the first line of a command's latest output is displayed, as written:
+its `#(...)` and `#[...]` text is not interpreted, while ANSI colors and OSC 8
+hyperlinks work. Each command runs on its own schedule, so a slow one never
+holds up the clock or other commands. One that runs past its interval (at
+least five seconds) is killed. Commands run in the directory where statusbar
+started, with stdin and stderr connected to `/dev/null`. `STATUSBAR_COLUMNS`
+gives them the current statusbar width.

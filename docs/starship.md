@@ -23,16 +23,20 @@ statusbar to update the terminal title. Add `--report-cwd=false` if another
 integration already reports it. Both features default to enabled; use
 `--starship=false` to keep only directory reporting.
 
-By default the prompt details go to slot 3, the left side of line 2. Select
-another slot, including a right-side slot, with:
+By default the prompt details become the value of the line named `prompt`;
+the built-in config and the shipped themes have one. Select another line
+with:
 
 ```zsh
-eval "$(statusbar init zsh --starship-slot 5)"
+eval "$(statusbar init zsh --starship-line status)"
 ```
+
+The line's template decides where the details appear, through `#(value)`;
+see [config.md](config.md#values-and-statuses).
 
 There is nothing to change in `starship.toml`. Inside a statusbar session,
 each prompt runs Starship as usual and splits the result: every line but the
-last goes to statusbar's left slot, and the last line (with Starship's default
+last becomes the line's value, and the last line (with Starship's default
 layout, the prompt character) stays in the terminal. The character still
 turns red after a failed command and follows vi keymaps.
 
@@ -43,12 +47,13 @@ turns red after a failed command and follows vi keymaps.
   `.zshrc` works in every terminal.
 - A one-line Starship prompt is left whole in the terminal, and statusbar keeps
   its configured content.
-- If the selected slot is not present, the complete Starship prompt stays in
+- If the selected line is not present, the complete Starship prompt stays in
   the terminal. The integration starts moving its details automatically when
-  a configuration loaded later adds that slot.
+  a configuration loaded later adds that line.
 - Starship's `add_newline` blank line stays in the terminal, above the
   prompt, as it would without statusbar.
-- Statusbar's right slot, and the right prompt (`right_format`), are untouched.
+- The rest of the line's template, and the right prompt (`right_format`), are
+  untouched.
 
 Run `statusbar init zsh` inside a session to read the code it installs.
 
@@ -63,16 +68,16 @@ starship init fish | source
 statusbar init fish | source
 ```
 
-The same `--starship-slot N` option selects another slot:
+The same `--starship-line NAME` option selects another line:
 
 ```fish
-statusbar init fish --starship-slot 5 | source
+statusbar init fish --starship-line status | source
 ```
 
 The integration keeps Starship's final prompt line and moves preceding lines
 to statusbar. Starship's right prompt remains untouched. Bash is not supported
-for prompt relocation; see the [user guide](README.md#put-live-context-in-a-slot)
-for a simple Bash slot hook instead.
+for prompt relocation; see [changing a line](set.md#update-a-line-at-each-prompt)
+for a simple Bash hook instead.
 
 ## Nushell
 
@@ -85,13 +90,13 @@ source ~/.config/nushell/statusbar.nu
 ```
 
 Start a new shell. The sourced file checks for a statusbar session, so it does
-nothing in ordinary Nushell sessions. To use another slot, edit the `set 3`
-command in the sample. If another integration already emits OSC 7, remove the
+nothing in ordinary Nushell sessions. To use another line, edit the
+`set prompt` command in the sample. If another integration already emits OSC 7, remove the
 `pre_prompt` hook block from the sample. To keep only directory reporting,
 remove the Starship block.
 
 Nushell's prompt closure sends every Starship line except the last to the
-selected slot, leaving the final line and Starship's optional leading blank
+selected line, leaving the final line and Starship's optional leading blank
 line in the terminal. It also initializes Starship's right prompt and emits
 OSC 7 before each prompt. You do not need to source `starship init nu` separately.
 If you already source it, put the statusbar source line after it so statusbar's
@@ -120,8 +125,9 @@ To style statusbar differently from the prompt, run the hook's
 `STARSHIP_CONFIG=~/.config/starship-bar.toml STARSHIP_SHELL= starship prompt …`.
 
 Starship's colors pass through to statusbar as they are. The rest of statusbar
-(the config's other slot, the rule line) is styled by statusbar's own config;
-see [config.md](config.md).
+(the line's template, the rule line) is styled by statusbar's own config;
+see [config.md](config.md). The value is shown literally, so text such as
+`#[...]` in a directory name cannot restyle the bar.
 
 ## Troubleshooting
 
@@ -133,8 +139,9 @@ Set up the split by hand with a profile, as in
 [Choosing what goes in statusbar](#choosing-what-goes-in-statusbar).
 
 **Nothing reaches statusbar.** Check that `$STATUSBAR_STATE` is set in the
-session, that `statusbar init zsh` prints code there, and that
-`statusbar set 3 test` shows `test`. A statusbar started before you
+session, that `statusbar init zsh` prints code there, that the config has a
+line named `prompt` whose template contains `#(value)`, and that
+`statusbar set prompt test` shows `test`. A statusbar started before you
 updated it may need a restart.
 
 **The right side is misaligned.** statusbar counts most wide characters and
@@ -146,7 +153,7 @@ cell. If a module's symbol throws off alignment, change it in that module's
 ## Doing it by hand
 
 The sections below build the same thing from parts, for when you want a
-different split: another selection of modules, the right slot, or a
+different split: another selection of modules, another line, or a
 profile. Use them instead of `statusbar init zsh`, not together with it. Both
 pieces go in `~/.zshrc` after `eval "$(starship init zsh)"`. The prompt
 replacement checks `$STATUSBAR_STATE`, and `statusbar set` does nothing outside
@@ -164,7 +171,7 @@ statusbar_precmd() {
   out=$(STARSHIP_SHELL= starship prompt \
     --terminal-width="$COLUMNS" --jobs="$STARSHIP_JOBS_COUNT" \
     --status="${STARSHIP_CMD_STATUS:-}" --cmd-duration="${STARSHIP_DURATION:-}")
-  statusbar set 3 "${out%$'\n'*}"     # drop the last line: ❯
+  statusbar set prompt "${out%$'\n'*}"     # drop the last line: ❯
 }
 precmd_functions+=(statusbar_precmd)
 ```
@@ -183,7 +190,8 @@ precmd_functions+=(statusbar_precmd)
 - `statusbar set` does nothing outside a statusbar session, so the hook needs
   no check of its own.
 
-Use an even slot, such as `statusbar set 4`, to put the prompt on the right.
+Place `#(value)` after the fill in the line's template to put the prompt on
+the right.
 
 #### Choosing what goes in statusbar
 
@@ -201,7 +209,7 @@ statusbar = "$directory$git_branch$git_status$cmd_duration$status"
   out=$(STARSHIP_SHELL= starship prompt --profile statusbar \
     --terminal-width="$COLUMNS" --jobs="$STARSHIP_JOBS_COUNT" \
     --status="${STARSHIP_CMD_STATUS:-}" --cmd-duration="${STARSHIP_DURATION:-}")
-  statusbar set 3 "$out"
+  statusbar set prompt "$out"
 ```
 
 A profile is only a format string; modules keep their settings from the rest

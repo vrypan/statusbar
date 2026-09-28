@@ -5,7 +5,7 @@ clock, project context, build status, or command progress without adding those
 details to every prompt.
 
 This guide starts with a small statusbar, then shows how to customize it. Each
-`[line.N]` section in a config adds one statusbar line with a left and right side.
+`[line.NAME]` section in a config adds one named line with its own template.
 
 ## Start with one line
 
@@ -14,8 +14,8 @@ small config directly:
 
 ```sh
 statusbar --config - <<'EOF'
-[line.1]
-right = #(datetime:%H:%M)
+[line.clock]
+text = "#(fill: )#(datetime:%H:%M)"
 EOF
 ```
 
@@ -28,75 +28,91 @@ Create a starting config, then edit it:
 
 ```sh
 mkdir -p ~/.config/statusbar
-statusbar config --default > ~/.config/statusbar/config
+statusbar config --default > ~/.config/statusbar/config.statusbar
 statusbar
 ```
 
-Each `[line.N]` section adds a line. Lines have a left and right side. You can
+Each `[line.NAME]` section adds a line, in the order the sections appear. A
+line's `text` is a template. Text before `#(fill:PATTERN)` sits on the left,
+text after it on the right, and the pattern fills the space between. You can
 replace the starter config with this two-line example:
 
 ```ini
-[line.1]
-left = " Ready "
-right = #(datetime:%H:%M)
+[line.status]
+text = " Ready#(fill: )#(datetime:%H:%M) "
 
-[line.2]
-left = "Host #(hostname)"
+[line.host]
+text = " Host #(command:host)"
+
+[command.host]
+run = hostname
+interval = 60
 ```
 
-`#(datetime:%H:%M)` shows the current time. `#(hostname)` runs the command and shows its
-first output line. By default, commands run every five seconds. You can add
-colors, change intervals, and fill the space between sides with a `rule`;
-see [configuration](config.md).
+`#(datetime:%H:%M)` shows the current time. `#(command:host)` shows the first
+output line of `[command.host]`. Commands without an `interval` run every five
+seconds. You can add colors, draw rules such as `#(fill:─)`, and give lines
+backgrounds; see [configuration](config.md). If you have a config from an
+earlier version, see the [migration guide](migration.md).
 
 statusbar keeps at least two terminal rows for your shell. Configured statusbar lines
 that do not fit are hidden until the window grows.
 
-## Put live context in a slot
+## Put live context in a line
 
 Config commands are ideal for machine-wide information such as load, battery,
 or time. They run from the directory where statusbar started, so they cannot
-follow your shell's `cd`. For directory-specific information, update a
-numbered slot from the shell instead.
+follow your shell's `cd`. For directory-specific information, set a line's
+value from the shell instead. A line shows its value with `#(value)`, which is
+also the template of a line without `text`:
 
-Slots are numbered left-to-right, top-to-bottom: line 1 uses slots 1 and 2,
-line 2 uses 3 and 4, and so on.
+```ini
+[line.cwd]
+```
 
 ```zsh
-# ~/.zshrc: put the current directory in slot 1 before each prompt.
+# ~/.zshrc: show the current directory before each prompt.
 __statusbar_cwd() {
-  statusbar set 1 -- "$PWD"
+  statusbar set cwd -- "$PWD"
 }
 precmd_functions+=(__statusbar_cwd)
 ```
 
-Calling `statusbar set 1` with no text restores the value from the config.
+`statusbar set cwd --reset` restores the line's `default`. Lines also have a
+status (`normal`, `running`, `done`, `success` or `failed`) that can select a
+different template, for example to color a build line:
+
+```sh
+statusbar set build "12 tests passed" --status success
+```
+
 `statusbar set` is a no-op outside a statusbar session, so the same shell setup
-works in regular terminals. [Updating slots](set.md) has Bash and Fish hooks,
-formatting details, and examples for scripts.
+works in regular terminals. [Changing a line](set.md) has Bash and Fish hooks
+and the details of values and statuses.
 
 ## Give a command its own line
 
 Use `push` for output that changes while a command runs:
 
 ```sh
-statusbar push -t build -- make
+statusbar push build -- make
 ```
 
-The new line shows the latest output line and stays visible when `make` ends.
-`push` prints the line's ID so you can remove it later with `statusbar pop ID`.
-Use `statusbar pop` without an ID to remove the newest line. See
+The new line shows the latest output line and stays visible when `make` ends,
+marked as succeeded or failed. `push` prints the line's name, its numeric ID
+when you don't give one, so you can remove it later with `statusbar pop NAME`.
+Use `statusbar pop` without a name to remove the newest line. See
 [temporary lines](push.md) for pipes, logs, progress bars, and styling.
 
-For repeated output from commands that only know how to write to a file,
-create a [named FIFO](fifo.md) with `statusbar fifo build` or bind one to an
-existing slot with `statusbar fifo --slot 3 prompt`.
+For output from commands that only know how to write to a file, create a
+[FIFO](bind.md): `statusbar push build --fifo` creates a line and prints a
+pipe path, and `statusbar bind cwd` gives an existing line one.
 
 ## Use Starship
 
 If you already use [Starship](https://starship.rs), keep its prompt character
-in the terminal and move its useful details—directory, Git state, durations,
-and language versions—into a statusbar slot:
+in the terminal and move its useful details (directory, Git state, durations,
+and language versions) into a statusbar line:
 
 ```zsh
 eval "$(statusbar init zsh)"
@@ -120,11 +136,12 @@ For Nushell, copy [the integration sample](../samples/statusbar.nu) to
 source ~/.config/nushell/statusbar.nu
 ```
 
-By default this uses slot 3, the left side of line 2. Choose a different slot
-when designing a larger layout:
+The details become the value of the line named `prompt`, which the built-in
+config and the themes provide. Choose a different line when designing a
+larger layout:
 
 ```zsh
-eval "$(statusbar init zsh --starship-slot 5)"
+eval "$(statusbar init zsh --starship-line status)"
 ```
 
 [The Starship guide](starship.md) explains the automatic integration, shell
@@ -134,24 +151,24 @@ statusbar.
 ## Try a theme
 
 The repository includes four ready-to-run themes based on familiar Starship
-styles: [Pure](../samples/themes/pure.config),
-[Tokyo Night](../samples/themes/tokyo-night.config),
-[Gruvbox](../samples/themes/gruvbox.config), and
-[Pastel Powerline](../samples/themes/pastel-powerline.config).
+styles: [Pure](../samples/themes/pure.statusbar),
+[Tokyo Night](../samples/themes/tokyo-night.statusbar),
+[Gruvbox](../samples/themes/gruvbox.statusbar), and
+[Pastel Powerline](../samples/themes/pastel-powerline.statusbar).
 
-Each has a `-native.config` version that follows your terminal's palette,
-such as [Pure Native](../samples/themes/pure-native.config). The
+Each has a `-native.statusbar` version that follows your terminal's palette,
+such as [Pure Native](../samples/themes/pure-native.statusbar). The
 [theme directory](../samples/themes/README.md) also includes Minimal and
 Multi-line layouts, both with native variants.
 
 Inside a running session, use `statusbar-theme /path/to/themes` to browse
-and activate a `.config` file with the keyboard. The picker changes the
+and activate a `.statusbar` file with the keyboard. The picker changes the
 current session without writing your saved config.
 
 From the repository checkout, try one without replacing your config:
 
 ```sh
-statusbar --config ./samples/themes/tokyo-night.config
+statusbar --config ./samples/themes/tokyo-night.statusbar
 ```
 
 The Gruvbox and Pastel Powerline themes need Powerline glyphs, usually supplied
@@ -165,26 +182,30 @@ Inside a running statusbar session, send a config to `statusbar config` to
 replace the whole layout. From the repository checkout, for example:
 
 ```sh
-statusbar config < ./samples/themes/tokyo-night.config
+statusbar config < ./samples/themes/tokyo-night.statusbar
 statusbar config --default | statusbar config
 ```
 
 Statusbar checks the new config before applying it. If it is invalid, the
-current layout stays in place. A valid one can add or remove lines without
-restarting the shell. Only load config files you trust, since they can run
-commands. See [configuration](config.md#replace-the-running-config) for what
-happens to slot values and pushed lines; the [protocol](osc-3110.md) is there
-for programs that send config changes directly.
+current layout stays in place. A valid one can add, remove, or reorder lines
+without restarting the shell; lines keep their values and statuses by name.
+Only load config files you trust, since they can run commands. See
+[configuration](config.md#replace-the-running-config) for what happens to
+values and pushed lines; the [protocol](osc-3110.md) is there for programs that
+send config changes directly.
+
+If the config a session starts with is invalid or unreadable, statusbar still
+starts your shell, with the built-in config and a line describing the problem.
 
 ## Highlight changed values
 
 Wrap a value in `#[track]...#[notrack]` to briefly highlight it when its displayed
-content changes. This works for commands and template clocks, and is useful for
-weather, unread notifications, resource metrics, or build state:
+content changes. This works for commands and dates, and is useful for weather,
+unread notifications, resource metrics, or build state:
 
 ```ini
-[line.1]
-left = " Clock #[track]#(clock)#[notrack] "
+[line.clock]
+text = " Clock #[track]#(command:clock)#[notrack] "
 
 [command.clock]
 run = date '+%H:%M:%S'
@@ -192,25 +213,25 @@ interval = 1
 ```
 
 The first result sets a baseline. Later changes briefly highlight only the
-marked text. You can mark more than one value in a slot:
+marked text. You can mark more than one value in a template:
 
 ```ini
-left = "CPU #[track]#(cpu)#[notrack]  MEM #[track]#(mem)#[notrack]"
+text = "CPU #[track]#(command:cpu)#[notrack]  MEM #[track]#(command:mem)#[notrack]"
 ```
 
 The default effect makes two pulses over 2.4 seconds. Set `pulses = 1` or
 `pulses = 3` under `[highlight]` to change the duration. See
-[highlight settings](config.md#highlight-changes) for the full behavior and
-older-config migration details.
+[highlight settings](config.md#highlight-changes) for the full behavior.
 
 ## Reference and behavior
 
 - [How I use statusbar](how-i-use-statusbar.md) — a minimal everyday statusbar and a richer optional layout.
 - [Usage](usage.md) — commands, options, completions, generated configs, and environment.
-- [Configuration](config.md) — lines, commands, change highlights, colors, markup, and rules.
-- [Updating slots](set.md) — runtime updates from scripts and the terminal protocol.
-- [Pushing lines](push.md) — stream output into a new line and remove it by ID.
-- [Named FIFOs](fifo.md) — redirect output to a named pushed row or configured slot.
+- [Configuration](config.md) — lines, templates, fill, statuses, commands, change highlights, colors, and markup.
+- [Migrating from slots](migration.md) — converting configs, scripts and hooks from earlier versions.
+- [Changing a line](set.md) — values, statuses, and the control protocol.
+- [Pushing lines](push.md) — stream output into a new line and remove it.
+- [FIFOs](bind.md) — redirect output to a pushed or configured line.
 - [Starship](starship.md) — prompt integration and customization.
 - [Display and animation model](display-model.md) — content updates, animation
   ticks, composed frames, and terminal paints.

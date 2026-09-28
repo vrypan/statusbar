@@ -9,6 +9,34 @@ order they were added.
 - Add on-demand named FIFOs for configured slots and pushed rows
 - Add `#(datetime:FORMAT)` and terminal size properties to templates
 - Update bundled themes to use `#(datetime:FORMAT)`
+- **Breaking:** replace numbered slots with named lines. `[line.NAME]`
+  sections appear in declaration order, each with one `text` template;
+  `#(fill:PATTERN)` replaces `left`, `right` and `rule`, and inline `#[...]`
+  styles replace line `style` keys. See docs/migration.md
+- Give every line a value (`#(value)`, `default`) and a status (`normal`,
+  `running`, `done`, `success`, `failed`) that selects same-section status
+  templates; `[push]` replaces the `[line.push*]` sections
+- Append to templates with `KEY .= FRAGMENT`, without the old 32-part limit
+- Require explicit expressions: `#(command:NAME)` for named commands, with no
+  inline shell commands; `%` is literal outside `#(datetime:...)`; remove
+  `#(tag)`, `#(id)`, `#(stream)`, `#(exit_code)` and `#(signal)` in favor of
+  `#(name)`, `#(value)` and `#(status)`
+- Display values, defaults and command output literally, keeping ANSI colors
+  and OSC 8 links
+- Replace `set SLOT` with `set NAME [TEXT...] [--status STATE] [--reset]`,
+  sent over the authenticated control socket; drop the OSC slot variables
+- Name pushed lines with `push [NAME]`, print the name at EOF, derive
+  success or failed from a command's result, and address lines by name or ID
+- Replace `fifo` with `bind [-u] NAME` and `push NAME --fifo`; rename
+  `STATUSBAR_SLOTS` to `STATUSBAR_FIFOS`
+- Keep configured lines' values, statuses and IDs by name across config
+  replacement, and prune the FIFOs of removed lines
+- Rename `init --starship-slot N` to `--starship-line NAME`, defaulting to the
+  `prompt` line
+- Rename shipped configs and themes to `.statusbar`; load
+  `config.statusbar` by default and warn about an old `config` file
+- Start the shell with the built-in config and a warning line when the
+  startup config is missing, unreadable or invalid
 
 ## v0.4.3
 

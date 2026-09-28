@@ -4,11 +4,12 @@ Start your usual shell with `statusbar`. Inside that session, these are the
 commands most people need:
 
 ```sh
-statusbar set 1 "Build passed"       # show text in a numbered slot
-statusbar push -t build -- make       # give a command a temporary line
-statusbar pop                         # remove the newest temporary line
-statusbar pop --all                   # remove all temporary lines
-statusbar config < another.config    # change the running layout
+statusbar set build "Build passed"          # change a line's value
+statusbar set build --status success        # or its status
+statusbar push build -- make                # give a command a temporary line
+statusbar pop                               # remove the newest temporary line
+statusbar pop --all                         # remove all temporary lines
+statusbar config < another.statusbar        # change the running layout
 ```
 
 Run `statusbar --help` for the command list, or
@@ -16,16 +17,20 @@ Run `statusbar --help` for the command list, or
 
 ```
 statusbar [run] [options] [-- COMMAND...]
-statusbar set <SLOT> [TEXT...]
-statusbar push
-statusbar push -- <COMMAND> [ARG...]
-statusbar fifo [--slot N] NAME
-statusbar fifo (--finish [--exit-code N] | --start | --remove) NAME
-statusbar pop [ID | --all]
-statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
+statusbar set NAME [TEXT...] [--status STATE]
+statusbar set NAME --reset [--status STATE]
+statusbar push [NAME]
+statusbar push [NAME] -- COMMAND [ARG...]
+statusbar push [NAME] --fifo
+statusbar pop [NAME | --all]
+statusbar bind [-u | --unbind] NAME
+statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]
 statusbar config [--print [default|startup|current]] [--default] [--path]
 statusbar completion <bash|zsh|fish>
 ```
+
+NAME is a line's name, or its numeric ID. A decimal NAME always means an ID,
+never a position in the bar.
 
 ## `run`
 
@@ -42,66 +47,74 @@ always follows `--`.
 | `-c`, `--config PATH`   | config file, or `-` for stdin; see [config.md](config.md) for where it is looked for, and the built-in default |
 | `--log PATH`           | append runtime diagnostics to a regular file |
 
-Options take their value as the next argument (`--config my.config`) or
-with `=` (`--config=my.config`). Use `--config -` to read from stdin.
+Options take their value as the next argument (`--config my.statusbar`) or
+with `=` (`--config=my.statusbar`). Use `--config -` to read from stdin.
 The config defines the lines, commands, refresh intervals, and styles.
 
+If the config cannot be read or is invalid, `run` still starts the shell with
+the built-in config and a line describing the problem; see
+[where statusbar finds the config](config.md#where-statusbar-finds-the-config).
+
 During a session, `cat FILE | statusbar config` or `statusbar config < FILE`
-replaces the complete layout—including its line count—without restarting the
+replaces the complete layout, including its lines, without restarting the
 command. See [configuration](config.md#replace-the-running-config) for
 replacement semantics.
 
 ## `set`
 
-`statusbar set SLOT [TEXT...]` sets the text of a slot. Each line has a left
-and right slot: line 1 uses slots 1 and 2, line 2 uses slots 3 and 4, and so on.
-Omit the text to restore the value from your config:
+`statusbar set NAME` changes only what you supply: TEXT replaces the value,
+`""` makes it empty, `--reset` restores the configured default, and
+`--status` sets `normal`, `running`, `done`, `success` or `failed`:
 
 ```sh
-statusbar set 1 'Build passed'
-statusbar set 1
+statusbar set build 'Build passed' --status success
+statusbar set build --status running
+statusbar set build --reset
 ```
 
-`statusbar set 4 -` displays a literal dash. Text supports statusbar markup;
-see [set.md](set.md) for formatting and more examples. To stream the latest
-line of output, use `statusbar push`.
+Values display literally; ANSI colors and OSC 8 links in them work.
+`statusbar set build -` displays a literal dash. Outside a session, `set` does
+nothing and succeeds. See [changing a line](set.md) for details and hooks.
 
 ## `push` and `pop`
 
-`command | statusbar push` appends a line with a visible ID and streams the
-latest line of input into it. When input ends, it prints the ID to stdout and
-leaves the final result displayed. `statusbar pop` removes the newest pushed
-line still present; `statusbar pop ID` removes a specific line, even if its
-stream is still active. See [pushing lines](push.md) for examples and
-limits. Pushed lines do not have numbered slots and survive config replacement.
-`statusbar push -t label -- command` shows `[ID] label > stream` by default.
-It starts the command with `COLUMNS` set to the width available for the stream,
-streams its stdout and stderr, and returns its exit status.
+`command | statusbar push [NAME]` appends a line and streams the latest line
+of input into its value. When input ends, it sets the status to `done`, prints
+the line's name (its numeric ID when unnamed) and leaves the final result
+displayed. `statusbar push [NAME] -- command` starts the command with
+`COLUMNS` set to the width available for the value, streams its stdout and
+stderr, sets `success` or `failed` from its result, and returns its exit
+status. `statusbar push [NAME] --fifo` creates the line with a FIFO and prints
+the FIFO's path.
 
-## `fifo`
+`statusbar pop` removes the newest pushed line still present; `statusbar pop
+NAME` removes a specific line, even if its stream is still active. See
+[pushing lines](push.md) for examples and limits. Pushed lines survive config
+replacement.
 
-`statusbar fifo NAME` creates a named pipe connected to a new pushed row.
-`statusbar fifo --slot N NAME` sends its output to configured slot N. Both
-print the pipe path. `statusbar fifo --finish NAME [--exit-code N]` completes a
-pushed FIFO row, and `statusbar fifo --start NAME` resets it for another run.
-`statusbar fifo --remove NAME` removes it without output.
-See [named FIFOs](fifo.md) for redirection, stream behavior, and cleanup.
+## `bind`
+
+`statusbar bind NAME` creates a FIFO for an existing configured or pushed line
+and prints its path. Text written to it replaces the line's value.
+`statusbar bind -u NAME` (or `--unbind`) removes the FIFO, keeping the line,
+its value and its status. See [FIFOs](bind.md) for redirection, stream
+behavior, and cleanup.
 
 ## `init`
 
 `statusbar init zsh` or `statusbar init fish` prints shell integration that
-reports the working directory with OSC 7 and moves Starship's prompt into
-slot 3 when Starship is available. Both features default to `true`. Zsh
+reports the working directory with OSC 7 and moves Starship's prompt details
+into the line named `prompt` when Starship is available. Both features default to `true`. Zsh
 uses `eval "$(statusbar init zsh)"`; Fish uses `statusbar init fish | source`
 after Starship's own initialization. Nushell can source
 [the sample integration](../samples/statusbar.nu); see [starship.md](starship.md).
 
 Use `--starship=false` for directory reporting alone, or `--report-cwd=false`
-if another integration already reports directories. `--starship-slot N`
-selects another slot; it cannot be combined with `--starship=false`. The hook
-checks the live layout at every prompt, so it starts using the slot if a loaded
+if another integration already reports directories. `--starship-line NAME`
+selects another line; it cannot be combined with `--starship=false`. The hook
+updates the line at every prompt, so it starts using the line if a loaded
 configuration adds it and leaves the full prompt in the terminal while the
-slot is absent. Directory reporting works independently, even with one statusbar
+line is absent. Directory reporting works independently, even with one statusbar
 line. Disabling both features prints nothing, as does running `init` outside a
 statusbar session.
 
@@ -123,12 +136,13 @@ Choose which configuration to print:
 
 `startup` and `current` require a running session. They preserve the original
 text, including comments, whitespace, and commands, without running those
-commands. Temporary `statusbar set` overrides are excluded. The startup
+commands. Values and statuses set at runtime are excluded. The startup
 snapshot also works for `--config -` and remains unchanged when its source
 file is edited or removed. Nested sessions have separate snapshots.
 
-`--path` uses `$STATUSBAR_CONFIG`, then `$XDG_CONFIG_HOME/statusbar/config`
-(or `~/.config/statusbar/config` when `XDG_CONFIG_HOME` is unset). Use one
+`--path` uses `$STATUSBAR_CONFIG`, then
+`$XDG_CONFIG_HOME/statusbar/config.statusbar` (or
+`~/.config/statusbar/config.statusbar` when `XDG_CONFIG_HOME` is unset). Use one
 display option at a time; `--path` cannot be combined with `--print` or `--default`.
 
 With no flags and terminal stdin, shows help. With piped or redirected stdin,
@@ -137,10 +151,10 @@ the current statusbar session. Empty input is an error. Printing flags ignore
 stdin. Replacement prints nothing on success.
 
 ```sh
-statusbar config --print current > saved.config
+statusbar config --print current > saved.statusbar
 statusbar config --print startup | statusbar config
-cat my.config | statusbar config
-statusbar config < my.config
+cat my.statusbar | statusbar config
+statusbar config < my.statusbar
 statusbar config --default | statusbar config
 ```
 
@@ -148,7 +162,7 @@ To start a config of your own from the built-in one:
 
 ```sh
 mkdir -p ~/.config/statusbar
-statusbar config --default > ~/.config/statusbar/config
+statusbar config --default > ~/.config/statusbar/config.statusbar
 ```
 
 `--default` works outside a session and ignores existing config files.
@@ -184,15 +198,17 @@ statusbar completion fish > ~/.config/fish/completions/statusbar.fish
 Use `--config -` to read a complete config from stdin:
 
 ```sh
-printf '[line.1]\nright = %%H:%%M\n' | statusbar --config -
+printf '[line.clock]\ntext = "#(fill: )#(datetime:%%H:%%M)"\n' | statusbar --config -
 
 statusbar --config - <<'EOF'
 interval = 5
 style = fg=blue,bold
 
-[line.1]
-left = #(uptime)
-right = %H:%M
+[line.uptime]
+text = "#(command:uptime)#(fill: )#(datetime:%H:%M)"
+
+[command.uptime]
+run = uptime
 EOF
 ```
 
@@ -200,7 +216,7 @@ statusbar reads up to 64 KiB and validates the config before starting the
 session. The input must end (EOF); it is not a stream of ongoing updates.
 After reading it, statusbar takes keyboard input from `/dev/tty`. A controlling
 terminal is required, and stdout must still be a terminal. Empty or invalid
-input is an error. To open a file literally named `-`, use `--config ./-`.
+input starts the built-in config with a warning line. To open a file literally named `-`, use `--config ./-`.
 
 ## Terminal title
 
@@ -226,9 +242,9 @@ working directory or environment of statusbar commands.
 |---------------------|---------------------------|------------------------------------------|
 | `STATUSBAR_COLUMNS` | configured commands       | the statusbar width                      |
 | `STATUSBAR_CONFIG`  | read by statusbar         | config file, when `--config` isn't given |
-| `STATUSBAR_STATE`   | the child                  | session indicator and private current line count and config snapshots used by `set` and `config` |
+| `STATUSBAR_STATE`   | the child                  | session indicator, control socket prefix, and config snapshots used by `config` |
 | `STATUSBAR_SESSION_ID` | the child               | token for authenticated session requests |
-| `STATUSBAR_SLOTS`   | the child                  | private directory for FIFOs created with `statusbar fifo` |
+| `STATUSBAR_FIFOS`   | the child                  | private directory for FIFOs created with `statusbar bind` and `push --fifo` |
 
 ## Logging
 
