@@ -1,11 +1,11 @@
-//! Bounded latest-line state and publication pacing for pushed rows.
+//! Bounded latest-line state and publication pacing for pushed lines.
 const std = @import("std");
 const Io = std.Io;
 const posix = std.posix;
 const zunic = @import("zunic");
 const sys = @import("platform").sys;
-const max_value = @import("pushed_rows.zig").max_text;
-const push_protocol = @import("push_protocol.zig");
+const max_value = @import("line_types.zig").max_value;
+const line_protocol = @import("line_protocol.zig");
 const control = @import("session_control.zig");
 
 pub const State = struct {
@@ -111,8 +111,8 @@ const Sender = struct {
         if (!self.state.pending()) return;
         const now_ms = self.now();
         if (!final and self.state.timeout(now_ms) != 0) return;
-        var frame: [push_protocol.max_packet]u8 = undefined;
-        const sequence = push_protocol.encode(&frame, self.token, .{ .update = .{ .id = self.id, .value = self.state.value() } }) catch return error.Stream;
+        var frame: [line_protocol.max_packet]u8 = undefined;
+        const sequence = line_protocol.encode(&frame, self.token, .{ .update = .{ .id = self.id, .value = self.state.value() } }) catch return error.Stream;
         self.client.send(sequence) catch return error.Stream;
         self.state.markSent(now_ms);
     }

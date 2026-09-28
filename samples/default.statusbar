@@ -1,0 +1,78 @@
+# statusbar config
+#
+# This is statusbar's built-in config, used when there is no config file.
+# Copy it to ~/.config/statusbar/config.statusbar (or point --config or
+# $STATUSBAR_CONFIG at it) to make your own.
+#
+# Comments start a line with # or ;. A # anywhere else is part of the value,
+# since markup and colors use it. Quotes keep spaces at the edges of a value.
+
+# Refresh for commands that don't set their own interval, in seconds.
+interval = 5
+
+# The base style of the whole bar, e.g. a background: fg=white,bg=#1e1e2e.
+# Inline #[default] and cells the text leaves empty use it.
+# style =
+
+[colors]
+accent = yellow
+dim    = brightblack
+rule   = brightblack
+
+# Regions pulse using their own foreground/background and the terminal palette.
+# The first result establishes a baseline without highlighting.
+[highlight]
+# Each pulse lasts 1.2 seconds; choose 1, 2, or 3.
+pulses = 2
+
+# Lines appear in the order their [line.NAME] sections are declared.
+# A line's text is a template:
+#
+#   #(value)            the line's value: `default`, or `statusbar set NAME TEXT`
+#   #(name) #(status)   its name and status (normal, running, done, ...)
+#   #(fill:─)           repeat ─ across the free width; text after it is
+#                       right-aligned. Without a fill, text is left-aligned.
+#   #(command:load)     first line of [command.load]'s output
+#   #(datetime:%H:%M)   local time via strftime(3); %% is a literal %
+#   #(terminal:cols)    outer terminal columns (also rows, content_rows)
+#   #[...]              style: fg=, bg=, bold, italics, default, ...
+#   #[track]..#[notrack] pulse when this part changes
+#   ##                  a literal #
+#
+# running =, done =, success = and failed = replace text while the line has
+# that status, e.g. after `statusbar set NAME --status success`.
+
+# A rule separating the shell from the statusbar.
+[line.rule]
+text = "#[fg=rule]#(fill:─)"
+
+# `eval "$(statusbar init zsh)"` moves Starship's prompt details into this
+# line's value, on the left. Commands here run in statusbar's working
+# directory, not your shell's, so they can't follow `cd`; update the bar from
+# your shell instead: `statusbar set prompt TEXT`.
+[line.prompt]
+text = " #(value)#(fill: )"
+text .= "#[fg=dim]#(command:user)@#[default]#[fg=accent,bold]#(command:host)#[default]"
+text .= " #[fg=dim]· load#[default] #[track]#(command:load)#[notrack]"
+text .= "  #(datetime:%a %d %b)  #[bold]#(datetime:%H:%M:%S)#[default] "
+
+# Temporary lines created by `statusbar push`. They keep the right side
+# when space runs out, so the name stays visible.
+[push]
+text = "#[fg=dim]#(value)#(fill: )[#(name)]"
+done = "#[fg=dim]#(value)#(fill: )done [#(name)]"
+success = "#[fg=dim]#(value)#(fill: )#[fg=green]✓#[fg=dim] [#(name)]"
+failed = "#[fg=dim]#(value)#(fill: )#[fg=red]✗#[fg=dim] [#(name)]"
+
+[command.user]
+run      = whoami
+interval = 3600
+
+[command.host]
+run      = hostname -s
+interval = 3600
+
+# The 1-minute load average, on macOS and Linux.
+[command.load]
+run      = uptime | awk -F'load averages?: ' '{ split($2, a, /[, ]+/); print a[1] }'
+interval = 10

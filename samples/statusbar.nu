@@ -1,6 +1,7 @@
 # Source this file from config.nu, after Starship's own init if you use it.
-# Edit the slot number below if your layout uses a different slot.
-# Nothing changes outside a statusbar session.
+# Starship's prompt details go to the line named `prompt`; edit the name
+# below if your layout uses another line. Nothing changes outside a
+# statusbar session.
 
 if ($env.STATUSBAR_STATE? != null) {
   # Report the current directory before each prompt so statusbar can update
@@ -34,7 +35,7 @@ if ($env.STATUSBAR_STATE? != null) {
 
       let bar = ($lines | drop 1 | str join "\n")
       let prompt = ($lines | last)
-      let update = (^statusbar set 3 -- $bar | complete)
+      let update = (^statusbar set prompt -- $bar | complete)
       if $update.exit_code != 0 { return $full }
       $"($leading)($prompt)"
     }

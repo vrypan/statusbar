@@ -111,7 +111,7 @@ pub fn pump(self: *Proxy, sig_r: sys.Fd, pid: posix.pid_t) !void {
         timeout = minTimeout(timeout, self.fifoTimeout(now_ms));
         if (ctl.fd < 0 and self.output.atBoundary()) timeout = minTimeout(timeout, @max(self.last_output_ms + paint_quiet_ms - now_ms, 0));
         timeout = minTimeout(timeout, self.runtime.renderer.nextFrameTimeout(now_ms));
-        timeout = minTimeout(timeout, self.runtime.composition.spinnerTimeout(&self.runtime.source, self.pushed.items.items, self.layout.bar, now_ms));
+        timeout = minTimeout(timeout, self.runtime.source.spinnerTimeout(self.layout.bar, now_ms));
         if (self.palette_deadline_ms) |deadline| timeout = minTimeout(timeout, @max(deadline - now_ms, 0));
         if (self.child_status != null) timeout = minTimeout(timeout, self.exitTimeout(now_ms));
         if (self.held_config_len != null and self.output.atBoundary()) timeout = minTimeout(timeout, @max(self.last_output_ms + paint_quiet_ms - now_ms, 0));
@@ -202,22 +202,16 @@ pub fn pump(self: *Proxy, sig_r: sys.Fd, pid: posix.pid_t) !void {
             if (source_update.content_changed) {
                 try self.composeRows(self.runtime, self.layout, false);
                 if (!self.runtime.silent_baseline) {
-                    for (0..@min(self.runtime.renderer.rows.len, @as(usize, self.runtime.lines))) |row| for (0..2) |side| {
-                        const slot = row * 2 + side;
-                        if (self.runtime.source.slotContentEligible(slot, source_update.baseline, source_update.override_events)) self.runtime.renderer.highlightChange(row, side, now_ms);
-                    };
+                    for (0..self.runtime.renderer.rows.len) |row| {
+                        if (self.runtime.source.contentEligible(row, source_update.baseline)) self.runtime.renderer.highlightChange(row, now_ms);
+                    }
                 }
                 self.runtime.silent_baseline = false;
                 self.requestPaint(now_ms);
             }
-            for (0..@min(self.runtime.renderer.rows.len, @as(usize, self.runtime.lines))) |row| for (0..2) |side| {
-                const slot = row * 2 + side;
-                if (self.runtime.source.override_lens[slot] != null or (slot < 32 and source_update.override_events & (@as(u32, 1) << @intCast(slot)) != 0)) self.runtime.renderer.cancelHighlight(row, side);
-            };
         }
-        if (self.runtime.composition.advanceSpinner(&self.runtime.source, self.pushed.items.items, self.layout.bar, now_ms)) {
-            const look = self.runtime.composition.look(self.runtime.look.palette);
-            try self.runtime.renderer.acceptContent(&self.runtime.composition.content.?, &look);
+        if (self.runtime.source.advanceSpinner(self.layout.bar, now_ms)) {
+            try self.runtime.renderer.acceptContent(&self.runtime.source.content, &self.runtime.look);
             self.requestPaint(now_ms);
         }
         if (try self.runtime.renderer.compose(now_ms)) self.requestPaint(now_ms);
@@ -281,7 +275,7 @@ pub fn drainSignals(self: *Proxy, sig_r: sys.Fd, pid: posix.pid_t, now_ms: i64) 
     if (!resized) return;
     const ws = sys.getWinsize(stdin_fd) catch return;
     const width_changed = ws.col != self.layout.cols;
-    self.layout = Layout.of(ws, @intCast(@as(usize, self.runtime.lines) + self.pushed.items.items.len));
+    self.layout = Layout.of(ws, @intCast(self.lines.items.items.len));
     self.runtime.source.setTerminalSize(.{ .rows = ws.row, .cols = ws.col, .content_rows = self.layout.child.row });
     sys.setWinsize(self.master, &self.layout.child) catch {};
     self.output.resize(self.layout.bar, self.layout.child.row);
@@ -301,15 +295,10 @@ test "large paints retain their complete terminal restoration" {
     const count = 100;
     var content = try Content.init(std.testing.allocator, count);
     defer content.deinit();
-    const styles = try std.testing.allocator.alloc([]const u8, count);
-    defer std.testing.allocator.free(styles);
-    @memset(styles, "");
-    const rules = try std.testing.allocator.alloc(?[]const u8, count);
-    defer std.testing.allocator.free(rules);
-    @memset(rules, "─");
+    for (0..count) |n| _ = try content.set(n, "", "─", .{ .split = 0 });
     var writer: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer writer.deinit();
-    try bar.paint(&writer.writer, &content, &.{ .styles = styles, .rules = rules }, 1, count, 200, "", true);
+    try bar.paint(&writer.writer, &content, &.{}, 1, count, 200, "", true);
     try std.testing.expect(writer.writer.buffered().len > 16 * 1024);
     try std.testing.expect(std.mem.endsWith(u8, writer.writer.buffered(), "\x1b[0m\x1b8\x1b[?7h"));
     try std.testing.expect(std.mem.indexOf(u8, writer.writer.buffered(), "\x1b[100;1H") != null);
@@ -318,13 +307,11 @@ test "large paints retain their complete terminal restoration" {
 test "semantically identical paint clears the pending scheduler request" {
     var content = try Content.init(std.testing.allocator, 1);
     defer content.deinit();
-    _ = content.set("same");
-    var styles = [_][]const u8{""};
-    var rules = [_]?[]const u8{null};
+    _ = try content.setLine(0, "same");
     var renderer = try bar.Renderer.init(std.testing.allocator);
     defer renderer.deinit();
     try renderer.resize(1, 20);
-    try renderer.prepare(&content, &.{ .styles = &styles, .rules = &rules }, true);
+    try renderer.prepare(&content, &.{}, true);
     _ = try renderer.build(11, "", true, true);
     renderer.commit();
     var proxy = schedulerProxy();

@@ -1,46 +1,43 @@
-//! `statusbar push`: stream a command or pipe into its own row.
+//! `statusbar push [NAME]`: stream a pipe or command into a new line, or
+//! create a line with a FIFO.
 const std = @import("std");
 const Io = std.Io;
 const zecli = @import("zecli");
 const common = @import("../common.zig");
 const push_stream = @import("session").push_stream;
-const push_protocol = @import("session").push_protocol;
+const types = @import("session").line_types;
+const sys = @import("platform").sys;
 
 pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
-    if (command.positionals().len != 0) return common.usageError(stderr, command, "use -- before a push command");
-    const tag = command.getValue([]const u8, "tag") orelse "";
-    if (!@import("session").pushed_rows.validTag(tag)) return common.usageError(stderr, command, "tag must be plain UTF-8 text of at most 128 bytes");
+    const args = command.positionals();
+    if (args.len > 1) return common.usageError(stderr, command, "use -- before a push command");
+    const name: ?[]const u8 = if (args.len == 1) name: {
+        if (!types.validName(args[0])) return common.usageError(stderr, command, "NAME must be 1–64 letters, digits, _ and -, and not only digits");
+        break :name args[0];
+    } else null;
+    const fifo = command.enabled("fifo");
     const child_argv = command.passthrough() orelse &.{};
-    if (child_argv.len == 0 and (Io.File.stdin().isTty(io) catch false)) return common.usageError(stderr, command, "push input must be a pipe, file, or command after --");
-    const token = @import("platform").environment.get("STATUSBAR_SESSION_ID") orelse return common.usageError(stderr, command, "push requires a running statusbar session");
-    var path_buf: [96]u8 = undefined;
-    var client = common.sessionClient(io, &path_buf) catch |err| {
-        try stderr.print("statusbar: cannot connect to session: {t}\n", .{err});
-        try stderr.flush();
-        return 1;
-    };
-    defer client.deinit();
-    var packet: [384]u8 = undefined;
-    var reply: [128]u8 = undefined;
-    const create_request = try push_protocol.encode(&packet, token, .{ .create = tag });
-    const created = client.request(create_request, &reply) catch |err| {
-        try stderr.print("statusbar: cannot create row: {t}\n", .{err});
-        try stderr.flush();
-        return 1;
-    };
-    const response = push_protocol.decodeReply(created) catch return common.usageError(stderr, command, "invalid row response from session");
-    if (response != .created) return common.usageError(stderr, command, "the session rejected push");
-    const id = response.created.id;
-    const command_columns = response.created.columns;
-    var remove_on_start_failure = child_argv.len > 0;
-    defer if (remove_on_start_failure) {
-        const request = push_protocol.encode(&packet, token, .{ .pop = id }) catch "";
-        if (request.len > 0) _ = client.request(request, &reply) catch {};
-    };
-    var child_pipe: ?@import("platform").sys.Fd = null;
+    if (fifo and child_argv.len > 0) return common.usageError(stderr, command, "choose --fifo or a command after --");
+    if (!fifo and child_argv.len == 0 and (Io.File.stdin().isTty(io) catch false)) return common.usageError(stderr, command, "push input must be a pipe, file, or command after --");
+    if (@import("platform").environment.get("STATUSBAR_SESSION_ID") == null) return common.usageError(stderr, command, "push requires a running statusbar session");
+    var session: common.Session = undefined;
+    if (!try session.open(io, stderr)) return 1;
+    defer session.close();
+
+    const created = try session.request(stderr, .{ .push = .{ .name = name, .fifo = fifo } }) orelse return 1;
+    if (fifo) {
+        if (created != .path) return common.rejected(stderr, created, "the session rejected push");
+        try stdout.print("{s}\n", .{created.path});
+        try stdout.flush();
+        return 0;
+    }
+    if (created != .created) return common.rejected(stderr, created, "the session rejected push");
+    const id = created.created.id;
+    const command_columns = created.created.columns;
+
+    var child_pipe: ?sys.Fd = null;
     var child: ?std.process.Child = null;
     if (child_argv.len > 0) {
-        const sys = @import("platform").sys;
         var width_buf: [20]u8 = undefined;
         const width = try std.fmt.bufPrint(&width_buf, "{d}", .{command_columns});
         var child_env = try sys.environMap().clone(arena);
@@ -56,37 +53,36 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         }) catch |err| {
             sys.close(io, pipe[0]);
             sys.close(io, pipe[1]);
+            _ = try session.request(stderr, .{ .pop = .{ .id = id } });
             try stderr.print("statusbar: cannot start command: {t}\n", .{err});
             try stderr.flush();
             return 1;
         };
         sys.close(io, pipe[1]);
         child_pipe = pipe[0];
-        remove_on_start_failure = false;
     }
-    defer if (child_pipe) |fd| @import("platform").sys.close(io, fd);
-    push_stream.run(io, &client, token, id, child_pipe orelse 0) catch |err| {
+    defer if (child_pipe) |fd| sys.close(io, fd);
+    push_stream.run(io, &session.client, session.token, id, child_pipe orelse 0) catch |err| {
         if (child) |*process| process.kill(io);
         try stderr.print("statusbar: push stream failed: {t}\n", .{err});
         try stderr.flush();
         return 1;
     };
-    const completion: @import("session").pushed_rows.Completion = if (child) |*process| blk: {
+    // Stdin ends as done; a command succeeds only with exit status 0.
+    var exit_code: u8 = 0;
+    var status: types.Status = .done;
+    if (child) |*process| {
         const term = try process.wait(io);
-        break :blk switch (term) {
-            .exited => |code| .{ .exited = code },
-            .signal => |signal| .{ .signal = @intCast(@intFromEnum(signal)) },
-            else => .{ .exited = 1 },
+        exit_code = switch (term) {
+            .exited => |code| code,
+            .signal => |signal| 128 +| @as(u8, @intCast(@intFromEnum(signal))),
+            else => 1,
         };
-    } else .done;
-    const finished = client.request(try push_protocol.encode(&packet, token, .{ .finish = .{ .id = id, .result = completion } }), &reply) catch |err| {
-        try stderr.print("statusbar: cannot finish row: {t}\n", .{err});
-        try stderr.flush();
-        return 1;
-    };
-    const finish_reply = push_protocol.decodeReply(finished) catch return common.usageError(stderr, command, "invalid finish response from session");
-    if (finish_reply != .ok) return common.usageError(stderr, command, "the session rejected the final value");
-    try stdout.print("{d}\n", .{id});
+        status = if (term == .exited and term.exited == 0) .success else .failed;
+    }
+    const finished = try session.request(stderr, .{ .finish = .{ .id = id, .status = status } }) orelse return 1;
+    if (finished != .ok) return common.rejected(stderr, finished, "the session rejected the final status");
+    if (name) |value| try stdout.print("{s}\n", .{value}) else try stdout.print("{d}\n", .{id});
     try stdout.flush();
-    return completion.exitCode() orelse 0;
+    return exit_code;
 }

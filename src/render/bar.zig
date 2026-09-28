@@ -7,31 +7,28 @@
 //! sequences and after the child has gone quiet.
 //!
 //! This file owns the `Renderer` state and its preparation of rows. Its other
-//! methods live in the files listed at the end of `Renderer`: `row_layout.zig`
-//! (placing slots into cells), `effects.zig` (tracked-region pulses), and
-//! `serialize.zig` (the bytes of a paint). Row content is in `content.zig`.
+//! methods live in the files listed at the end of `Renderer`: `line_layout.zig`
+//! (placing a line's parts into cells), `effects.zig` (tracked-region pulses),
+//! and `serialize.zig` (the bytes of a paint). Line content is in `content.zig`.
 
 const std = @import("std");
 const styled = @import("styled_text.zig");
 const relative_highlight = @import("relative_highlight.zig");
 const color = @import("shared").color;
-const hasTrack = @import("effects.zig").hasTrack;
-const regionCapacity = @import("effects.zig").regionCapacity;
-const regionEqual = @import("effects.zig").regionEqual;
-const regionVisible = @import("effects.zig").regionVisible;
-const rowFitting = @import("row_layout.zig").rowFitting;
-const setTestPair = @import("effects.zig").setTestPair;
+const effects = @import("effects.zig");
+const line_layout = @import("line_layout.zig");
+const setTestPair = effects.setTestPair;
 
 const cells = @import("cells.zig");
 const Content = @import("content.zig").Content;
-const Tracks = @import("content.zig").Tracks;
+const Meta = @import("content.zig").Meta;
 const Look = @import("content.zig").Look;
-const max_line_bytes = @import("content.zig").max_line_bytes;
+const max_regions = @import("content.zig").max_regions;
 
 test {
     _ = @import("styled_text.zig");
     _ = @import("content.zig");
-    _ = @import("row_layout.zig");
+    _ = @import("line_layout.zig");
     _ = @import("effects.zig");
     _ = @import("serialize.zig");
 }
@@ -41,22 +38,26 @@ pub const State = struct {
     desired: cells.Row = .{},
     painted: cells.Row = .{},
     summary: cells.Changes = .{},
-    raw: [max_line_bytes]u8 = undefined,
-    raw_len: ?usize = null,
-    tracks: Tracks = .{},
+    /// The line bytes this row was last prepared from.
+    raw: std.ArrayList(u8) = .empty,
+    text_len: usize = 0,
+    prepared: bool = false,
+    meta: Meta = .{},
+    /// Unclipped prefix and suffix, for comparing tracked regions.
     semantic: [2]cells.Row = .{ .{}, .{} },
     painted_valid: bool = false,
     layout_invalid: bool = true,
     selected: bool = false,
     pending: bool = true,
     output_bound: usize = 0,
-    region_changed: [2][16]bool = @splat(@splat(false)),
-    highlight_until: [2][16]?i64 = @splat(@splat(null)),
-    highlight_step: [2][16]?u8 = @splat(@splat(null)),
+    region_changed: [max_regions]bool = @splat(false),
+    highlight_until: [max_regions]?i64 = @splat(null),
+    highlight_step: [max_regions]?u8 = @splat(null),
     fn deinit(self: *State, gpa: std.mem.Allocator) void {
         self.base.deinit(gpa);
         self.desired.deinit(gpa);
         self.painted.deinit(gpa);
+        self.raw.deinit(gpa);
         for (&self.semantic) |*snapshot| snapshot.deinit(gpa);
     }
 };
@@ -70,6 +71,9 @@ pub const Renderer = struct {
     cols: u16 = 0,
     staging: cells.Row = .{},
     semantic_staging: [2]cells.Row = .{ .{}, .{} },
+    staging_visible: line_layout.Visible = .{ .{}, .{} },
+    expanded: std.ArrayList(u8) = .empty,
+    offsets: std.ArrayList(usize) = .empty,
     writer: std.Io.Writer.Allocating,
     parsed_rows: usize = 0,
     emitted_rows: usize = 0,
@@ -104,6 +108,8 @@ pub const Renderer = struct {
         gpa.free(self.rows);
         self.staging.deinit(gpa);
         for (&self.semantic_staging) |*snapshot| snapshot.deinit(gpa);
+        self.expanded.deinit(gpa);
+        self.offsets.deinit(gpa);
         self.writer.deinit();
         self.pulse_cache.deinit(gpa);
         self.scratch.deinit(gpa);
@@ -134,7 +140,7 @@ pub const Renderer = struct {
         self.pulse_ranges_dirty = true;
     }
 
-    /// Rebuild only changed raw rows. Invalidation means presentation changes,
+    /// Rebuild only changed rows. Invalidation means presentation changes,
     /// never screen damage. Summaries describe this preparation only.
     pub fn prepare(self: *Renderer, content: *const Content, look: *const Look, invalidate: bool) !void {
         const gpa = self.budget.allocator();
@@ -142,42 +148,37 @@ pub const Renderer = struct {
         if (invalidate) self.pulse_ranges_dirty = true;
         for (self.rows, 0..) |*row, n| {
             row.summary = .{};
-            row.region_changed = @splat(@splat(false));
-            const raw = content.line(n);
-            const tracks = content.tracks[n];
-            if (!invalidate and !row.layout_invalid and row.raw_len != null and std.mem.eql(u8, raw, row.raw[0..row.raw_len.?]) and Tracks.eql(tracks, row.tracks)) continue;
+            row.region_changed = @splat(false);
+            const line = &content.lines[n];
+            const meta = line.meta;
+            if (!invalidate and !row.layout_invalid and row.prepared and row.text_len == line.text_len and
+                std.mem.eql(u8, row.raw.items, line.bytes.items) and Meta.eql(meta, row.meta)) continue;
             // Preserve range indices in untouched tracked rows when only an
             // untracked row changes. Both sides matter when tracking is removed.
-            if (tracks.len > 0 or row.tracks.len > 0) self.pulse_ranges_dirty = true;
+            if (meta.len > 0 or row.meta.len > 0) self.pulse_ranges_dirty = true;
             self.parsed_rows += 1;
-            try self.layout(&self.staging, raw, tracks, look.styles[n], look.rules[n], look.palette);
-            if (!invalidate and row.raw_len != null) {
-                const left_width = rowFitting(self.semantic_staging[0], self.cols);
-                const capacities = [2]usize{ self.cols, self.cols -| (left_width + @as(usize, if (left_width > 0) 1 else 0)) };
-                for (0..2) |side| for (0..16) |id| {
-                    if (tracks.override_epoch[side] != row.tracks.override_epoch[side]) continue;
+            try self.layout(&self.staging, line.text(), line.pattern(), meta, look);
+            const baseline = !row.prepared or !Meta.sameBaseline(meta, row.meta);
+            if (!invalidate and !baseline) {
+                for (0..max_regions) |id| {
                     const ordinal: u4 = @intCast(id);
-                    const owner: cells.Owner = if (side == 0) .left else .right;
-                    if (!hasTrack(row.tracks, owner, ordinal) or !hasTrack(tracks, owner, ordinal)) continue;
-                    const old = row.semantic[side];
-                    const new = self.semantic_staging[side];
-                    const capacity = regionCapacity(new, ordinal, capacities[side]);
-                    row.region_changed[side][id] = regionVisible(new, ordinal, capacity) and
-                        !regionEqual(old, new, ordinal, std.math.maxInt(usize)) and
-                        !regionEqual(old, new, ordinal, capacity);
-                };
+                    if (!effects.hasTrack(row.meta, ordinal) or !effects.hasTrack(meta, ordinal)) continue;
+                    const window = effects.regionWindow(self.semantic_staging, self.staging_visible, ordinal) orelse continue;
+                    row.region_changed[id] = !effects.regionEqual(row.semantic, self.semantic_staging, ordinal, window);
+                }
             }
             for (0..self.cols) |col| {
-                const change = if (invalidate or row.raw_len == null) cells.Changes{} else self.staging.difference(row.base, col);
+                const change = if (invalidate or !row.prepared) cells.Changes{} else self.staging.difference(row.base, col);
                 row.summary.merge(change);
             }
-            const replace = invalidate or row.layout_invalid or row.raw_len == null or row.summary.any();
+            const replace = invalidate or row.layout_invalid or !row.prepared or row.summary.any();
+            try row.raw.ensureTotalCapacity(gpa, line.bytes.items.len);
             if (replace) {
                 try row.desired.reserveCopy(gpa, self.staging);
                 try row.painted.reserveCopy(gpa, self.staging);
                 std.mem.swap(cells.Row, &row.base, &self.staging);
                 row.desired.copyReserved(row.base);
-                row.highlight_step = @splat(@splat(null));
+                row.highlight_step = @splat(null);
                 row.pending = true;
                 // Bound every possible StylePatch; links/text cannot be changed
                 // by a patch. Reserve outside diff/serialization.
@@ -187,29 +188,26 @@ pub const Renderer = struct {
                     row.output_bound += 192 + cell.glyph.len + cell.params.len + cell.uri.len;
                 }
             }
-            @memcpy(row.raw[0..raw.len], raw);
-            row.raw_len = raw.len;
-            var visible_regions: [2]u16 = .{ 0, 0 };
+            row.raw.clearRetainingCapacity();
+            row.raw.appendSliceAssumeCapacity(line.bytes.items);
+            row.text_len = line.text_len;
+            row.prepared = true;
+            var visible_regions: u16 = 0;
             for (row.base.cells.items) |cell| {
-                if (cell.region) |id| {
-                    if (cell.owner == .left) visible_regions[0] |= @as(u16, 1) << id;
-                    if (cell.owner == .right) visible_regions[1] |= @as(u16, 1) << id;
+                if (cell.region) |id| visible_regions |= @as(u16, 1) << id;
+            }
+            for (0..2) |part| std.mem.swap(cells.Row, &row.semantic[part], &self.semantic_staging[part]);
+            for (0..max_regions) |id| {
+                if (row.highlight_until[id] != null and (visible_regions & (@as(u16, 1) << @intCast(id)) == 0 or baseline)) {
+                    // A metadata-only transition can leave the same base
+                    // cells in place: restore any old patch.
+                    cells.restore(&row.desired, row.base, .{ .region = @intCast(id) });
+                    row.pending = true;
+                    row.highlight_until[id] = null;
+                    row.highlight_step[id] = null;
                 }
             }
-            for (0..2) |side| {
-                std.mem.swap(cells.Row, &row.semantic[side], &self.semantic_staging[side]);
-                for (0..16) |id| {
-                    if (row.highlight_until[side][id] != null and (visible_regions[side] & (@as(u16, 1) << @intCast(id)) == 0 or tracks.override_epoch[side] != row.tracks.override_epoch[side])) {
-                        // A metadata-only override transition can leave the
-                        // same base cells in place: restore any old patch.
-                        cells.restore(&row.desired, row.base, .{ .region = .{ .owner = if (side == 0) .left else .right, .id = @intCast(id) } });
-                        row.pending = true;
-                        row.highlight_until[side][id] = null;
-                        row.highlight_step[side][id] = null;
-                    }
-                }
-            }
-            row.tracks = tracks;
+            row.meta = meta;
             row.layout_invalid = false;
             if (invalidate) row.painted_valid = false;
         }
@@ -242,18 +240,18 @@ pub const Renderer = struct {
     }
 
     // Methods live in the files named after what they handle.
-    // row_layout.zig
-    pub const layout = @import("row_layout.zig").layout;
+    // line_layout.zig
+    pub const layout = line_layout.layout;
     // effects.zig
-    pub const pulsePreparationStale = @import("effects.zig").pulsePreparationStale;
-    pub const preparePulseRanges = @import("effects.zig").preparePulseRanges;
-    pub const prepareHighlightRanges = @import("effects.zig").prepareHighlightRanges;
-    pub const highlightChange = @import("effects.zig").highlightChange;
-    pub const cancelHighlight = @import("effects.zig").cancelHighlight;
-    pub const highlightTimeout = @import("effects.zig").highlightTimeout;
-    pub const nextFrameTimeout = @import("effects.zig").nextFrameTimeout;
-    pub const advanceHighlights = @import("effects.zig").advanceHighlights;
-    pub const compose = @import("effects.zig").compose;
+    pub const pulsePreparationStale = effects.pulsePreparationStale;
+    pub const preparePulseRanges = effects.preparePulseRanges;
+    pub const prepareHighlightRanges = effects.prepareHighlightRanges;
+    pub const highlightChange = effects.highlightChange;
+    pub const cancelHighlight = effects.cancelHighlight;
+    pub const highlightTimeout = effects.highlightTimeout;
+    pub const nextFrameTimeout = effects.nextFrameTimeout;
+    pub const advanceHighlights = effects.advanceHighlights;
+    pub const compose = effects.compose;
     // serialize.zig
     pub const build = @import("serialize.zig").build;
     pub const commit = @import("serialize.zig").commit;
@@ -273,18 +271,15 @@ fn allocationScenario(gpa: std.mem.Allocator) !void {
     defer r.deinit();
     var content = try Content.init(gpa, 2);
     defer content.deinit();
-    _ = content.set("one\ntwo");
-    try setTestPair(&content, "a", "b", "right");
-    var styles = [_][]const u8{ "", "" };
-    var rules = [_]?[]const u8{ "\x1b[0m" ** 1100 ++ "─", null };
-    const look: Look = .{ .styles = &styles, .rules = &rules };
+    try setTestPair(&content, 0, "a", "b", "right");
+    _ = try content.set(1, "two", "\x1b[0m" ** 1100 ++ "─", .{ .split = 3 });
     try r.resize(2, 12);
-    try r.prepare(&content, &look, true);
+    try r.prepare(&content, &.{}, true);
     _ = try r.build(23, "", true, true);
     r.commit();
     try r.resize(2, 20);
-    try setTestPair(&content, "界" ** 40, "e\u{301}" ** 20, "right");
-    try r.prepare(&content, &look, true);
+    try setTestPair(&content, 0, "界" ** 40, "e\u{301}" ** 20, "right");
+    try r.prepare(&content, &.{}, true);
     _ = try r.build(23, "", true, true);
     r.commit();
 }
@@ -293,10 +288,8 @@ test "incremental base, desired patches and painted snapshots" {
     const gpa = std.testing.allocator;
     var content = try Content.init(gpa, 3);
     defer content.deinit();
-    _ = content.set("one\ntwo\nhidden");
-    var styles = [_][]const u8{ "", "", "" };
-    var rules = [_]?[]const u8{ null, null, null };
-    const look: Look = .{ .styles = &styles, .rules = &rules };
+    for ([_][]const u8{ "one", "two", "hidden" }, 0..) |text, n| _ = try content.setLine(n, text);
+    const look: Look = .{};
     var r = try Renderer.init(gpa);
     defer r.deinit();
     try r.resize(2, 12);
@@ -304,32 +297,32 @@ test "incremental base, desired patches and painted snapshots" {
     try std.testing.expectEqual(@as(usize, 2), r.parsed_rows);
     _ = try r.build(23, "", true, false);
     r.commit();
-    r.patch(0, .{ .slot = .left }, .{ .bold = true });
-    _ = content.setLine(1, "new");
+    r.patch(0, .{ .part = .prefix }, .{ .bold = true });
+    _ = try content.setLine(1, "new");
     try r.prepare(&content, &look, false);
     try std.testing.expectEqual(@as(usize, 1), r.parsed_rows);
     try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
     _ = try r.build(23, "", true, true);
     r.commit();
     try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
-    _ = content.setLine(0, "\x1b[0mone");
+    _ = try content.setLine(0, "\x1b[0mone");
     try r.prepare(&content, &look, false);
     try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
     try std.testing.expectEqualStrings("", try r.build(23, "", true, false));
-    _ = content.setLine(0, "other");
+    _ = try content.setLine(0, "other");
     try r.prepare(&content, &look, false);
     try std.testing.expect(!r.rows[0].desired.cells.items[0].style.bold);
-    r.restore(0, .{ .slot = .left });
+    r.restore(0, .{ .part = .prefix });
     _ = try r.build(23, "", true, false);
     try std.testing.expectEqual(@as(usize, 1), r.emitted_rows);
     r.commit();
-    _ = content.setLine(2, "new hidden");
+    _ = try content.setLine(2, "new hidden");
     try r.prepare(&content, &look, false);
     try std.testing.expectEqual(@as(usize, 0), r.parsed_rows);
     try std.testing.expectEqualStrings("", try r.build(23, "", true, false));
-    _ = content.setLine(1, "temporary");
+    _ = try content.setLine(1, "temporary");
     try r.prepare(&content, &look, false);
-    _ = content.setLine(1, "new");
+    _ = try content.setLine(1, "new");
     try r.prepare(&content, &look, false);
     try std.testing.expectEqualStrings("", try r.build(23, "", true, false));
     try r.resize(3, 12);
@@ -337,6 +330,20 @@ test "incremental base, desired patches and painted snapshots" {
     _ = try r.build(22, "", false, true);
     try std.testing.expectEqual(@as(usize, 3), r.emitted_rows);
     try std.testing.expect(std.mem.endsWith(u8, r.writer.writer.buffered(), "\x1b[0m\x1b8"));
+}
+
+test "long markup lines beyond the old slot buffers render" {
+    const gpa = std.testing.allocator;
+    var content = try Content.init(gpa, 1);
+    defer content.deinit();
+    const text = "#[bold]x#[default]" ** 400;
+    _ = try content.set(0, text, "", .{});
+    var r = try Renderer.init(gpa);
+    defer r.deinit();
+    try r.resize(1, 500);
+    try r.prepare(&content, &.{}, true);
+    try std.testing.expect(r.rows[0].base.cells.items[399].style.bold);
+    try std.testing.expectEqual(cells.Owner.fill, r.rows[0].base.cells.items[400].owner);
 }
 
 test "every allocation failure during initialization preparation and resize is cleaned" {

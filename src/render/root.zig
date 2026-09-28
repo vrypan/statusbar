@@ -7,7 +7,7 @@ pub const content = @import("content.zig");
 pub const effects = @import("effects.zig");
 pub const markup = @import("markup.zig");
 pub const relative_highlight = @import("relative_highlight.zig");
-pub const row_layout = @import("row_layout.zig");
+pub const line_layout = @import("line_layout.zig");
 pub const serialize = @import("serialize.zig");
 pub const styled_text = @import("styled_text.zig");
 
@@ -18,7 +18,7 @@ test {
     _ = effects;
     _ = markup;
     _ = relative_highlight;
-    _ = row_layout;
+    _ = line_layout;
     _ = serialize;
     _ = styled_text;
 }

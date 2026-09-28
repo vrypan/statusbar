@@ -2,8 +2,11 @@
 //! completion.
 //!
 //!     statusbar [run] [options] [-- COMMAND...]
-//!     statusbar set <SLOT> [TEXT...]
-//!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]
+//!     statusbar set NAME [TEXT...] [--status STATE] | set NAME --reset [--status STATE]
+//!     statusbar push [NAME] [--fifo | -- COMMAND...]
+//!     statusbar pop [NAME | --all]
+//!     statusbar bind [-u] NAME
+//!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]
 //!     statusbar config [--print [default|startup|current] | --default | --path]
 //!     statusbar completion <bash|zsh|fish>
 
@@ -25,6 +28,8 @@ const config_flags = [_]zecli.FlagSpec{
     .{ .name = "path", .description = "Print the config path for a new session" },
 };
 
+const status_names = [_][]const u8{ "normal", "running", "done", "success", "failed" };
+
 const run_flags = [_]zecli.FlagSpec{
     config_flag,
     .{ .name = "log", .value = .string, .value_name = "PATH", .description = "Append runtime diagnostics to a file" },
@@ -41,123 +46,138 @@ const commands = [_]zecli.CommandSpec{
         \\program, put its name and arguments after `--`. Exit it to end the session.
         \\
         \\Config lookup: --config, then $STATUSBAR_CONFIG, then the default path:
-        \\$XDG_CONFIG_HOME/statusbar/config, or ~/.config/statusbar/config if
-        \\$XDG_CONFIG_HOME is unset. A missing default file uses built-in defaults.
+        \\$XDG_CONFIG_HOME/statusbar/config.statusbar, or
+        \\~/.config/statusbar/config.statusbar if $XDG_CONFIG_HOME is unset.
+        \\A missing default file uses the built-in config.
         \\Use --config - to read a complete config from stdin. After EOF, keyboard
         \\input comes from /dev/tty; stdout must still be a terminal.
-        \\The config defines rows, commands, refresh intervals, and styles.
+        \\The config defines lines, commands, refresh intervals, and styles.
+        \\
+        \\If the config cannot be read or is invalid, the session still starts
+        \\your shell, using the built-in config and a line describing the problem.
+        \\Fix the file, then load it with `statusbar config < FILE`.
         ++ "\n",
         .examples = &.{
             "statusbar",
-            "statusbar --config my.config",
+            "statusbar --config my.statusbar",
             "generate-config | statusbar --config -",
             "statusbar -- vim notes.txt",
         },
     },
     .{
         .name = "set",
-        .description = "Set the text of a slot",
-        .usage = "statusbar set <SLOT> [TEXT...]",
+        .description = "Change a line's value or status",
+        .usage = "statusbar set NAME [TEXT...] [--status STATE] | statusbar set NAME --reset [--status STATE]",
+        .flags = &.{
+            .{ .name = "status", .value = .string, .value_name = "STATE", .description = "Set the line's status", .choices = &status_names },
+            .{ .name = "reset", .description = "Restore the line's configured default value" },
+        },
         .arguments = &.{
-            .{ .name = "SLOT", .description = "Slot number: 1 = row 1 left, 2 = row 1 right, 3 = row 2 left, ...", .required = true },
-            .{ .name = "TEXT", .description = "Text to display; omit to restore the configured text", .repeatable = true },
+            .{ .name = "NAME", .description = "Line name or numeric ID", .required = true },
+            .{ .name = "TEXT", .description = "New value; omit to leave the value unchanged", .repeatable = true },
         },
         .double_dash = .positionals,
         .extra_help =
-        \\Each row has a left and right slot, numbered from 1. The row must
-        \\already exist in your layout.
+        \\Changes only what you supply. TEXT replaces the value; words are
+        \\joined with spaces, and "" sets an explicit empty value. --reset restores
+        \\the configured default and cannot be combined with TEXT. --status sets
+        \\normal, running, done, success or failed; any change is allowed and
+        \\keeps the value. A value and status given together change at once.
         \\
-        \\Omit TEXT to restore the value from your config. A sole - displays
-        \\a literal dash. Use `statusbar push` to stream command output.
-        \\Words are joined with spaces; quote text to keep leading or trailing
-        \\spaces. Use `--` before text that starts with a dash.
-        \\Text supports markup such as #[bold] and is limited to 1024 bytes.
+        \\Values display literally: #(...) and #[...] are shown as written,
+        \\while ANSI colors and OSC 8 links are kept. A sole - is a literal dash.
+        \\Use -- before text that starts with a dash. Values are limited to
+        \\1024 bytes and stay on one line.
         \\
         \\Outside a statusbar session, this command does nothing, so shell hooks
         \\can call it without checking whether statusbar is running.
         ++ "\n",
         .examples = &.{
-            "statusbar set 1 'Build passed'",
-            "statusbar set 2 '#[fg=green,bold]Ready'",
-            "statusbar set 1 -- '--verbose enabled'",
-            "statusbar set 4 -",
-            "statusbar set 1",
+            "statusbar set prompt 'Ready'",
+            "statusbar set build 'Build passed' --status success",
+            "statusbar set build --status running",
+            "statusbar set build ''",
+            "statusbar set build --reset",
+            "statusbar set build -- '--verbose enabled'",
         },
     },
     .{
         .name = "push",
-        .description = "Show a stream in a new status bar row",
-        .usage = "statusbar push [-t TEXT] [-- <COMMAND> [ARG...]]",
-        .flags = &.{.{ .name = "tag", .short = 't', .value = .string, .value_name = "TEXT", .description = "Label the pushed row" }},
+        .description = "Add a line and stream text into it",
+        .usage = "statusbar push [NAME] [--fifo | -- COMMAND [ARG...]]",
+        .flags = &.{.{ .name = "fifo", .description = "Create the line with a FIFO and print its path" }},
+        .arguments = &.{.{ .name = "NAME", .description = "Name for the new line; omit to use its numeric ID" }},
         .extra_help =
-        \\Read stdin from a pipe or file, or run a command after --.
-        \\Use -t or --tag to label the row, for example with a filename.
-        \\By default, the row shows [ID] tag > stream on the left.
-        \\A command receives COLUMNS set to the space available for its output;
-        \\both stdout and stderr are streamed into the row.
-        \\The final value stays visible after input ends. It prints the ID
-        \\on stdout at EOF; use `statusbar pop ID` to remove the row.
-        \\Command mode exits with the command's status.
+        \\Adds a line below the configured ones, using the [push] templates.
+        \\Read stdin from a pipe or file, or run a command after --. Each new
+        \\line of input replaces the value; the last one stays visible after
+        \\input ends. A command receives COLUMNS set to the space available
+        \\for its output; both stdout and stderr are streamed into the line.
+        \\
+        \\At the end of input, push prints the line's name (its numeric ID when
+        \\unnamed) and sets its status: done for stdin, success or failed from
+        \\the command's result. Command mode exits with the command's status.
+        \\With --fifo, push prints the FIFO path at once; writes to it update
+        \\the value, and closing it keeps the value and status.
+        \\Use `statusbar pop NAME` to remove the line.
         ++ "\n",
-        .examples = &.{ "tail -n 0 -f app.log | statusbar push -t app.log &", "statusbar push -t 100Mb.dat -- curl --progress-bar -o /dev/null URL", "id=$(printf 'Done\\n' | statusbar push)" },
-    },
-    .{
-        .name = "fifo",
-        .description = "Create a FIFO or change a pushed FIFO row",
-        .usage = "statusbar fifo [--slot N] NAME | statusbar fifo (--remove | --start | --finish [--exit-code N]) NAME",
-        .flags = &.{
-            .{ .name = "slot", .value = .string, .value_name = "N", .description = "Existing configured slot to receive FIFO text" },
-            .{ .name = "remove", .description = "Remove the named FIFO" },
-            .{ .name = "start", .description = "Restart a pushed FIFO row" },
-            .{ .name = "finish", .description = "Complete a pushed FIFO row" },
-            .{ .name = "exit-code", .value = .string, .value_name = "N", .description = "Command exit code (0–255) for --finish" },
+        .examples = &.{
+            "tail -n 0 -f app.log | statusbar push applog &",
+            "statusbar push download -- curl --progress-bar -o /dev/null URL",
+            "name=$(printf 'Done\\n' | statusbar push)",
+            "fifo=$(statusbar push build --fifo)",
         },
-        .arguments = &.{.{ .name = "NAME", .description = "FIFO name", .required = true }},
-        .double_dash = .positionals,
-        .extra_help =
-        \\Without --slot, create a pushed row tagged NAME. Creation prints its
-        \\absolute FIFO path. The session also exports STATUSBAR_SLOTS; create
-        \\a FIFO before redirecting output to that directory.
-        \\A writer's latest nonempty line stays visible after it closes.
-        \\--finish applies done, success or failed styling; --start resets
-        \\a completed row for another run. These require a pushed-row FIFO.
-        \\Removal prints nothing; open writers may receive EPIPE.
-        ++ "\n",
-        .examples = &.{ "statusbar fifo build", "statusbar fifo --slot 3 prompt", "make > \"$STATUSBAR_SLOTS/build\" 2>&1", "statusbar fifo --finish --exit-code 0 build", "statusbar fifo --start build", "statusbar fifo --remove build" },
     },
     .{
         .name = "pop",
         .description = "Remove pushed lines",
-        .usage = "statusbar pop [ID | --all]",
+        .usage = "statusbar pop [NAME | --all]",
         .flags = &.{.{ .name = "all", .short = 'a', .description = "Remove all pushed lines" }},
-        .arguments = &.{.{ .name = "ID", .description = "Line ID; omit to remove the latest pushed line" }},
+        .arguments = &.{.{ .name = "NAME", .description = "Pushed line name or ID; omit to remove the latest" }},
         .extra_help =
-        \\Use --all or -a to remove every pushed line, including active streams.
-        \\Removing lines does not stop the commands producing their output.
+        \\Removes a pushed line and its FIFO. Configured lines cannot be popped.
+        \\Removing a line does not stop the command producing its output.
         \\--all succeeds even when there are no pushed lines.
         ++ "\n",
-        .examples = &.{ "statusbar pop", "statusbar pop 7", "statusbar pop --all" },
+        .examples = &.{ "statusbar pop", "statusbar pop build", "statusbar pop 7", "statusbar pop --all" },
+    },
+    .{
+        .name = "bind",
+        .description = "Create or remove a line's FIFO",
+        .usage = "statusbar bind [-u | --unbind] NAME",
+        .flags = &.{.{ .name = "unbind", .short = 'u', .description = "Remove the FIFO, keeping the line's value and status" }},
+        .arguments = &.{.{ .name = "NAME", .description = "Line name or ID", .required = true }},
+        .double_dash = .positionals,
+        .extra_help =
+        \\Creates a named pipe for an existing configured or pushed line and
+        \\prints its absolute path. Text written to it replaces the line's
+        \\value; its latest nonempty line stays visible after writers close.
+        \\The pipe is named after the line (its ID when unnamed), in the
+        \\directory $STATUSBAR_FIFOS. Binding again prints the same path.
+        \\Removal prints nothing; open writers may receive EPIPE.
+        ++ "\n",
+        .examples = &.{ "statusbar bind prompt", "make > \"$(statusbar bind build)\" 2>&1", "statusbar bind -u prompt" },
     },
     .{
         .name = "init",
         .description = "Print shell setup for Starship and directory titles",
-        .usage = "statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-slot N]",
+        .usage = "statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]",
         .arguments = &.{
             .{ .name = "SHELL", .description = "Shell to configure: zsh or fish", .required = true, .completion = .{ .values = &.{ "zsh", "fish" } } },
         },
         .flags = &.{
             .{ .name = "starship", .value = .bool_required, .description = "Move Starship prompt details into the bar (default: true)" },
             .{ .name = "report-cwd", .value = .bool_required, .description = "Report the working directory for the terminal title (default: true)" },
-            .{ .name = "starship-slot", .value = .string, .value_name = "N", .description = "Slot for Starship prompt text (default: 3)" },
+            .{ .name = "starship-line", .value = .string, .value_name = "NAME", .description = "Line for Starship prompt text (default: prompt)" },
         },
         .double_dash = .positionals,
         .extra_help =
         \\Add the matching setup example to ~/.zshrc or ~/.config/fish/config.fish.
         \\For fish, put it after `starship init fish | source`.
         \\
-        \\Starship's prompt details go to slot 3 (row 2, left) by default, while
-        \\the final prompt line stays in the terminal. If that slot is absent,
-        \\the full prompt stays in the terminal. Use --starship-slot to choose another.
+        \\Starship's prompt details go to the line named prompt by default, while
+        \\the final prompt line stays in the terminal. If that line is absent,
+        \\the full prompt stays in the terminal. Use --starship-line to choose another.
         \\
         \\Use --starship=false for directory titles alone, or --report-cwd=false
         \\if another integration already reports your directory.
@@ -167,7 +187,7 @@ const commands = [_]zecli.CommandSpec{
         .examples = &.{
             "eval \"$(statusbar init zsh)\"",
             "statusbar init fish | source",
-            "eval \"$(statusbar init zsh --starship-slot 1)\"",
+            "eval \"$(statusbar init zsh --starship-line status)\"",
             "eval \"$(statusbar init zsh --starship=false)\"",
         },
     },
@@ -183,11 +203,12 @@ const commands = [_]zecli.CommandSpec{
         \\new layout can change the number of rows without restarting your shell.
         \\
         \\Printing startup or current requires a running session. Both preserve
-        \\the config text and exclude temporary overrides made with `statusbar set`.
+        \\the config text and exclude values and statuses set at runtime.
         \\
         \\--path shows the file a new session would use: $STATUSBAR_CONFIG, then
-        \\$XDG_CONFIG_HOME/statusbar/config (or ~/.config/statusbar/config when
-        \\$XDG_CONFIG_HOME is unset). A missing default file shows 'built-in'.
+        \\$XDG_CONFIG_HOME/statusbar/config.statusbar (or
+        \\~/.config/statusbar/config.statusbar when $XDG_CONFIG_HOME is unset).
+        \\A missing default file shows 'built-in'.
         \\Display options ignore stdin and do not change the running bar.
         \\
         \\With no flags, shows this help when run directly in a terminal.
@@ -202,11 +223,11 @@ const commands = [_]zecli.CommandSpec{
         }},
         .examples = &.{
             "statusbar config --print",
-            "statusbar config --print startup > original.config",
-            "statusbar config --print current > active.config",
-            "statusbar config --default > my.config",
+            "statusbar config --print startup > original.statusbar",
+            "statusbar config --print current > active.statusbar",
+            "statusbar config --default > my.statusbar",
             "statusbar config --path",
-            "statusbar config < my.config",
+            "statusbar config < my.statusbar",
             "statusbar config --default | statusbar config",
         },
     },
@@ -299,10 +320,11 @@ test "run is the default command" {
 
     const cases = [_]struct { []const [:0]const u8, []const u8 }{
         .{ &.{}, "run" },
-        .{ &.{ "-c", "my.config" }, "run" },
+        .{ &.{ "-c", "my.statusbar" }, "run" },
         .{ &.{ "--", "set" }, "run" },
-        .{ &.{ "set", "1" }, "set" },
-        .{ &.{ "run", "-c", "my.config" }, "run" },
+        .{ &.{ "set", "prompt" }, "set" },
+        .{ &.{ "bind", "prompt" }, "bind" },
+        .{ &.{ "run", "-c", "my.statusbar" }, "run" },
         .{ &.{"--help"}, "--help" },
         .{ &.{"-V"}, "-V" },
     };

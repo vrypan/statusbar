@@ -1,5 +1,9 @@
 //! Session-owned named pipes. All file descriptors are nonblocking and belong
 //! to the proxy; callers only receive paths after both ends are open.
+//!
+//! A binding belongs to one line identity. Its basename is the line's
+//! explicit name, or its decimal ID when unnamed, so binding a line by ID or
+//! by name always reaches the same pipe.
 const std = @import("std");
 const posix = std.posix;
 const system = posix.system;
@@ -9,13 +13,10 @@ const Stream = @import("push_stream.zig").State;
 extern "c" fn mkfifo([*:0]const u8, posix.mode_t) c_int;
 
 pub const max_bindings = 128;
-pub const Target = union(enum) { slot: usize, row: u64 };
 
-pub fn validName(name: []const u8) bool {
-    if (name.len == 0 or name.len > 64) return false;
-    if (!std.ascii.isAlphabetic(name[0]) and name[0] != '_') return false;
-    for (name[1..]) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != '.' and ch != '-') return false;
-    return true;
+/// A basename: an explicit line name, or an unpadded decimal ID.
+pub fn validBasename(name: []const u8) bool {
+    return @import("line_types.zig").Target.parse(name) != null;
 }
 
 pub const Binding = struct {
@@ -24,7 +25,7 @@ pub const Binding = struct {
     name_len: usize,
     path: [256:0]u8 = undefined,
     path_len: usize,
-    target: Target,
+    line: u64,
     read_fd: c_int,
     keepalive_fd: c_int,
     read_failed: bool = false,
@@ -95,7 +96,7 @@ pub const Registry = struct {
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator, state_path: []const u8) !Registry {
         var result: Registry = .{ .io = io, .allocator = allocator, .directory_len = 0 };
-        const path = try std.fmt.bufPrintSentinel(&result.directory, "{s}.slots", .{state_path}, 0);
+        const path = try std.fmt.bufPrintSentinel(&result.directory, "{s}.fifos", .{state_path}, 0);
         result.directory_len = path.len;
         return result;
     }
@@ -109,22 +110,20 @@ pub const Registry = struct {
         return null;
     }
 
-    pub fn findRow(self: *const Registry, id: u64) ?usize {
-        for (self.items.items, 0..) |item, index| if (item.target == .row and item.target.row == id) return index;
+    pub fn findLine(self: *const Registry, id: u64) ?usize {
+        for (self.items.items, 0..) |item, index| if (item.line == id) return index;
         return null;
     }
 
-    pub fn create(self: *Registry, name: []const u8, target: Target) ![]const u8 {
-        if (!validName(name)) return error.InvalidName;
-        if (self.find(name)) |index| {
+    /// Returns the line's pipe, creating it on demand under `name`.
+    pub fn create(self: *Registry, name: []const u8, line: u64) ![]const u8 {
+        if (!validBasename(name)) return error.InvalidName;
+        if (self.findLine(line)) |index| {
             const item = &self.items.items[index];
-            if (!std.meta.eql(item.target, target)) return error.NameConflict;
             if (!item.ownedPath()) return error.PathReplaced;
             return item.pathSlice();
         }
-        if (target == .slot) for (self.items.items) |item| {
-            if (item.target == .slot and item.target.slot == target.slot) return error.SlotConflict;
-        };
+        if (self.find(name) != null) return error.NameConflict;
         if (self.items.items.len >= max_bindings) return error.BindingLimit;
         if (!self.directory_created) {
             const mask = system.umask(0);
@@ -133,7 +132,7 @@ pub const Registry = struct {
             made catch return error.DirectoryCreateFailed;
             self.directory_created = true;
         }
-        var item: Binding = .{ .io = self.io, .name_len = name.len, .path_len = 0, .target = target, .read_fd = -1, .keepalive_fd = -1, .inode = 0, .generation = self.next_generation };
+        var item: Binding = .{ .io = self.io, .name_len = name.len, .path_len = 0, .line = line, .read_fd = -1, .keepalive_fd = -1, .inode = 0, .generation = self.next_generation };
         @memcpy(item.name[0..name.len], name);
         const path = try std.fmt.bufPrintSentinel(&item.path, "{s}/{s}", .{ self.directoryPath(), name }, 0);
         item.path_len = path.len;
@@ -180,13 +179,13 @@ pub const Registry = struct {
     }
 };
 
-test "FIFO names are safe path components" {
-    for ([_][]const u8{ "build", "prompt.1", "_a-B" }) |name| try std.testing.expect(validName(name));
-    for ([_][]const u8{ "", "1", ".", "..", "a/b", "a b", "a\n", "x" ** 65 }) |name| try std.testing.expect(!validName(name));
+test "FIFO basenames are line names or decimal IDs" {
+    for ([_][]const u8{ "build", "5", "_a-B" }) |name| try std.testing.expect(validBasename(name));
+    for ([_][]const u8{ "", "05", ".", "..", "a/b", "a b", "a.b", "a\n", "x" ** 65 }) |name| try std.testing.expect(!validBasename(name));
 }
 
 test "FIFO stream joins writes and holds incomplete UTF-8" {
-    var binding: Binding = .{ .io = std.testing.io, .name_len = 0, .path_len = 0, .target = .{ .slot = 0 }, .read_fd = -1, .keepalive_fd = -1, .inode = 0, .generation = 1 };
+    var binding: Binding = .{ .io = std.testing.io, .name_len = 0, .path_len = 0, .line = 1, .read_fd = -1, .keepalive_fd = -1, .inode = 0, .generation = 1 };
     binding.feed("a", 0);
     binding.feed("b", 1);
     try std.testing.expectEqualStrings("ab", binding.stream.value());
@@ -199,37 +198,37 @@ test "FIFO stream joins writes and holds incomplete UTF-8" {
     try std.testing.expectEqualStrings("x", binding.stream.value());
 }
 
-test "registry creates private pipes, reuses targets, and protects collisions" {
+test "registry creates private pipes, reuses lines, and protects collisions" {
     var state_buf: [96]u8 = undefined;
     const state = try std.fmt.bufPrint(&state_buf, "/tmp/statusbar-fifo-unit-{d}", .{system.getpid()});
     var registry = try Registry.init(std.testing.io, std.testing.allocator, state);
     defer registry.deinit();
     try std.testing.expect(!registry.directory_created);
-    const first = try registry.create("build", .{ .row = 1 });
+    const first = try registry.create("build", 1);
     try std.testing.expect(registry.directory_created);
+    try std.testing.expect(std.mem.endsWith(u8, registry.directoryPath(), ".fifos"));
     var path_buf: [256]u8 = undefined;
     @memcpy(path_buf[0..first.len], first);
     const path = path_buf[0..first.len];
-    try std.testing.expectEqualStrings(first, try registry.create("build", .{ .row = 1 }));
-    try std.testing.expectError(error.NameConflict, registry.create("build", .{ .slot = 0 }));
-    _ = try registry.create("prompt", .{ .slot = 0 });
-    try std.testing.expectError(error.SlotConflict, registry.create("other", .{ .slot = 0 }));
+    try std.testing.expectEqualStrings(first, try registry.create("build", 1));
+    try std.testing.expectError(error.NameConflict, registry.create("build", 2));
+    _ = try registry.create("prompt", 2);
     try std.testing.expectError(error.PathCreateFailed, blk: {
         var collision: [256:0]u8 = undefined;
         const name = try std.fmt.bufPrintSentinel(&collision, "{s}/collision", .{registry.directoryPath()}, 0);
         const file = try std.Io.Dir.createFileAbsolute(std.testing.io, name, .{ .exclusive = true, .permissions = .fromMode(0o600) });
         defer file.close(std.testing.io);
         defer std.Io.Dir.deleteFileAbsolute(std.testing.io, name) catch {};
-        break :blk registry.create("collision", .{ .row = 3 });
+        break :blk registry.create("collision", 3);
     });
     try std.testing.expectEqual(@as(usize, 2), registry.items.items.len);
-    const prompt_index = registry.find("prompt").?;
+    const prompt_index = registry.findLine(2).?;
     const prompt_slice = registry.items.items[prompt_index].pathSlice();
     try std.Io.Dir.deleteFileAbsolute(std.testing.io, prompt_slice);
     try std.Io.Dir.symLinkAbsolute(std.testing.io, "/tmp", prompt_slice, .{});
     try std.testing.expectError(error.PathReplaced, registry.remove(prompt_index));
     try std.Io.Dir.deleteFileAbsolute(std.testing.io, prompt_slice);
-    try registry.remove(registry.find("build").?);
+    try registry.remove(registry.findLine(1).?);
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(std.testing.io, path, .{ .follow_symlinks = false }));
 }
 
@@ -241,10 +240,10 @@ test "registry capacity still permits reuse" {
     var name_buf: [16]u8 = undefined;
     for (0..max_bindings) |index| {
         const name = try std.fmt.bufPrint(&name_buf, "f{d}", .{index});
-        _ = try registry.create(name, .{ .slot = index });
+        _ = try registry.create(name, index + 1);
     }
-    try std.testing.expectEqualStrings(try registry.create("f0", .{ .slot = 0 }), registry.items.items[0].pathSlice());
-    try std.testing.expectError(error.BindingLimit, registry.create("extra", .{ .row = 99 }));
+    try std.testing.expectEqualStrings(try registry.create("f0", 1), registry.items.items[0].pathSlice());
+    try std.testing.expectError(error.BindingLimit, registry.create("extra", 999));
 }
 
 test "failed registry allocation leaves no FIFO entry" {
@@ -253,7 +252,7 @@ test "failed registry allocation leaves no FIFO entry" {
     var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
     var registry = try Registry.init(std.testing.io, failing.allocator(), state);
     defer registry.deinit();
-    try std.testing.expectError(error.OutOfMemory, registry.create("build", .{ .row = 1 }));
+    try std.testing.expectError(error.OutOfMemory, registry.create("build", 1));
     try std.testing.expectEqual(@as(usize, 0), registry.items.items.len);
     var path_buf: [256]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "{s}/build", .{registry.directoryPath()});

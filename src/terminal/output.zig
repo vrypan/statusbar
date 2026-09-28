@@ -15,7 +15,7 @@
 //! buffered from its first parameter byte to its final byte, so a sequence
 //! split across reads is still rewritten as a whole. OSC 7 working-directory
 //! reports are observed and forwarded; other OSCs are held only as long as
-//! they could still be one of the proxy's own user variables.
+//! they could still be the proxy's own OSC 3110 config request.
 
 const std = @import("std");
 const config_protocol = @import("config_protocol.zig");
@@ -23,21 +23,7 @@ const config_protocol = @import("config_protocol.zig");
 const max_seq = 64;
 const max_params = 16;
 
-/// iTerm2's user variables, which WezTerm understands too. The proxy keeps
-/// the numbered slot variables it owns and forwards every other OSC.
-///
-///     ESC ] 1337 ; SetUserVar=StatusBarSlot3=<base64> BEL
-const user_var_prefix = "1337;SetUserVar=StatusBar";
-const slot_values = @import("shared").slots;
-const max_value = slot_values.max_value;
-const SlotMode = slot_values.SlotMode;
-
 const esc = 0x1b;
-
-pub const UpdateHandler = struct {
-    context: *anyopaque,
-    callback: *const fn (*anyopaque, usize, []const u8, SlotMode) void,
-};
 
 pub const Osc7Handler = struct {
     context: *anyopaque,
@@ -49,8 +35,6 @@ pub const Output = struct {
     bar: u16,
     /// The child's screen height.
     rows: u16,
-    max_slot: usize = 2,
-    update_handler: ?UpdateHandler = null,
     osc7_handler: ?Osc7Handler = null,
 
     /// DECOM: while set, the child addresses rows relative to its own margins,
@@ -73,10 +57,7 @@ pub const Output = struct {
     sgr_pixels: bool = false,
 
     osc_len: usize = 0,
-    osc_probe: [user_var_prefix.len]u8 = undefined,
-    payload: [2 * max_value]u8 = undefined,
-    payload_len: usize = 0,
-    payload_overflow: bool = false,
+    osc_probe: [config_protocol.namespace.len]u8 = undefined,
     osc7_payload: [4096]u8 = undefined,
     osc7_len: usize = 0,
     osc7_overflow: bool = false,
@@ -104,8 +85,6 @@ pub const Output = struct {
         osc7_prefix,
         osc7,
         osc7_esc,
-        user_var,
-        user_var_esc,
         config,
         config_esc,
     };
@@ -146,8 +125,8 @@ pub const Output = struct {
                         continue;
                     };
                     // Hold the ESC back until the next byte shows whether it
-                    // starts one of the proxy's own OSCs, which never reach
-                    // the terminal.
+                    // starts the proxy's own OSC, which never reaches the
+                    // terminal.
                     sink.write(bytes[run..next]);
                     i = next + 1;
                     run = i;
@@ -296,15 +275,11 @@ pub const Output = struct {
                         run = i;
                         self.osc_len += 1;
                         const probe = self.osc_probe[0..self.osc_len];
-                        if (std.mem.eql(u8, probe, user_var_prefix)) {
-                            self.state = .user_var;
-                            self.payload_len = 0;
-                            self.payload_overflow = false;
-                        } else if (std.mem.eql(u8, probe, config_protocol.namespace)) {
+                        if (std.mem.eql(u8, probe, config_protocol.namespace)) {
                             self.state = .config;
                             self.config_len = 0;
                             self.config_overflow = false;
-                        } else if (!std.mem.startsWith(u8, user_var_prefix, probe) and !std.mem.startsWith(u8, config_protocol.namespace, probe)) {
+                        } else if (!std.mem.startsWith(u8, config_protocol.namespace, probe)) {
                             // Reprocess the mismatching byte as string content:
                             // it may terminate or interrupt this OSC.
                             sink.write("\x1b]");
@@ -371,35 +346,6 @@ pub const Output = struct {
                         self.state = .esc;
                     }
                 },
-                .user_var => {
-                    i += 1;
-                    run = i;
-                    switch (b) {
-                        0x07 => {
-                            self.finishUserVar();
-                            self.state = .ground;
-                        },
-                        esc => self.state = .user_var_esc,
-                        0x18, 0x1a => self.state = .ground,
-                        else => if (self.payload_len < self.payload.len) {
-                            self.payload[self.payload_len] = b;
-                            self.payload_len += 1;
-                        } else {
-                            self.payload_overflow = true;
-                        },
-                    }
-                },
-                .user_var_esc => {
-                    if (b == '\\') {
-                        i += 1;
-                        run = i;
-                        self.finishUserVar();
-                        self.state = .ground;
-                    } else {
-                        // Aborted; the held ESC starts whatever comes next.
-                        self.state = .esc;
-                    }
-                },
                 .config => {
                     i += 1;
                     run = i;
@@ -443,29 +389,6 @@ pub const Output = struct {
     fn finishOsc7(self: *Output) void {
         if (self.osc7_overflow) return;
         if (self.osc7_handler) |handler| handler.callback(handler.context, self.osc7_payload[0..self.osc7_len]);
-    }
-
-    /// `StatusBarSlotN=<base64>` or `StatusBarSlotLiteralN=<base64>`.
-    /// Anything else under the prefix, or a value
-    /// that does not decode, is dropped without exposing the owned payload.
-    fn finishUserVar(self: *Output) void {
-        if (self.payload_overflow) return;
-        const payload = self.payload[0..self.payload_len];
-        const eq = std.mem.indexOfScalar(u8, payload, '=') orelse return;
-        const name = payload[0..eq];
-        const mode: SlotMode = if (std.mem.startsWith(u8, name, "SlotLiteral")) .literal else if (std.mem.startsWith(u8, name, "Slot")) .markup else return;
-        const digits = name[(if (mode == .literal) @as(usize, 11) else 4)..];
-        if (digits.len == 0 or (digits.len > 1 and digits[0] == '0')) return;
-        for (digits) |byte| if (byte < '0' or byte > '9') return;
-        const slot = std.fmt.parseInt(usize, digits, 10) catch return;
-        if (slot < 1 or slot > self.max_slot) return;
-        const encoded = payload[eq + 1 ..];
-        const decoder = std.base64.standard.Decoder;
-        const size = decoder.calcSizeForSlice(encoded) catch return;
-        if (size > max_value) return;
-        var decoded: [max_value]u8 = undefined;
-        decoder.decode(decoded[0..size], encoded) catch return;
-        if (self.update_handler) |handler| handler.callback(handler.context, slot - 1, decoded[0..size], mode);
     }
 
     /// Carries an incomplete scalar over read boundaries. Only the leading
@@ -690,31 +613,6 @@ const Osc7Collector = struct {
         self.write("<title:");
         self.write(uri);
         self.write(">");
-    }
-};
-
-/// Keeps the latest value of the first two slots.
-const Slots = struct {
-    values: [2][max_value]u8 = undefined,
-    lens: [2]usize = .{ 0, 0 },
-    changed: [2]bool = .{ false, false },
-
-    fn handler(self: *Slots) UpdateHandler {
-        return .{ .context = self, .callback = receive };
-    }
-
-    fn receive(context: *anyopaque, slot: usize, value: []const u8, _: SlotMode) void {
-        const self: *Slots = @ptrCast(@alignCast(context));
-        @memcpy(self.values[slot][0..value.len], value);
-        self.lens[slot] = value.len;
-        self.changed[slot] = true;
-    }
-
-    /// Returns a value set since the last call, or null if there is none.
-    fn take(self: *Slots, slot: usize) ?[]const u8 {
-        if (!self.changed[slot]) return null;
-        self.changed[slot] = false;
-        return self.values[slot][0..self.lens[slot]];
     }
 };
 
@@ -964,24 +862,6 @@ test "an unrestored cursor save is tracked" {
     }
 }
 
-test "status bar user variables are taken and never forwarded" {
-    // "left side" and "right" in base64.
-    const input = "a\x1b]1337;SetUserVar=StatusBarSlot1=bGVmdCBzaWRl\x07b" ++
-        "\x1b]1337;SetUserVar=StatusBarSlot2=cmlnaHQ=\x1b\\c";
-    var chunk: usize = 1;
-    while (chunk <= input.len) : (chunk += 1) {
-        var slots: Slots = .{};
-        var out: Output = .{ .bar = 1, .rows = 10, .update_handler = slots.handler() };
-        const got = try translate(&out, input, chunk);
-        defer std.testing.allocator.free(got);
-        try std.testing.expectEqualStrings("abc", got);
-        try std.testing.expectEqualStrings("left side", slots.take(0).?);
-        try std.testing.expectEqualStrings("right", slots.take(1).?);
-        try std.testing.expect(slots.take(0) == null);
-        try std.testing.expect(out.atBoundary());
-    }
-}
-
 test "other OSCs and user variables pass through" {
     const inputs = [_][]const u8{
         "\x1b]1337;SetUserVar=foo=YmFy\x07",
@@ -989,6 +869,8 @@ test "other OSCs and user variables pass through" {
         "\x1b]133;A\x1b\\",
         "\x1b]13\x07x",
         "\x1b]1337;SetUserVar=StatusBa\x07",
+        // Removed slot variables are ordinary user variables now.
+        "\x1b]1337;SetUserVar=StatusBarSlot1=b25l\x07",
         "\x1b\x1b]0;t\x07",
     };
     for (inputs) |input| {
@@ -1023,8 +905,8 @@ test "OSC 7 is forwarded and reported in stream order across read partitions" {
             .reports = 2,
         },
         .{
-            .input = "\x1b]1337;SetUserVar=StatusBarSlot1=b25l\x07\x1b]7;file:///one\x07",
-            .expected = "\x1b]7;file:///one\x07<title:file:///one>",
+            .input = "\x1b]1337;SetUserVar=foo=b25l\x07\x1b]7;file:///one\x07",
+            .expected = "\x1b]1337;SetUserVar=foo=b25l\x07\x1b]7;file:///one\x07<title:file:///one>",
             .uris = "file:///one\n",
             .reports = 1,
         },
@@ -1076,70 +958,6 @@ test "invalid incomplete and oversized OSC 7 reports do not notify" {
         try std.testing.expectEqualStrings(input, collector.bytes.items);
         try std.testing.expect(out.atBoundary() == !std.mem.endsWith(u8, input, "incomplete"));
     }
-}
-
-test "an empty value clears and a bad one is ignored" {
-    var slots: Slots = .{};
-    var out: Output = .{ .bar = 1, .rows = 10, .update_handler = slots.handler() };
-    const got = try translate(&out, "\x1b]1337;SetUserVar=StatusBarSlot1=\x07\x1b]1337;SetUserVar=StatusBarSlot2=%%%\x07\x1b]1337;SetUserVar=StatusBarMiddle=eA==\x07\x1b]1337;SetUserVar=StatusBarLeft=eA==\x07\x1b]1337;SetUserVar=StatusBarRight=eA==\x07", 3);
-    defer std.testing.allocator.free(got);
-    try std.testing.expectEqualStrings("", got);
-    try std.testing.expectEqualStrings("", slots.take(0).?);
-    try std.testing.expect(slots.take(1) == null);
-}
-
-test "malformed out of range and oversized numbered updates are dropped" {
-    const input = "\x1b]1337;SetUserVar=StatusBarSlot0=eA==\x07" ++
-        "\x1b]1337;SetUserVar=StatusBarSlot+1=eA==\x07" ++
-        "\x1b]1337;SetUserVar=StatusBarSlot999999999999999999999999=eA==\x07" ++
-        "\x1b]1337;SetUserVar=StatusBarSlot3=eA==\x07" ++
-        "\x1b]1337;SetUserVar=StatusBarSlot1=" ++ ("A" ** 1400) ++ "\x07" ++
-        "\x1b]1337;SetUserVar=StatusBarSlot1=" ++ ("A" ** 2100) ++ "\x07";
-    var slots: Slots = .{};
-    var out: Output = .{ .bar = 1, .rows = 10, .max_slot = 2, .update_handler = slots.handler() };
-    const got = try translate(&out, input, 1);
-    defer std.testing.allocator.free(got);
-    try std.testing.expectEqualStrings("", got);
-    try std.testing.expect(slots.take(0) == null);
-    try std.testing.expect(slots.take(1) == null);
-}
-
-test "numbered slot updates are delivered in order from one read" {
-    const SlotCollector = struct {
-        slots: [7]usize = undefined,
-        modes: [7]SlotMode = undefined,
-        values: [7][16]u8 = undefined,
-        lens: [7]usize = @splat(0),
-        len: usize = 0,
-
-        fn receive(context: *anyopaque, slot: usize, value: []const u8, mode: SlotMode) void {
-            const self: *@This() = @ptrCast(@alignCast(context));
-            self.slots[self.len] = slot;
-            self.modes[self.len] = mode;
-            @memcpy(self.values[self.len][0..value.len], value);
-            self.lens[self.len] = value.len;
-            self.len += 1;
-        }
-    };
-    var updates: SlotCollector = .{};
-    var out: Output = .{ .bar = 3, .rows = 21, .max_slot = 6, .update_handler = .{ .context = &updates, .callback = SlotCollector.receive } };
-    var sink: Collector = .{};
-    defer sink.bytes.deinit(std.testing.allocator);
-    out.feed("\x1b]1337;SetUserVar=StatusBarSlot1=b25l\x07\x1b]1337;SetUserVar=StatusBarSlot2=dHdv\x1b\\\x1b]1337;SetUserVar=StatusBarSlot3=dGhyZWU=\x07\x1b]1337;SetUserVar=StatusBarSlot4=Zm91cg==\x07\x1b]1337;SetUserVar=StatusBarSlot5=Zml2ZQ==\x07\x1b]1337;SetUserVar=StatusBarSlot6=c2l4\x07", &sink);
-    try std.testing.expectEqual(@as(usize, 6), updates.len);
-    for (0..6) |n| try std.testing.expectEqual(n, updates.slots[n]);
-    try std.testing.expectEqualStrings("one", updates.values[0][0..updates.lens[0]]);
-    try std.testing.expectEqualStrings("six", updates.values[5][0..updates.lens[5]]);
-    for (updates.modes[0..6]) |mode| try std.testing.expectEqual(SlotMode.markup, mode);
-    const literal = "\x1b]1337;SetUserVar=StatusBarSlotLiteral4=IyNbYm9sZF0=\x07";
-    for (literal) |byte| out.feed(&.{byte}, &sink);
-    try std.testing.expectEqual(@as(usize, 7), updates.len);
-    try std.testing.expectEqual(@as(usize, 3), updates.slots[6]);
-    try std.testing.expectEqual(SlotMode.literal, updates.modes[6]);
-    try std.testing.expectEqualStrings("##[bold]", updates.values[6][0..updates.lens[6]]);
-    out.feed("\x1b]1337;SetUserVar=StatusBarSlotLiteral04=YQ==\x07\x1b]1337;SetUserVar=StatusBarSlotLiteral9=YQ==\x07\x1b]1337;SetUserVar=StatusBarSlotLiteralX=YQ==\x07", &sink);
-    try std.testing.expectEqual(@as(usize, 7), updates.len);
-    try std.testing.expectEqual(@as(usize, 0), sink.bytes.items.len);
 }
 
 test "autowrap is tracked" {

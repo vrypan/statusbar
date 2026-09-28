@@ -46,7 +46,9 @@ pub const Budget = struct {
         self.live -= buf.len;
     }
 };
-pub const Owner = enum { fill, left, right };
+/// Which part of a line a cell shows: the text before or after the fill,
+/// or the fill itself.
+pub const Owner = enum { fill, prefix, suffix };
 pub const Span = struct {
     start: u32 = 0,
     len: u32 = 0,
@@ -99,9 +101,12 @@ pub const Row = struct {
         try self.cells.resize(gpa, cols);
         @memset(self.cells.items, .{ .style = style });
         self.data.clearRetainingCapacity();
-        // Sum of the three independent <=4096-byte domains, plus replacement
-        // characters. Rules repeat cell references rather than duplicating text.
+        // Fills repeat cell references rather than duplicating text. Longer
+        // lines reserve their own bound before placing cells.
         try self.data.ensureTotalCapacity(gpa, 16 * 1024);
+    }
+    pub fn reserveData(self: *Row, gpa: std.mem.Allocator, bytes: usize) !void {
+        try self.data.ensureTotalCapacity(gpa, bytes);
     }
     fn keep(self: *Row, bytes: []const u8) Span {
         const span: Span = .{ .start = @intCast(self.data.items.len), .len = @intCast(bytes.len) };
@@ -165,8 +170,8 @@ pub const Row = struct {
     }
 };
 pub const Target = union(enum) {
-    slot: Owner,
-    region: struct { owner: Owner, id: u4 },
+    part: Owner,
+    region: u4,
     /// Half-open column range; touching a continuation includes its lead.
     range: struct { start: usize, end: usize },
 };
@@ -174,8 +179,8 @@ fn selected(row: Row, col: usize, target: Target) bool {
     const cell = row.cells.items[col];
     if (cell.kind == .continuation) return false;
     return switch (target) {
-        .slot => |owner| owner != .fill and cell.owner == owner,
-        .region => |r| cell.owner == r.owner and cell.region == r.id,
+        .part => |owner| cell.owner == owner,
+        .region => |id| cell.region == id,
         .range => |r| r.start < r.end and col < r.end and col + cell.width > r.start,
     };
 }
@@ -202,18 +207,18 @@ test "region metadata targets whole wide glyphs without visual differences" {
     var b: Row = .{};
     defer b.deinit(gpa);
     try a.reset(gpa, 3, .{});
-    a.put(0, .{ .bytes = "界", .columns = 2, .style = .{}, .link = .{}, .region = 3 }, .left);
-    a.put(2, .{ .bytes = "x", .columns = 1, .style = .{}, .link = .{} }, .left);
+    a.put(0, .{ .bytes = "界", .columns = 2, .style = .{}, .link = .{}, .region = 3 }, .prefix);
+    a.put(2, .{ .bytes = "x", .columns = 1, .style = .{}, .link = .{} }, .prefix);
     try b.reserveCopy(gpa, a);
     b.copyReserved(a);
     b.cells.items[0].region = 4;
     try std.testing.expect(a.changes(b).any());
     try std.testing.expect(!a.changes(b).visual());
     b.copyReserved(a);
-    patch(&b, .{ .region = .{ .owner = .left, .id = 3 } }, .{ .bold = true });
+    patch(&b, .{ .region = 3 }, .{ .bold = true });
     try std.testing.expect(b.cells.items[0].style.bold and b.cells.items[1].style.bold);
     try std.testing.expect(!b.cells.items[2].style.bold);
-    restore(&b, a, .{ .region = .{ .owner = .left, .id = 3 } });
+    restore(&b, a, .{ .region = 3 });
     try std.testing.expect(b.visuallyEqual(a));
 }
 
@@ -236,12 +241,12 @@ test "wide targets and semantic comparisons do not depend on arena offsets" {
     try b.reset(gpa, 3, .{});
     _ = b.keep("unused");
     const glyph: text.Glyph = .{ .bytes = "界", .columns = 2, .style = .{}, .link = .{} };
-    a.put(0, glyph, .left);
-    b.put(0, glyph, .left);
+    a.put(0, glyph, .prefix);
+    b.put(0, glyph, .prefix);
     try std.testing.expect(!a.changes(b).any());
     patch(&b, .{ .range = .{ .start = 1, .end = 2 } }, .{ .bold = true });
     try std.testing.expect(b.cells.items[0].style.bold and b.cells.items[1].style.bold);
     try std.testing.expect(a.changes(b).style and !a.changes(b).glyph);
-    restore(&b, a, .{ .slot = .left });
+    restore(&b, a, .{ .part = .prefix });
     try std.testing.expect(!a.changes(b).any());
 }

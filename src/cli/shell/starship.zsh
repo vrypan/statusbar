@@ -1,8 +1,9 @@
 # statusbar integration for zsh: eval "$(statusbar init zsh)"
 #
 # Runs starship's normal prompt and splits it: every line but the last goes
-# to the bar's left slot, and the last line, the prompt character, stays in
-# the terminal. A one-line prompt stays whole and leaves the bar alone.
+# to a bar line (prompt by default), and the last line, the prompt
+# character, stays in the terminal. A one-line prompt stays whole and
+# leaves the bar alone.
 if (( $+commands[starship] )); then
   __statusbar_prompt() {
     local out full rest newline
@@ -19,7 +20,7 @@ if (( $+commands[starship] )); then
       out=${out##*$'\n'}
       # Starship marks escape codes with %{ %} and doubles literal percent
       # signs for zsh; prompt expansion turns that back into plain output.
-      if ! command @STATUSBAR@ set @SLOT@ "${(%)rest}" 2>/dev/null; then
+      if ! command @STATUSBAR@ set @LINE@ "${(%)rest}" 2>/dev/null; then
         out=$full
         newline=''
       fi

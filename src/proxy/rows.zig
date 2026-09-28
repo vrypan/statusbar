@@ -1,18 +1,13 @@
 //! The bar's rows: reserving and releasing them, composing their content,
-//! and pushed-row requests from the control socket.
+//! and resizing the bar when lines are added or removed.
 
 const std = @import("std");
 const sys = @import("platform").sys;
 const config = @import("model").config;
 const Runtime = @import("model").runtime_config.Runtime;
-const PushedRows = @import("session").pushed_rows.Rows;
-const PushedRow = @import("session").pushed_rows.Row;
-const pushed_rows = @import("session").pushed_rows;
-const push_protocol = @import("session").push_protocol;
-const control = @import("session").session_control;
+const Lines = @import("session").lines.Lines;
 const Layout = @import("layout.zig").Layout;
 const Proxy = @import("proxy.zig").Proxy;
-const paint_quiet_ms = @import("loop.zig").paint_quiet_ms;
 const schedulerProxy = @import("proxy.zig").schedulerProxy;
 const stdin_fd = @import("proxy.zig").stdin_fd;
 
@@ -48,33 +43,37 @@ pub fn releaseRows(self: *Proxy) void {
     self.terminal.flush();
 }
 
-pub fn composeRows(self: *Proxy, runtime: *Runtime, layout: Layout, invalidate: bool) !void {
-    try runtime.composition.rebuild(&runtime.source, &runtime.look, self.pushed.items.items, layout.bar);
-    const look = runtime.composition.look(runtime.look.palette);
-    const content = &runtime.composition.content.?;
-    if (invalidate) try runtime.renderer.relayout(content, &look) else try runtime.renderer.acceptContent(content, &look);
+/// Formats pending lines and hands them to the renderer. `_` keeps the
+/// signature shared with a candidate runtime whose layout is not active yet.
+pub fn composeRows(self: *Proxy, runtime: *Runtime, _: Layout, invalidate: bool) !void {
+    _ = self;
+    _ = runtime.source.rebuild();
+    if (invalidate) try runtime.renderer.relayout(&runtime.source.content, &runtime.look) else try runtime.renderer.acceptContent(&runtime.source.content, &runtime.look);
 }
 
-pub fn composePushedUpdate(self: *Proxy, runtime: *Runtime, layout: Layout, index: usize) !bool {
-    if (!try runtime.composition.updatePush(&runtime.source, &runtime.look, self.pushed.items.items, layout.bar, index)) return false;
-    const look = runtime.composition.look(runtime.look.palette);
-    try runtime.renderer.acceptContent(&runtime.composition.content.?, &look);
-    return true;
+/// A line's value or status changed. Its other rows are not reparsed.
+pub fn refreshLine(self: *Proxy, index: usize, now_ms: i64) !void {
+    self.runtime.source.markLine(index);
+    _ = self.runtime.source.rebuild();
+    try self.runtime.renderer.acceptContent(&self.runtime.source.content, &self.runtime.look);
+    if (index < self.layout.bar) self.requestPaint(now_ms);
 }
 
-pub fn resizeForPushedRows(self: *Proxy, now_ms: i64) !void {
+/// Follows the line store after lines were added or removed. On failure the
+/// caller restores the store and the previous geometry is put back.
+pub fn resizeForLines(self: *Proxy, now_ms: i64) !void {
     const outer = try sys.getWinsize(stdin_fd);
-    const count = @as(usize, self.runtime.lines) + self.pushed.items.items.len;
-    if (count > 65533) return error.RowLimit;
+    const count = self.lines.items.items.len;
+    if (count > config.max_lines) return error.RowLimit;
     const old = self.layout;
     const previous_terminal = self.runtime.source.terminal;
     const next = Layout.of(outer, @intCast(count));
+    try self.runtime.source.syncLines();
     try self.runtime.renderer.resize(next.bar, next.cols);
     errdefer {
         self.layout = old;
         self.runtime.source.setTerminalSize(previous_terminal);
         self.runtime.renderer.resize(old.bar, old.cols) catch {};
-        self.composeRows(self.runtime, old, true) catch {};
         self.output.damaged = true;
         self.requestPaint(now_ms);
     }
@@ -90,146 +89,11 @@ pub fn resizeForPushedRows(self: *Proxy, now_ms: i64) !void {
     self.requestPaint(now_ms);
 }
 
-pub fn controlRequest(self: *Proxy, request: push_protocol.Request, owner: []const u8, now_ms: i64) push_protocol.Reply {
-    if (request == .fifo_create) return self.createFifo(request.fifo_create.name, request.fifo_create.slot, now_ms);
-    if (request == .fifo_remove) return self.removeFifo(request.fifo_remove, now_ms);
-    if (request == .fifo_finish) return self.finishFifo(request.fifo_finish.name, request.fifo_finish.result, now_ms);
-    if (request == .fifo_start) return self.startFifo(request.fifo_start, now_ms);
-    if (request == .create) {
-        if (@as(usize, self.runtime.lines) + self.pushed.items.items.len >= 65533) return .rejected;
-        const tag = request.create;
-        const id = self.pushed.push(owner, tag) catch return .rejected;
-        self.resizeForPushedRows(now_ms) catch {
-            _ = self.pushed.pop(id);
-            self.pushed.next_id = id;
-            return .rejected;
-        };
-        const row_index = @as(usize, self.runtime.lines) + self.pushed.items.items.len - 1;
-        const right_width = if (row_index < self.runtime.renderer.rows.len)
-            @min(self.runtime.renderer.rows[row_index].semantic[1].cells.items.len, self.layout.cols)
-        else
-            std.fmt.count("[{d}]", .{id});
-        const left_fixed_width = if (row_index < self.runtime.renderer.rows.len)
-            @min(self.runtime.renderer.rows[row_index].semantic[0].cells.items.len, self.layout.cols)
-        else
-            0;
-        const gap: usize = if (right_width > 0) 1 else 0;
-        const available = @max(1, @as(usize, self.layout.cols) -| (left_fixed_width + right_width + gap));
-        return .{ .created = .{ .id = id, .columns = available } };
-    }
-    if (request == .pop_all) {
-        const previous = self.pushed.items.items;
-        if (previous.len == 0) return .ok;
-        for (self.fifos.items.items) |*binding| if (binding.target == .row and !binding.ownedPath()) return .rejected;
-        // Keep storage and IDs so a failed resize can restore all lines.
-        self.pushed.items.items.len = 0;
-        self.resizeForPushedRows(now_ms) catch {
-            self.pushed.items.items = previous;
-            self.composeRows(self.runtime, self.layout, true) catch {};
-            return .rejected;
-        };
-        var i = self.fifos.items.items.len;
-        var cleanup_failed = false;
-        while (i > 0) {
-            i -= 1;
-            if (self.fifos.items.items[i].target == .row) self.fifos.remove(i) catch {
-                cleanup_failed = true;
-            };
-        }
-        return if (cleanup_failed) .rejected else .ok;
-    }
-    const id = switch (request) {
-        .create, .pop_all, .fifo_create, .fifo_remove, .fifo_finish, .fifo_start => unreachable,
-        .update => |update| update.id,
-        .finish => |finish| finish.id,
-        .pop => |id| id orelse self.pushed.latestId() orelse return .empty,
-    };
-    if (id == 0 or id >= self.pushed.next_id) return .rejected;
-    if (request == .pop) if (self.fifos.findRow(id)) |fifo_index| {
-        var name: [64]u8 = undefined;
-        const found = self.fifos.items.items[fifo_index].nameSlice();
-        @memcpy(name[0..found.len], found);
-        return self.removeFifo(name[0..found.len], now_ms);
-    };
-    if (request == .update or request == .finish) {
-        if (request == .finish and !self.pushed.exists(id)) return .ok;
-        if (!self.pushed.ownedBy(id, owner)) return .rejected;
-        var before: ?PushedRow = null;
-        var changed_index: usize = 0;
-        for (self.pushed.items.items, 0..) |row, index| if (row.id == id) {
-            before = row;
-            changed_index = index;
-            break;
-        };
-        const changed = if (request == .update) self.pushed.update(id, request.update.value) else changed: {
-            const row = &self.pushed.items.items[changed_index];
-            if (row.completion) |result| {
-                if (!std.meta.eql(result, request.finish.result)) return .rejected;
-                break :changed false;
-            }
-            row.completion = request.finish.result;
-            break :changed true;
-        };
-        if (changed) {
-            const visible = self.composePushedUpdate(self.runtime, self.layout, changed_index) catch {
-                for (self.pushed.items.items) |*row| if (row.id == id) {
-                    row.* = before.?;
-                    break;
-                };
-                self.composeRows(self.runtime, self.layout, true) catch {};
-                return .rejected;
-            };
-            if (visible) self.requestPaint(now_ms);
-        }
-        return .ok;
-    }
-    if (request == .pop) {
-        for (self.pushed.items.items, 0..) |row, index| {
-            if (row.id != id) continue;
-            _ = self.pushed.pop(id);
-            self.resizeForPushedRows(now_ms) catch {
-                self.pushed.items.insert(self.gpa, index, row) catch unreachable;
-                self.composeRows(self.runtime, self.layout, true) catch {};
-                return .rejected;
-            };
-            break;
-        }
-        return .ok;
-    }
-    return .rejected;
-}
-
-pub fn drainControl(self: *Proxy, now_ms: i64) void {
-    for (0..16) |_| {
-        var packet: [control.max_packet]u8 = undefined;
-        var from: control.Address = undefined;
-        var from_len: std.posix.socklen_t = undefined;
-        const message = self.control_endpoint.receive(&packet, &from, &from_len) orelse break;
-        const owner = control.senderPath(&from, from_len) orelse continue;
-        var envelope = push_protocol.Envelope.parse(message) catch {
-            self.control_endpoint.reply(&from, from_len, "ERR");
-            continue;
-        };
-        var decoded: [pushed_rows.max_text]u8 = undefined;
-        const reply: push_protocol.Reply = reply: {
-            if (!std.mem.eql(u8, envelope.token, &self.session_token)) break :reply .rejected;
-            const request = envelope.decode(&decoded) catch break :reply .rejected;
-            break :reply self.controlRequest(request, owner, now_ms);
-        };
-        if (envelope.needsReply()) {
-            var response: [256]u8 = undefined;
-            const encoded = push_protocol.encodeReply(&response, reply) catch "ERR";
-            self.control_endpoint.reply(&from, from_len, encoded);
-        }
-    }
-}
-
-/// Creating and removing pushed rows resize the bar, which borrows the
-/// cursor save slot. Follow the paint rule: a saved cursor postpones
-/// control requests only until the child's output pauses.
-pub fn controlDue(self: *const Proxy, now_ms: i64) bool {
-    if (!self.output.atBoundary()) return false;
-    return !self.output.cursor_saved or now_ms - self.last_output_ms >= paint_quiet_ms;
+/// After a failed `resizeForLines` and the caller's store rollback, brings
+/// the source and renderer back in line with the restored store.
+pub fn recoverRows(self: *Proxy) void {
+    self.runtime.source.syncLines() catch {};
+    self.composeRows(self.runtime, self.layout, true) catch {};
 }
 
 /// Growing the bar shortens the child's physical area. Scroll only when
@@ -261,92 +125,31 @@ pub fn eraseRows(self: *Proxy, old: Layout) void {
     if (self.output.autowrap) self.terminal.write("\x1b[?7h");
 }
 
-test "pushed stream updates reuse composition storage and prepare one row" {
+test "a line update reuses storage and prepares one row" {
     var counted = std.testing.FailingAllocator.init(std.testing.allocator, .{});
     const gpa = counted.allocator();
     var diag: config.Diagnostic = .{};
-    var cfg = try config.parse(gpa, "[line.1]\nleft = configured\n", &diag);
+    var cfg = try config.parse(gpa, "[line.a]\ntext = configured\n[push]\ntext = \"[#(name)] #(value)\"\n", &diag);
     defer cfg.deinit();
-    var runtime = try Runtime.initInitial(gpa, std.testing.io, &cfg, 1, 80);
-    defer runtime.deinit();
-    var pushed: PushedRows = .{ .allocator = gpa };
-    defer pushed.deinit();
-    _ = try pushed.push("first", "one");
-    const changed_id = try pushed.push("second", "two");
-    _ = try pushed.push("third", "three");
+    var lines = Lines.init(gpa);
+    defer lines.deinit();
+    try lines.configure(&.{"a"});
+    for (0..3) |_| _ = try lines.push(null, null);
     const layout = Layout.of(.{ .row = 24, .col = 80, .xpixel = 0, .ypixel = 0 }, 4);
-    try runtime.renderer.resize(layout.bar, layout.cols);
-    var proxy: Proxy = undefined;
-    proxy.pushed = &pushed;
-    try proxy.composeRows(&runtime, layout, true);
-    const storage = runtime.composition.content.?.lines.ptr;
-
-    try std.testing.expect(pushed.update(changed_id, "BBBB"));
-    try std.testing.expect(try proxy.composePushedUpdate(&runtime, layout, 1));
+    var runtime = try Runtime.initInitial(gpa, std.testing.io, &cfg, &lines, layout.bar, layout.cols);
+    defer runtime.deinit();
+    var proxy = schedulerProxy();
+    proxy.runtime = &runtime;
+    proxy.lines = &lines;
+    proxy.layout = layout;
+    try std.testing.expect(lines.apply(2, .{ .value = .{ .replace = "BBBB" } }));
+    try proxy.refreshLine(2, 0);
     try std.testing.expectEqual(@as(usize, 1), runtime.renderer.parsed_rows);
     const allocations = counted.allocations;
-    try std.testing.expect(pushed.update(changed_id, "CCCC"));
-    try std.testing.expect(try proxy.composePushedUpdate(&runtime, layout, 1));
+    try std.testing.expect(lines.apply(2, .{ .value = .{ .replace = "CCCC" } }));
+    try proxy.refreshLine(2, 0);
     try std.testing.expectEqual(@as(usize, 1), runtime.renderer.parsed_rows);
     try std.testing.expectEqual(allocations, counted.allocations);
-    try std.testing.expectEqual(storage, runtime.composition.content.?.lines.ptr);
-    try std.testing.expectEqualStrings("[2] two > CCCC\t", runtime.composition.content.?.line(2));
-    try std.testing.expectEqualStrings("[3] three > \t", runtime.composition.content.?.line(3));
-
-    const short = Layout.of(.{ .row = 4, .col = 80, .xpixel = 0, .ypixel = 0 }, 4);
-    try runtime.renderer.resize(short.bar, short.cols);
-    try proxy.composeRows(&runtime, short, true);
-    try std.testing.expect(pushed.update(changed_id, "DONE"));
-    try std.testing.expect(!(try proxy.composePushedUpdate(&runtime, short, 1)));
-    try runtime.renderer.resize(layout.bar, layout.cols);
-    try proxy.composeRows(&runtime, layout, true);
-    try std.testing.expectEqualStrings("[2] two > DONE\t", runtime.composition.content.?.line(2));
-}
-
-test "control requests wait out a saved cursor like a paint" {
-    var proxy = schedulerProxy();
-    try std.testing.expect(proxy.controlDue(0));
-
-    // A save that is never restored must not block pushed rows forever.
-    proxy.output.cursor_saved = true;
-    proxy.last_output_ms = 100;
-    try std.testing.expect(!proxy.controlDue(120));
-    try std.testing.expect(proxy.controlDue(130));
-    proxy.output.state = .csi;
-    try std.testing.expect(!proxy.controlDue(1000));
-}
-
-test "finish is authenticated idempotent and repaints a style-only change" {
-    const gpa = std.testing.allocator;
-    var diag: config.Diagnostic = .{};
-    var cfg = try config.parse(gpa, "[line.1]\n[line.push]\nleft = #(stream)\n[line.push.done]\nstyle = fg=red\n", &diag);
-    defer cfg.deinit();
-    var runtime = try Runtime.initInitial(gpa, std.testing.io, &cfg, 1, 80);
-    defer runtime.deinit();
-    var pushed: PushedRows = .{ .allocator = gpa };
-    defer pushed.deinit();
-    const id = try pushed.push("owner", "");
-    try std.testing.expect(pushed.update(id, "retained"));
-    const layout = Layout.of(.{ .row = 24, .col = 80, .xpixel = 0, .ypixel = 0 }, 2);
-    try runtime.renderer.resize(layout.bar, layout.cols);
-    var proxy = schedulerProxy();
-    proxy.pushed = &pushed;
-    proxy.runtime = &runtime;
-    proxy.layout = layout;
-    try proxy.composeRows(&runtime, layout, true);
-    const finish: push_protocol.Request = .{ .finish = .{ .id = id, .result = .{ .exited = 7 } } };
-    try std.testing.expectEqual(push_protocol.Reply.rejected, proxy.controlRequest(finish, "other", 1));
-    try std.testing.expect(pushed.items.items[0].completion == null);
-    try std.testing.expectEqual(push_protocol.Reply.ok, proxy.controlRequest(finish, "owner", 2));
-    try std.testing.expectEqual(@as(?i64, 2), proxy.paint_requested_ms);
-    try std.testing.expectEqualStrings("retained\t", runtime.composition.content.?.line(1));
-    try std.testing.expectEqualStrings("31", runtime.composition.styles[1]);
-    proxy.paint_requested_ms = null;
-    try std.testing.expectEqual(push_protocol.Reply.ok, proxy.controlRequest(finish, "owner", 3));
-    try std.testing.expect(proxy.paint_requested_ms == null);
-    try std.testing.expectEqual(push_protocol.Reply.rejected, proxy.controlRequest(.{ .finish = .{ .id = id } }, "owner", 3));
-    try std.testing.expectEqual(push_protocol.Reply.ok, proxy.controlRequest(.{ .update = .{ .id = id, .value = "late" } }, "owner", 4));
-    try std.testing.expectEqualStrings("retained", pushed.items.items[0].value());
-    try std.testing.expect(pushed.pop(id));
-    try std.testing.expectEqual(push_protocol.Reply.ok, proxy.controlRequest(finish, "owner", 5));
+    try std.testing.expectEqualStrings("[3] CCCC", runtime.source.content.line(2));
+    try std.testing.expectEqualStrings("[4] ", runtime.source.content.line(3));
 }

@@ -4,6 +4,7 @@
 pub const buffers = @import("buffers.zig");
 pub const fifo = @import("fifo.zig");
 pub const layout = @import("layout.zig");
+pub const line_control = @import("line_control.zig");
 pub const loop = @import("loop.zig");
 pub const process = @import("process.zig");
 pub const proxy = @import("proxy.zig");
@@ -15,6 +16,7 @@ test {
     _ = buffers;
     _ = fifo;
     _ = layout;
+    _ = line_control;
     _ = loop;
     _ = process;
     _ = proxy;

@@ -16,7 +16,8 @@
 //!
 //! This file sets up a session and owns the `Proxy` state. Its methods live
 //! in the files listed at the end of `Proxy`: `loop.zig` (the poll loop and
-//! paint scheduling), `rows.zig` (the bar's rows and pushed-row requests),
+//! paint scheduling), `rows.zig` (the bar's rows), `line_control.zig` (line
+//! requests from the control socket), `fifo.zig` (FIFO bindings),
 //! `terminal_input.zig`, and `reload.zig` (config replacement).
 
 const std = @import("std");
@@ -28,12 +29,11 @@ const Output = @import("terminal").output.Output;
 const Input = @import("terminal").input.Input;
 const bar = @import("render").bar;
 const config = @import("model").config;
-const Source = @import("model").source.Source;
 const Runtime = @import("model").runtime_config.Runtime;
 const config_protocol = @import("terminal").config_protocol;
 const SessionState = @import("session").session_state.State;
 const PaletteProbe = @import("terminal").terminal_palette.Probe;
-const PushedRows = @import("session").pushed_rows.Rows;
+const Lines = @import("session").lines.Lines;
 const FifoRegistry = @import("session").fifo.Registry;
 const control = @import("session").session_control;
 const process = @import("process.zig");
@@ -63,6 +63,9 @@ pub const Options = struct {
     argv: []const []const u8 = &.{},
     cfg: *const config.Config,
     config_text: []const u8,
+    /// Shown as a failed line when the session starts with the built-in
+    /// config because the selected one could not be used.
+    warning: ?[]const u8 = null,
 };
 
 pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
@@ -70,7 +73,23 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
 
     const outer_term = try posix.tcgetattr(stdin_fd);
     const outer_ws = try sys.getWinsize(stdin_fd);
-    const layout = Layout.of(outer_ws, opts.cfg.definedLines());
+    var lines = Lines.init(gpa);
+    defer lines.deinit();
+    {
+        const names = try opts.cfg.lineNames(gpa);
+        defer gpa.free(names);
+        try lines.configure(names);
+    }
+    var warning_id: ?u64 = null;
+    if (opts.warning) |text| {
+        const id = try lines.push(null, null);
+        var value: [@import("session").line_types.max_value]u8 = undefined;
+        const kept = text[0..@min(text.len, value.len)];
+        @memcpy(value[0..kept.len], kept);
+        _ = lines.apply(lines.findId(id).?, .{ .value = .{ .replace = @import("session").line_types.normalizeValue(value[0..kept.len]) }, .status = .failed });
+        warning_id = id;
+    }
+    const layout = Layout.of(outer_ws, @intCast(lines.items.items.len));
 
     const pty = try sys.openPty(io, &outer_term, &layout.child);
     var master_open = true;
@@ -91,26 +110,26 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     process.sig_pipe_w.store(sig_fds[1], .monotonic);
     installSignalHandlers();
 
-    var runtime = try Runtime.initInitial(gpa, io, opts.cfg, layout.bar, layout.cols);
+    var runtime = try Runtime.initInitial(gpa, io, opts.cfg, &lines, layout.bar, layout.cols);
     defer runtime.deinit();
     runtime.source.setTerminalSize(.{ .rows = outer_ws.row, .cols = outer_ws.col, .content_rows = layout.child.row });
     const session_token = config_protocol.makeToken(io);
-    var session_state = try SessionState.init(io, runtime.lines, opts.config_text, session_token);
+    var session_state = try SessionState.init(io, opts.cfg.lineCount(), opts.config_text, session_token);
     defer session_state.deinit();
     var control_path: [128]u8 = undefined;
     var endpoint = try control.Endpoint.init(io, session_state.path(), &control_path);
     defer endpoint.deinit();
-    var pushed: PushedRows = .{ .allocator = gpa };
-    defer pushed.deinit();
     var fifos = try FifoRegistry.init(io, gpa, session_state.path());
     defer fifos.deinit();
 
     var child_environment = try sys.environMap().clone(gpa);
     defer child_environment.deinit();
     _ = child_environment.swapRemove("STATUSBAR_LINES");
+    // The FIFO directory variable was renamed; never pass an outer session's.
+    _ = child_environment.swapRemove("STATUSBAR_SLOTS");
     try child_environment.put("STATUSBAR_STATE", session_state.path());
     try child_environment.put("STATUSBAR_SESSION_ID", &session_token);
-    try child_environment.put("STATUSBAR_SLOTS", fifos.directoryPath());
+    try child_environment.put("STATUSBAR_FIFOS", fifos.directoryPath());
     const default_argv = [_][]const u8{sys.env("SHELL") orelse "/bin/sh"};
     var executable = try sys.Exec.init(gpa, if (opts.argv.len == 0) &default_argv else opts.argv, &child_environment);
     defer executable.deinit();
@@ -128,15 +147,16 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         .io = io,
         .master = pty.master,
         .layout = layout,
-        .output = .{ .bar = layout.bar, .rows = layout.child.row, .max_slot = @as(usize, runtime.lines) * 2, .update_handler = .{ .context = &runtime.source, .callback = receiveSlotUpdate } },
+        .output = .{ .bar = layout.bar, .rows = layout.child.row },
         .input = .{ .bar = layout.bar, .rows = layout.child.row, .pixel_rows = layout.child.ypixel },
         .runtime = &runtime,
         .renderer = &runtime.renderer,
         .session_state = &session_state,
         .session_token = session_token,
         .control_endpoint = &endpoint,
-        .pushed = &pushed,
+        .lines = &lines,
         .fifos = &fifos,
+        .warning_id = warning_id,
     };
     try proxy.composeRows(&runtime, layout, true);
     defer proxy.releaseRows();
@@ -146,7 +166,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     const pid = system.fork();
     if (pid < 0) return error.ForkFailed;
     if (pid == 0) childExec(pty, &executable);
-    if (opts.log) |log| log.write("session started: pid={d}, rows={d}", .{ pid, runtime.lines });
+    if (opts.log) |log| log.write("session started: pid={d}, rows={d}", .{ pid, opts.cfg.lineCount() });
     sys.close(io, pty.slave);
     slave_open = false;
 
@@ -185,9 +205,11 @@ pub const Proxy = struct {
     session_state: *SessionState,
     session_token: [config_protocol.token_len]u8,
     control_endpoint: *control.Endpoint = undefined,
-    pushed: *PushedRows = undefined,
+    lines: *Lines = undefined,
     fifos: *FifoRegistry = undefined,
     fifo_rotation: usize = 0,
+    /// The startup config warning, removed by a successful replacement.
+    warning_id: ?u64 = null,
 
     terminal: TerminalSink = undefined,
     pending_input: PendingInput = .{},
@@ -217,20 +239,22 @@ pub const Proxy = struct {
     pub const reserveRows = @import("rows.zig").reserveRows;
     pub const releaseRows = @import("rows.zig").releaseRows;
     pub const composeRows = @import("rows.zig").composeRows;
-    pub const composePushedUpdate = @import("rows.zig").composePushedUpdate;
-    pub const resizeForPushedRows = @import("rows.zig").resizeForPushedRows;
-    pub const controlRequest = @import("rows.zig").controlRequest;
-    pub const drainControl = @import("rows.zig").drainControl;
-    pub const controlDue = @import("rows.zig").controlDue;
-    pub const createFifo = @import("fifo.zig").create;
-    pub const removeFifo = @import("fifo.zig").remove;
-    pub const finishFifo = @import("fifo.zig").finish;
-    pub const startFifo = @import("fifo.zig").restart;
+    pub const refreshLine = @import("rows.zig").refreshLine;
+    pub const resizeForLines = @import("rows.zig").resizeForLines;
+    pub const recoverRows = @import("rows.zig").recoverRows;
+    pub const makeRoomForGrowth = @import("rows.zig").makeRoomForGrowth;
+    pub const eraseRows = @import("rows.zig").eraseRows;
+    // line_control.zig
+    pub const controlRequest = @import("line_control.zig").controlRequest;
+    pub const drainControl = @import("line_control.zig").drainControl;
+    pub const controlDue = @import("line_control.zig").controlDue;
+    // fifo.zig
+    pub const bindFifo = @import("fifo.zig").bind;
+    pub const unbindFifo = @import("fifo.zig").unbind;
+    pub const flushFifo = @import("fifo.zig").flush;
     pub const fifoTimeout = @import("fifo.zig").timeout;
     pub const publishFifos = @import("fifo.zig").publish;
     pub const drainFifos = @import("fifo.zig").drain;
-    pub const makeRoomForGrowth = @import("rows.zig").makeRoomForGrowth;
-    pub const eraseRows = @import("rows.zig").eraseRows;
     // terminal_input.zig
     pub const queryCursorRow = @import("terminal_input.zig").queryCursorRow;
     pub const setInputGeometry = @import("terminal_input.zig").setInputGeometry;
@@ -252,11 +276,6 @@ pub const Proxy = struct {
     pub const exitTimeout = @import("loop.zig").exitTimeout;
     pub const drainSignals = @import("loop.zig").drainSignals;
 };
-
-fn receiveSlotUpdate(context: *anyopaque, slot: usize, value: []const u8, mode: @import("shared").slots.SlotMode) void {
-    const source: *Source = @ptrCast(@alignCast(context));
-    source.setOverrideMode(slot, value, mode == .literal);
-}
 
 test "OSC 7 directory titles preserve child output order" {
     var terminal: TerminalSink = .{ .io = undefined };
@@ -305,6 +324,7 @@ test {
     _ = @import("process.zig");
     _ = @import("terminal_input.zig");
     _ = @import("rows.zig");
+    _ = @import("line_control.zig");
     _ = @import("fifo.zig");
     _ = @import("reload.zig");
     _ = @import("loop.zig");

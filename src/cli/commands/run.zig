@@ -2,16 +2,17 @@
 const std = @import("std");
 const Io = std.Io;
 const zecli = @import("zecli");
-const config_source = @import("../config_source.zig");
+const startup_config = @import("../startup_config.zig");
 const proxy = @import("proxy").proxy;
-const config = @import("model").config;
 
 pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
-    const loaded = config_source.loadConfig(arena, io, command.getValue([]const u8, "config"), stderr) catch |err| {
-        try stderr.flush();
-        return if (err == error.ReportedConfigError) 2 else err;
-    };
+    // A config that cannot be used still starts the shell, with a warning.
+    const loaded = try startup_config.load(arena, io, command.getValue([]const u8, "config"));
     const cfg = loaded.config;
+    if (loaded.warning) |warning| {
+        try stderr.print("{s}\n", .{warning});
+        try stderr.flush();
+    }
 
     const child = command.passthrough() orelse &.{};
     const argv = try arena.alloc([]const u8, child.len);
@@ -30,6 +31,7 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stde
         .argv = argv,
         .cfg = cfg,
         .config_text = loaded.text,
+        .warning = loaded.warning,
     };
 
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;

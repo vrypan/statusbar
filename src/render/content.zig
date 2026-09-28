@@ -1,115 +1,145 @@
-//! What the model hands the renderer: each row's raw text with its tracked
-//! regions, and the styles and rules it is drawn with.
+//! What the model hands the renderer: each line's markup text, its optional
+//! fill, its tracked regions, and the bar-wide style it is drawn with.
 
 const std = @import("std");
 const markup = @import("markup.zig");
-const cells = @import("cells.zig");
 
-pub const max_line_bytes = 1024;
+/// A line's markup, including escaped values and command output, is bounded
+/// so a runaway template cannot exhaust the renderer's budget.
+pub const max_line_bytes = 16 * 1024;
+pub const max_regions = 16;
 
-pub const TrackSpan = struct { owner: cells.Owner, id: u4, start: u16, end: u16 };
+pub const Keep = enum { left, right };
 
-pub const Tracks = struct {
-    spans: [32]TrackSpan = undefined,
+/// A tracked region as byte offsets into the line's markup.
+pub const TrackSpan = struct { id: u4, start: u32, end: u32 };
+
+pub const Meta = struct {
+    spans: [max_regions]TrackSpan = undefined,
     len: usize = 0,
-    literal: [2]bool = .{ false, false },
-    /// Pushed rows reserve their right slot when left text is too long.
-    right_priority: bool = false,
-    override_epoch: [2]u64 = .{ 0, 0 },
-    pub fn items(self: *const Tracks) []const TrackSpan {
+    /// Where `#(fill:...)` divides the prefix from the suffix.
+    split: ?u32 = null,
+    keep: Keep = .left,
+    /// The line shown in this row. A different line, or a new epoch of the
+    /// same one, is a silent baseline for its regions.
+    identity: u64 = 0,
+    epoch: u64 = 0,
+
+    pub fn items(self: *const Meta) []const TrackSpan {
         return self.spans[0..self.len];
     }
-    pub fn eql(a: Tracks, b: Tracks) bool {
-        if (a.len != b.len or !std.meta.eql(a.override_epoch, b.override_epoch) or !std.meta.eql(a.literal, b.literal) or a.right_priority != b.right_priority) return false;
+
+    pub fn eql(a: Meta, b: Meta) bool {
+        if (a.len != b.len or !std.meta.eql(a.split, b.split) or a.keep != b.keep or a.identity != b.identity or a.epoch != b.epoch) return false;
         for (a.items(), b.items()) |x, y| if (!std.meta.eql(x, y)) return false;
         return true;
+    }
+
+    /// The same line, whose regions may compare against the previous frame.
+    pub fn sameBaseline(a: Meta, b: Meta) bool {
+        return a.identity == b.identity and a.epoch == b.epoch;
+    }
+};
+
+pub const Line = struct {
+    /// Markup followed by the fill pattern.
+    bytes: std.ArrayList(u8) = .empty,
+    text_len: usize = 0,
+    meta: Meta = .{},
+
+    pub fn text(self: *const Line) []const u8 {
+        return self.bytes.items[0..self.text_len];
+    }
+
+    pub fn pattern(self: *const Line) []const u8 {
+        return self.bytes.items[self.text_len..];
     }
 };
 
 pub const Content = struct {
     allocator: std.mem.Allocator,
-    lines: [][max_line_bytes]u8,
-    lens: []usize,
-    tracks: []Tracks,
+    lines: []Line,
 
     pub fn init(allocator: std.mem.Allocator, count: usize) !Content {
-        const lines = try allocator.alloc([max_line_bytes]u8, count);
-        errdefer allocator.free(lines);
-        const lens = try allocator.alloc(usize, count);
-        errdefer allocator.free(lens);
-        @memset(lens, 0);
-        const tracks = try allocator.alloc(Tracks, count);
-        @memset(tracks, .{});
-        return .{ .allocator = allocator, .lines = lines, .lens = lens, .tracks = tracks };
+        const lines = try allocator.alloc(Line, count);
+        @memset(lines, .{});
+        return .{ .allocator = allocator, .lines = lines };
     }
 
     pub fn deinit(self: *Content) void {
+        for (self.lines) |*entry| entry.bytes.deinit(self.allocator);
         self.allocator.free(self.lines);
-        self.allocator.free(self.lens);
-        self.allocator.free(self.tracks);
         self.* = undefined;
     }
 
-    /// Takes the first lines of a command's output. Returns whether anything
-    /// visible changed.
-    pub fn set(self: *Content, text: []const u8) bool {
-        var changed = false;
-        var it = std.mem.splitScalar(u8, std.mem.trimEnd(u8, text, "\n"), '\n');
-        for (0..self.lines.len) |n| {
-            const raw = it.next() orelse "";
-            const trimmed = std.mem.trimEnd(u8, raw, "\r");
-            const kept = trimmed[0..@min(trimmed.len, max_line_bytes)];
-            changed = self.setLine(n, kept) or changed;
+    /// Resizes to `count` lines, moving line `n` of the result from `from[n]`
+    /// of the old content (or starting empty when null).
+    pub fn remap(self: *Content, count: usize, from: []const ?usize) !void {
+        std.debug.assert(from.len == count);
+        const lines = try self.allocator.alloc(Line, count);
+        for (lines, from) |*entry, source| entry.* = if (source) |index| self.lines[index] else .{};
+        for (self.lines, 0..) |*entry, index| {
+            const kept = for (from) |source| {
+                if (source == index) break true;
+            } else false;
+            if (!kept) entry.bytes.deinit(self.allocator);
         }
-        return changed;
+        self.allocator.free(self.lines);
+        self.lines = lines;
     }
 
     pub fn line(self: *const Content, n: usize) []const u8 {
-        return self.lines[n][0..self.lens[n]];
+        return self.lines[n].text();
     }
 
-    pub fn setLine(self: *Content, n: usize, text: []const u8) bool {
-        return self.setTrackedLine(n, text, .{});
+    pub fn setLine(self: *Content, n: usize, text: []const u8) !bool {
+        return self.set(n, text, "", .{});
     }
-    pub fn setTrackedLine(self: *Content, n: usize, text: []const u8, tracks: Tracks) bool {
+
+    /// Stores a line, truncating overlong markup. Returns whether anything
+    /// the renderer compares changed.
+    pub fn set(self: *Content, n: usize, text: []const u8, pattern: []const u8, meta: Meta) !bool {
         const kept = text[0..@min(text.len, max_line_bytes)];
-        var retained = tracks;
+        var retained = meta;
         for (retained.spans[0..retained.len]) |*span| {
             span.start = @intCast(@min(span.start, kept.len));
             span.end = @intCast(@min(span.end, kept.len));
         }
-        const changed = !std.mem.eql(u8, kept, self.line(n)) or !Tracks.eql(self.tracks[n], retained);
-        @memcpy(self.lines[n][0..kept.len], kept);
-        self.lens[n] = kept.len;
-        self.tracks[n] = retained;
-        return changed;
+        if (retained.split) |split| retained.split = @intCast(@min(split, kept.len));
+        const target = &self.lines[n];
+        const changed = !std.mem.eql(u8, kept, target.text()) or !std.mem.eql(u8, pattern, target.pattern()) or !Meta.eql(target.meta, retained);
+        if (!changed) return false;
+        target.bytes.clearRetainingCapacity();
+        try target.bytes.ensureTotalCapacity(self.allocator, kept.len + pattern.len);
+        target.bytes.appendSliceAssumeCapacity(kept);
+        target.bytes.appendSliceAssumeCapacity(pattern);
+        target.text_len = kept.len;
+        target.meta = retained;
+        return true;
     }
 };
 
-/// How each bar line is drawn, apart from its text.
+/// How the bar is drawn apart from its lines: the bar-wide base style as SGR
+/// parameters, and the palette for markup color names.
 pub const Look = struct {
-    /// SGR parameters for each line, e.g. "7" for reverse.
-    styles: [][]const u8,
-    rules: []?[]const u8,
+    style: []const u8 = "",
     palette: markup.Palette = .{},
 };
 
-pub fn splitSlots(value: []const u8) [2][]const u8 {
-    const tab = std.mem.indexOfScalar(u8, value, '\t') orelse return .{ value, "" };
-    return .{ value[0..tab], value[tab + 1 ..] };
-}
-
-test "content bounds and CRLF behavior are preserved" {
+test "content bounds overlong markup and reports changes" {
     var content = try Content.init(std.testing.allocator, 2);
     defer content.deinit();
-    try std.testing.expect(content.set("one\r\ntwo\nthree\n"));
-    try std.testing.expectEqualStrings("one", content.line(0));
-    try std.testing.expectEqualStrings("two", content.line(1));
-    try std.testing.expect(!content.set("one\ntwo\n"));
-    try std.testing.expect(content.set("one\n"));
-    try std.testing.expectEqualStrings("", content.line(1));
-    var long: [max_line_bytes + 8]u8 = undefined;
-    @memset(&long, 'a');
-    _ = content.setLine(0, &long);
-    try std.testing.expectEqual(max_line_bytes, content.line(0).len);
+    try std.testing.expect(try content.setLine(0, "one"));
+    try std.testing.expect(!try content.setLine(0, "one"));
+    try std.testing.expect(try content.set(0, "one", "-", .{ .split = 3 }));
+    try std.testing.expectEqualStrings("-", content.lines[0].pattern());
+    const long = try std.testing.allocator.alloc(u8, max_line_bytes + 8);
+    defer std.testing.allocator.free(long);
+    @memset(long, 'a');
+    _ = try content.set(1, long, "", .{ .split = max_line_bytes + 4 });
+    try std.testing.expectEqual(max_line_bytes, content.line(1).len);
+    try std.testing.expectEqual(@as(?u32, max_line_bytes), content.lines[1].meta.split);
+    try content.remap(3, &.{ 1, null, 0 });
+    try std.testing.expectEqualStrings("one", content.line(2));
+    try std.testing.expectEqual(@as(usize, 0), content.line(1).len);
 }

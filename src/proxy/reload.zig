@@ -11,21 +11,26 @@ const paint_quiet_ms = @import("loop.zig").paint_quiet_ms;
 const schedulerProxy = @import("proxy.zig").schedulerProxy;
 const stdin_fd = @import("proxy.zig").stdin_fd;
 
+/// Prepares a complete generation against a reconciled copy of the lines,
+/// then swaps both in. Any failure before the swap leaves the session as it
+/// was. Surviving configured lines keep their identity, value and status by
+/// name; pushed lines stay. A successful replacement removes the startup
+/// config warning and the bindings of configured lines it dropped.
 pub fn replaceConfig(self: *Proxy, text: []const u8, now_ms: i64, diag: *config.Diagnostic) !void {
     const outer = sys.getWinsize(stdin_fd) catch return error.TerminalSizeUnavailable;
-    var candidate = try Runtime.initText(self.gpa, self.io, text, outer.row, outer.col, diag);
+    var candidate = try Runtime.initText(self.gpa, self.io, text, self.lines, self.warning_id, outer.col, diag);
     errdefer candidate.deinit();
     candidate.renderer.palette = self.runtime.renderer.palette;
     candidate.renderer.palette_revision = self.runtime.renderer.palette_revision;
-    for (0..@min(candidate.source.override_lens.len, self.runtime.source.override_lens.len)) |slot| {
-        if (self.runtime.source.override_lens[slot]) |len| candidate.source.setOverrideMode(slot, self.runtime.source.overrides[slot][0..len], if (self.runtime.source.override_literal.len > slot) self.runtime.source.override_literal[slot] else false);
+    for (candidate.removed.items) |id| {
+        if (self.fifos.findLine(id)) |index| if (!self.fifos.items.items[index].ownedPath()) return error.FifoPathReplaced;
     }
 
-    var pending_state = try self.session_state.prepare(candidate.lines, text);
+    var pending_state = try self.session_state.prepare(candidate.cfg.lineCount(), text);
     defer pending_state.deinit(self.io);
     const old_layout = self.layout;
-    const total_lines = @as(usize, candidate.lines) + self.pushed.items.items.len;
-    if (total_lines > 65533) return error.RowLimit;
+    const total_lines = candidate.pending_lines.?.items.items.len;
+    if (total_lines > config.max_lines) return error.RowLimit;
     const new_layout = Layout.of(outer, @intCast(total_lines));
     candidate.source.setTerminalSize(.{ .rows = outer.row, .cols = outer.col, .content_rows = new_layout.child.row });
     try candidate.renderer.resize(new_layout.bar, new_layout.cols);
@@ -46,14 +51,12 @@ pub fn replaceConfig(self: *Proxy, text: []const u8, now_ms: i64, diag: *config.
         self.requestPaint(now_ms);
         return err;
     };
+    candidate.commitLines(self.lines);
     std.mem.swap(Runtime, self.runtime, &candidate);
-    var fifo_index = self.fifos.items.items.len;
-    while (fifo_index > 0) {
-        fifo_index -= 1;
-        const binding = &self.fifos.items.items[fifo_index];
-        if (binding.target == .slot and binding.target.slot >= @as(usize, self.runtime.lines) * 2) {
-            self.fifos.remove(fifo_index) catch |err| if (self.log) |log| log.write("FIFO cleanup failed after reload: {t}", .{err});
-        }
+    self.runtime.source.lines = self.lines;
+    self.warning_id = null;
+    for (self.runtime.removed.items) |id| {
+        if (self.fifos.findLine(id)) |index| self.fifos.remove(index) catch |err| if (self.log) |log| log.write("FIFO cleanup failed after reload: {t}", .{err});
     }
     self.renderer = &self.runtime.renderer;
     self.output.resize(new_layout.bar, new_layout.child.row);
@@ -62,8 +65,6 @@ pub fn replaceConfig(self: *Proxy, text: []const u8, now_ms: i64, diag: *config.
     self.terminal.write("\x1b7");
     self.output.writeRegion(&self.terminal);
     self.terminal.write("\x1b8");
-    self.output.max_slot = @as(usize, self.runtime.lines) * 2;
-    self.output.update_handler.?.context = &self.runtime.source;
     self.setInputGeometry(new_layout);
     self.runtime.source.refreshNow(now_ms);
     self.output.damaged = true;
@@ -107,7 +108,7 @@ pub fn applyConfig(self: *Proxy, text: []const u8, now_ms: i64) bool {
         if (self.log) |log| log.write("OSC config rejected: {t}, line={d}", .{ err, diag.line });
         return false;
     };
-    if (self.log) |log| log.write("OSC config applied: rows={d}", .{self.runtime.lines});
+    if (self.log) |log| log.write("OSC config applied: rows={d}", .{self.runtime.cfg.lineCount()});
     return true;
 }
 
@@ -116,14 +117,14 @@ test "a config request waits while the child holds a saved cursor" {
     proxy.log = null;
     proxy.session_token = "0123456789abcdef0123456789abcdef".*;
     proxy.held_config_len = null;
-    const frame = try config_protocol.encode(std.testing.allocator, &proxy.session_token, "[line.1]\nleft = HELD\n");
+    const frame = try config_protocol.encode(std.testing.allocator, &proxy.session_token, "[line.a]\ntext = HELD\n");
     defer std.testing.allocator.free(frame);
     const payload = frame[2 + config_protocol.namespace.len .. frame.len - 2];
 
     proxy.output.cursor_saved = true;
     proxy.last_output_ms = 100;
     try std.testing.expect(!proxy.applyConfigRequest(payload, 100));
-    try std.testing.expectEqualStrings("[line.1]\nleft = HELD\n", proxy.held_config[0..proxy.held_config_len.?]);
+    try std.testing.expectEqualStrings("[line.a]\ntext = HELD\n", proxy.held_config[0..proxy.held_config_len.?]);
 
     // Due after the paint pause, or as soon as the cursor is restored, but
     // never in the middle of a sequence.

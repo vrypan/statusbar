@@ -90,10 +90,8 @@ pub fn commit(self: *Renderer) void {
 test "changed rows overwrite old text without an erase gap" {
     var content = try Content.init(std.testing.allocator, 1);
     defer content.deinit();
-    _ = content.set("longer");
-    var styles = [_][]const u8{""};
-    var rules = [_]?[]const u8{null};
-    const look: Look = .{ .styles = &styles, .rules = &rules };
+    _ = try content.setLine(0, "longer");
+    const look: Look = .{};
     var r = try Renderer.init(std.testing.allocator);
     defer r.deinit();
     try r.resize(1, 10);
@@ -102,7 +100,7 @@ test "changed rows overwrite old text without an erase gap" {
     try std.testing.expect(std.mem.indexOf(u8, first, "\x1b[2K") != null);
     r.commit();
 
-    _ = content.set("x");
+    _ = try content.setLine(0, "x");
     try r.prepare(&content, &look, false);
     const changed = try r.build(24, "", true, false);
     try std.testing.expect(std.mem.indexOf(u8, changed, "\x1b[2K") == null);
@@ -116,13 +114,11 @@ test "changed rows overwrite old text without an erase gap" {
 test "failed batch cannot commit painted cells" {
     var content = try Content.init(std.testing.allocator, 1);
     defer content.deinit();
-    _ = content.set("abc");
-    var styles = [_][]const u8{""};
-    var rules = [_]?[]const u8{null};
+    _ = try content.setLine(0, "abc");
     var r = try Renderer.init(std.testing.allocator);
     defer r.deinit();
     try r.resize(1, 80);
-    try r.prepare(&content, &.{ .styles = &styles, .rules = &rules }, false);
+    try r.prepare(&content, &.{}, false);
     const capacity = r.writer.writer.buffer;
     r.writer.writer.buffer = capacity[0..4];
     try std.testing.expectError(error.WriteFailed, r.build(24, "", true, false));
@@ -146,32 +142,30 @@ test "zero visible rows retain explicit damage repair" {
 test "change kinds distinguish hyperlink appearance and ownership" {
     var content = try Content.init(std.testing.allocator, 1);
     defer content.deinit();
-    var styles = [_][]const u8{""};
-    var rules = [_]?[]const u8{null};
-    const look: Look = .{ .styles = &styles, .rules = &rules };
+    const look: Look = .{};
     var r = try Renderer.init(std.testing.allocator);
     defer r.deinit();
     try r.resize(1, 1);
-    _ = content.set("x");
+    _ = try content.setLine(0, "x");
     try r.prepare(&content, &look, false);
     _ = try r.build(24, "", true, false);
     r.commit();
-    _ = content.set("\tx");
+    _ = try content.set(0, "x", " ", .{ .split = 0 });
     try r.prepare(&content, &look, false);
     try std.testing.expect(r.rows[0].summary.owner and !r.rows[0].summary.visual());
     try std.testing.expectEqualStrings("", try r.build(24, "", true, false));
     r.commit();
-    _ = content.set("\t\x1b[31mx");
+    _ = try content.set(0, "\x1b[31mx", " ", .{ .split = 0 });
     try r.prepare(&content, &look, false);
     try std.testing.expect(r.rows[0].summary.style and !r.rows[0].summary.glyph);
-    _ = content.set("\t\x1b[31m\x1b]8;;https://example.test\x07x");
+    _ = try content.set(0, "\x1b[31m\x1b]8;;https://example.test\x07x", " ", .{ .split = 0 });
     try r.prepare(&content, &look, false);
     try std.testing.expect(r.rows[0].summary.link and !r.rows[0].summary.glyph and !r.rows[0].summary.style);
     const output = try r.build(24, "", true, false);
     try std.testing.expect(std.mem.indexOf(u8, output, "https://example.test") != null);
     try std.testing.expect(std.mem.endsWith(u8, output, "\x1b]8;;\x1b\\\x1b[0m\x1b8\x1b[?7h"));
     r.commit();
-    r.patch(0, .{ .slot = .right }, .{ .bold = true });
+    r.patch(0, .{ .part = .suffix }, .{ .bold = true });
     try std.testing.expectEqual(@as(usize, 1), r.parsed_rows); // no new preparation
     try std.testing.expect(!r.rows[0].base.changes(r.rows[0].desired).glyph);
 }
@@ -179,18 +173,16 @@ test "change kinds distinguish hyperlink appearance and ownership" {
 test "nonadjacent selection uses one complete envelope and no-op commits settle" {
     var content = try Content.init(std.testing.allocator, 3);
     defer content.deinit();
-    _ = content.set("a\nb\nc");
-    var styles = [_][]const u8{ "", "", "" };
-    var rules = [_]?[]const u8{ null, null, null };
-    const look: Look = .{ .styles = &styles, .rules = &rules };
+    for ([_][]const u8{ "a", "b", "c" }, 0..) |text, n| _ = try content.setLine(n, text);
+    const look: Look = .{};
     var r = try Renderer.init(std.testing.allocator);
     defer r.deinit();
     try r.resize(3, 10);
     try r.prepare(&content, &look, true);
     _ = try r.build(22, "", true, true);
     r.commit();
-    _ = content.setLine(0, "A");
-    _ = content.setLine(2, "C");
+    _ = try content.setLine(0, "A");
+    _ = try content.setLine(2, "C");
     try r.prepare(&content, &look, false);
     const bytes = try r.build(22, "", true, false);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, bytes, "\x1b7"));
@@ -198,7 +190,7 @@ test "nonadjacent selection uses one complete envelope and no-op commits settle"
     try std.testing.expect(std.mem.indexOf(u8, bytes, "\x1b[23;1H") == null);
     try std.testing.expect(std.mem.indexOf(u8, bytes, "\x1b[24;1H") != null);
     r.commit();
-    r.patch(0, .{ .slot = .left }, .{ .bold = false });
+    r.patch(0, .{ .part = .prefix }, .{ .bold = false });
     try std.testing.expectEqualStrings("", try r.build(22, "", true, false));
     r.commit();
     try std.testing.expect(!r.rows[0].pending);

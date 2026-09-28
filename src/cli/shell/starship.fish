@@ -29,7 +29,7 @@ if command -q starship
     if string match -rq '(?s)^.*\\n.*$' -- "$out"
       set -l bar (string replace -r '(?s)\\n[^\\n]*$' '' -- "$out" | string collect)
       set out (string replace -r '(?s)^.*\\n' '' -- "$out")
-      if not command @STATUSBAR@ set @SLOT@ "$bar" 2>/dev/null
+      if not command @STATUSBAR@ set @LINE@ "$bar" 2>/dev/null
         set prefix ""
         set out "$full"
       end

@@ -1,14 +1,14 @@
-//! Authenticated local datagrams for acknowledged, session-owned pushed rows.
+//! Authenticated local datagrams for acknowledged, session-owned line control.
 const std = @import("std");
 const posix = std.posix;
 const system = posix.system;
 const sys = @import("platform").sys;
 
-pub const max_packet = @import("push_protocol.zig").max_packet;
+pub const max_packet = @import("line_protocol.zig").max_packet;
 pub const Address = posix.sockaddr.un;
 
 /// recvfrom may return a short or unterminated address. Only a complete
-/// pathname can identify the owner of a pushed row.
+/// pathname can identify the owner of a pushed line.
 pub fn senderPath(from: *const Address, from_len: posix.socklen_t) ?[]const u8 {
     const offset = @offsetOf(Address, "path");
     if (from_len <= offset or from.family != posix.AF.UNIX) return null;

@@ -55,7 +55,7 @@ fn addLayers(
     cli.addImport("completion", packages.completion);
     // The sample config doubles as the built-in default, so the two can't
     // drift apart.
-    cli.addAnonymousImport("default_config", .{ .root_source_file = b.path("samples/default.config") });
+    cli.addAnonymousImport("default_config", .{ .root_source_file = b.path("samples/default.statusbar") });
     return layers;
 }
 

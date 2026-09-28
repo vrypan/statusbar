@@ -7,7 +7,7 @@ const Output = @import("terminal").output.Output;
 const Input = @import("terminal").input.Input;
 const bar = @import("render").bar;
 const Content = @import("render").content.Content;
-const Tracks = @import("render").content.Tracks;
+const Meta = @import("render").content.Meta;
 const Look = @import("render").content.Look;
 const max_line_bytes = @import("render").content.max_line_bytes;
 
@@ -15,21 +15,19 @@ fn measuredContent(content: *Content, colors: usize, regions: usize, region_char
     if (regions > 0) {
         var raw: [max_line_bytes]u8 = undefined;
         var len: usize = 0;
-        var tracks: Tracks = .{};
+        var meta: Meta = .{};
         const left = (regions + 1) / 2;
         for (0..regions) |n| {
-            if (n == left) {
-                raw[len] = '\t';
-                len += 1;
-            }
-            tracks.spans[n] = .{ .owner = if (n < left) .left else .right, .id = @intCast(if (n < left) n else n - left), .start = @intCast(len), .end = @intCast(len + region_chars) };
+            // Half the regions sit before the fill and half after it.
+            if (n == left) meta.split = @intCast(len);
+            meta.spans[n] = .{ .id = @intCast(n), .start = @intCast(len), .end = @intCast(len + region_chars) };
             @memset(raw[len..][0..region_chars], 'x');
             len += region_chars;
             raw[len] = ' ';
             len += 1;
         }
-        tracks.len = regions;
-        _ = content.setTrackedLine(0, raw[0..len], tracks);
+        meta.len = regions;
+        _ = try content.set(0, raw[0..len], " ", meta);
     } else {
         for (0..content.lines.len) |row| {
             var raw: [max_line_bytes]u8 = undefined;
@@ -37,20 +35,19 @@ fn measuredContent(content: *Content, colors: usize, regions: usize, region_char
             for (row * 16..@min(colors, (row + 1) * 16)) |n| {
                 try w.print("\x1b[38;2;{d};180;210mx", .{128 + n});
             }
-            var tracks: Tracks = .{};
-            tracks.spans[0] = .{ .owner = .left, .id = 0, .start = 0, .end = @intCast(w.end) };
-            tracks.len = 1;
-            _ = content.setTrackedLine(row, w.buffered(), tracks);
+            var meta: Meta = .{};
+            meta.spans[0] = .{ .id = 0, .start = 0, .end = @intCast(w.end) };
+            meta.len = 1;
+            _ = try content.set(row, w.buffered(), "", meta);
         }
     }
 }
 
 fn armMeasured(renderer: *bar.Renderer, content: *const Content, now: i64) void {
-    for (renderer.rows, content.tracks) |*row, tracks| {
-        for (tracks.items()) |span| {
-            const side: usize = if (span.owner == .left) 0 else 1;
-            row.highlight_until[side][span.id] = now + renderer.highlight.duration();
-            row.highlight_step[side][span.id] = null;
+    for (renderer.rows, content.lines[0..renderer.rows.len]) |*row, line| {
+        for (line.meta.items()) |span| {
+            row.highlight_until[span.id] = now + renderer.highlight.duration();
+            row.highlight_step[span.id] = null;
         }
     }
 }
@@ -81,9 +78,7 @@ fn adaptiveBench(io: std.Io, out: *std.Io.Writer, colors: usize, regions: usize,
     defer renderer.deinit();
     renderer.palette.foreground = .{ 190, 180, 210 };
     renderer.palette.background = .{ 10, 10, 10 };
-    var styles: [4][]const u8 = @splat("");
-    var rules: [4]?[]const u8 = @splat(null);
-    const look: Look = .{ .styles = styles[0..row_count], .rules = rules[0..row_count] };
+    const look: Look = .{};
     try renderer.resize(@intCast(row_count), if (regions > 0) 512 else 80);
     try renderer.acceptContent(&content, &look);
     _ = try renderer.build(20, "", true, true);
@@ -94,12 +89,11 @@ fn adaptiveBench(io: std.Io, out: *std.Io.Writer, colors: usize, regions: usize,
     var distinct: usize = 0;
     var visible_regions: usize = 0;
     for (renderer.rows) |row| {
-        var seen: [2][16]bool = @splat(@splat(false));
+        var seen: [16]bool = @splat(false);
         for (row.base.cells.items) |cell| {
             if (cell.kind != .lead or cell.region == null) continue;
-            const side: usize = if (cell.owner == .left) 0 else 1;
-            if (!seen[side][cell.region.?]) visible_regions += 1;
-            seen[side][cell.region.?] = true;
+            if (!seen[cell.region.?]) visible_regions += 1;
+            seen[cell.region.?] = true;
             const pair: Pair = .{ .fg = renderer.palette.resolve(cell.style.fg, true) orelse return error.UnresolvedFixture, .bg = renderer.palette.resolve(cell.style.bg, false) orelse return error.UnresolvedFixture };
             var found = false;
             for (pairs[0..distinct]) |p| if (std.meta.eql(p, pair)) {
@@ -177,16 +171,14 @@ fn unrelatedRowBench(io: std.Io, out: *std.Io.Writer) !void {
     defer renderer.deinit();
     renderer.palette.foreground = .{ 190, 180, 210 };
     renderer.palette.background = .{ 10, 10, 10 };
-    var tracks: Tracks = .{};
-    tracks.spans[0] = .{ .owner = .left, .id = 0, .start = 0, .end = 200 };
-    tracks.len = 1;
-    for (1..4) |row| _ = content.setTrackedLine(row, "x" ** 200, tracks);
-    var styles = [_][]const u8{ "", "", "", "" };
-    var rules = [_]?[]const u8{ null, null, null, null };
-    const look: Look = .{ .styles = &styles, .rules = &rules };
+    var meta: Meta = .{};
+    meta.spans[0] = .{ .id = 0, .start = 0, .end = 200 };
+    meta.len = 1;
+    for (1..4) |row| _ = try content.set(row, "x" ** 200, "", meta);
+    const look: Look = .{};
     try renderer.resize(4, 512);
     for (0..4) |n| {
-        _ = content.setLine(0, if (n % 2 == 0) "clock A" else "clock B");
+        _ = try content.setLine(0, if (n % 2 == 0) "clock A" else "clock B");
         try renderer.acceptContent(&content, &look);
     }
     renderer.pulse_preparation_generations = 0;
@@ -194,7 +186,7 @@ fn unrelatedRowBench(io: std.Io, out: *std.Io.Writer) !void {
     const repeats = 10000;
     const start = std.Io.Clock.now(.awake, io).toNanoseconds();
     for (0..repeats) |n| {
-        _ = content.setLine(0, if (n % 2 == 0) "clock A" else "clock B");
+        _ = try content.setLine(0, if (n % 2 == 0) "clock A" else "clock B");
         try renderer.acceptContent(&content, &look);
     }
     const elapsed = std.Io.Clock.now(.awake, io).toNanoseconds() - start;
@@ -207,10 +199,11 @@ fn renderBench(io: std.Io, out: *std.Io.Writer) !void {
     const gpa = counted.allocator();
     var content = try Content.init(gpa, 4);
     defer content.deinit();
-    _ = content.set("#[fg=blue,bold]host#[default]\t12:00\nλ 日本\tmain\n\x1b]8;;https://example.test\x07headline\x1b]8;;\x07\nCPU 20%\tMEM 60%");
-    var styles = [_][]const u8{ "", "", "", "" };
-    var rules = [_]?[]const u8{ "─", null, null, null };
-    const look: Look = .{ .styles = &styles, .rules = &rules };
+    _ = try content.set(0, "#[fg=blue,bold]host#[default]12:00", "─", .{ .split = 29 });
+    _ = try content.set(1, "λ 日本main", " ", .{ .split = 9 });
+    _ = try content.setLine(2, "\x1b]8;;https://example.test\x07headline\x1b]8;;\x07");
+    _ = try content.set(3, "CPU 20%MEM 60%", " ", .{ .split = 7 });
+    const look: Look = .{};
     var renderer = try bar.Renderer.init(gpa);
     defer renderer.deinit();
     try renderer.resize(4, 120);
@@ -219,7 +212,7 @@ fn renderBench(io: std.Io, out: *std.Io.Writer) !void {
     renderer.commit();
     // Warm both staging rows and capacities used by alternating inputs.
     for (0..4) |n| {
-        _ = content.setLine(3, if (n % 2 == 0) "CPU 21%\tMEM 60%" else "CPU 20%\tMEM 60%");
+        _ = try content.set(3, if (n % 2 == 0) "CPU 21%MEM 60%" else "CPU 20%MEM 60%", " ", .{ .split = 7 });
         try renderer.prepare(&content, &look, false);
         _ = try renderer.build(21, "\x1b[1;20r", true, false);
         renderer.commit();
@@ -234,13 +227,13 @@ fn renderBench(io: std.Io, out: *std.Io.Writer) !void {
             var parsed: usize = 0;
             const start = std.Io.Clock.now(.awake, io).toNanoseconds();
             for (0..repeats) |n| {
-                const changed = content.setLine(3, if (std.mem.eql(u8, mode, "one-row") and n % 2 == 0) "CPU 21%\tMEM 60%" else "CPU 20%\tMEM 60%");
+                const changed = try content.set(3, if (std.mem.eql(u8, mode, "one-row") and n % 2 == 0) "CPU 21%MEM 60%" else "CPU 20%MEM 60%", " ", .{ .split = 7 });
                 if (changed) {
                     try renderer.prepare(&content, &look, false);
                     parsed += renderer.parsed_rows;
                 }
                 if (std.mem.eql(u8, mode, "patch")) {
-                    if (n % 2 == 0) renderer.patch(3, .{ .slot = .left }, .{ .bold = true }) else renderer.restore(3, .{ .slot = .left });
+                    if (n % 2 == 0) renderer.patch(3, .{ .part = .prefix }, .{ .bold = true }) else renderer.restore(3, .{ .part = .prefix });
                 }
                 if (changed or std.mem.eql(u8, mode, "full") or std.mem.eql(u8, mode, "patch")) {
                     const output = try renderer.build(21, "\x1b[1;20r", true, std.mem.eql(u8, mode, "full"));
@@ -259,15 +252,15 @@ fn renderBench(io: std.Io, out: *std.Io.Writer) !void {
     }
 }
 
-fn regionContent(content: *Content, long: bool) void {
+fn regionContent(content: *Content, long: bool) !void {
     const a: []const u8 = if (long) "long" else "x";
     var buf: [64]u8 = undefined;
-    const raw = std.fmt.bufPrint(&buf, "CPU {s} MEM steady\tRIGHT", .{a}) catch unreachable;
-    var tracks: Tracks = .{};
-    tracks.spans[0] = .{ .owner = .left, .id = 0, .start = 4, .end = @intCast(4 + a.len) };
-    tracks.spans[1] = .{ .owner = .left, .id = 1, .start = @intCast(9 + a.len), .end = @intCast(15 + a.len) };
-    tracks.len = 2;
-    _ = content.setTrackedLine(0, raw, tracks);
+    const raw = std.fmt.bufPrint(&buf, "CPU {s} MEM steadyRIGHT", .{a}) catch unreachable;
+    var meta: Meta = .{ .split = @intCast(15 + a.len) };
+    meta.spans[0] = .{ .id = 0, .start = 4, .end = @intCast(4 + a.len) };
+    meta.spans[1] = .{ .id = 1, .start = @intCast(9 + a.len), .end = @intCast(15 + a.len) };
+    meta.len = 2;
+    _ = try content.set(0, raw, " ", meta);
 }
 
 fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
@@ -276,14 +269,12 @@ fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
     defer content.deinit();
     var renderer = try bar.Renderer.init(counted.allocator());
     defer renderer.deinit();
-    var styles = [_][]const u8{""};
-    var rules = [_]?[]const u8{null};
-    const look: Look = .{ .styles = &styles, .rules = &rules };
+    const look: Look = .{};
     try renderer.resize(1, 80);
     for (0..6) |n| {
-        regionContent(&content, n % 2 == 0);
+        try regionContent(&content, n % 2 == 0);
         try renderer.acceptContent(&content, &look);
-        renderer.highlightChange(0, 0, @intCast(n));
+        renderer.highlightChange(0, @intCast(n));
         _ = try renderer.compose(@intCast(n));
         _ = try renderer.build(24, "", true, false);
         renderer.commit();
@@ -295,10 +286,10 @@ fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
     var bytes: usize = 0;
     for (0..repeats) |n| {
         const now: i64 = @as(i64, @intCast(n)) * (renderer.highlight.duration() + 300);
-        regionContent(&content, n % 2 == 0);
+        try regionContent(&content, n % 2 == 0);
         try renderer.acceptContent(&content, &look);
-        if (!renderer.rows[0].region_changed[0][0] or renderer.rows[0].region_changed[0][1]) return error.RegionComparisonRegression;
-        renderer.highlightChange(0, 0, now);
+        if (!renderer.rows[0].region_changed[0] or renderer.rows[0].region_changed[1]) return error.RegionComparisonRegression;
+        renderer.highlightChange(0, now);
         _ = try renderer.compose(now + renderer.highlight.frameMs());
         const batch = try renderer.build(24, "", true, false);
         if (renderer.emitted_rows != 1 or std.mem.count(u8, batch, "\x1b7") != 1) return error.UnexpectedBatchCount;
@@ -306,7 +297,7 @@ fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
         renderer.commit();
         const parsed = renderer.parsed_rows;
         // Two simultaneous targets expire in one composition and one batch.
-        renderer.rows[0].highlight_until[0][1] = now + renderer.highlight.duration();
+        renderer.rows[0].highlight_until[1] = now + renderer.highlight.duration();
         _ = try renderer.compose(now + 2 * renderer.highlight.frameMs());
         _ = try renderer.build(24, "", true, false);
         renderer.commit();
@@ -329,10 +320,10 @@ fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
     const pulses = 1000;
     const frames: usize = renderer.highlight.steps() + 1;
     for (0..pulses) |n| {
-        regionContent(&content, n % 2 == 0);
+        try regionContent(&content, n % 2 == 0);
         try renderer.acceptContent(&content, &look);
         const now: i64 = @as(i64, @intCast(n)) * (renderer.highlight.duration() + 300);
-        renderer.highlightChange(0, 0, now);
+        renderer.highlightChange(0, now);
         const parsed = renderer.parsed_rows;
         for (0..frames) |step| {
             _ = try renderer.compose(now + @as(i64, @intCast(step)) * renderer.highlight.frameMs());
@@ -405,7 +396,7 @@ pub fn main(init: std.process.Init) !u8 {
     try unrelatedRowBench(init.io, stdout);
     try regionBench(init.io, stdout);
     for ([_]usize{ 1, 16, 17, 64 }) |colors| try adaptiveBench(init.io, stdout, colors, 0, 1);
-    for ([_]usize{ 1, 8, 32 }) |regions| try adaptiveBench(init.io, stdout, 1, regions, 1);
+    for ([_]usize{ 1, 8, 16 }) |regions| try adaptiveBench(init.io, stdout, 1, regions, 1);
     for ([_]usize{ 64, 200 }) |chars| try adaptiveBench(init.io, stdout, 1, 1, chars);
     try stdout.flush();
     return 0;

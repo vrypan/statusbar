@@ -1,90 +1,34 @@
-//! Coordinate FIFO bindings with configured slots and pushed rows.
+//! Coordinate FIFO bindings with the lines they feed. A binding belongs to
+//! a line identity; its input replaces the line's value and never changes
+//! its status. A writer closing leaves the value in place.
 const std = @import("std");
 const posix = std.posix;
 const sys = @import("platform").sys;
 const fifo = @import("session").fifo;
-const protocol = @import("session").push_protocol;
 const Proxy = @import("proxy.zig").Proxy;
 
-pub fn create(self: *Proxy, name: []const u8, slot: ?usize, now_ms: i64) protocol.Reply {
-    if (!fifo.validName(name)) return .{ .fifo_error = "invalid name" };
-    var target: fifo.Target = undefined;
-    if (slot) |number| {
-        if (number == 0 or number > @as(usize, self.runtime.lines) * 2) return .{ .fifo_error = "invalid slot" };
-        target = .{ .slot = number - 1 };
-    } else if (self.fifos.find(name)) |index| {
-        const existing = &self.fifos.items.items[index];
-        if (existing.target != .row) return .{ .fifo_error = "name already targets a slot" };
-        if (!self.pushed.exists(existing.target.row)) return .{ .fifo_error = "FIFO row is unavailable; remove the binding" };
-        target = existing.target;
-    } else {
-        if (@as(usize, self.runtime.lines) + self.pushed.items.items.len >= 65533) return .{ .fifo_error = "row limit reached" };
-        const id = self.pushed.pushInternal(name) catch return .{ .fifo_error = "row limit reached" };
-        target = .{ .row = id };
-        const path = self.fifos.create(name, target) catch |err| {
-            _ = self.pushed.pop(id);
-            self.pushed.next_id = id;
-            return .{ .fifo_error = createError(err) };
-        };
-        self.resizeForPushedRows(now_ms) catch {
-            var retired = false;
-            if (self.fifos.find(name)) |index| {
-                if (self.fifos.remove(index)) |_| retired = true else |_| {}
-            }
-            _ = self.pushed.pop(id);
-            if (retired) self.pushed.next_id = id;
-            return .{ .fifo_error = "cannot resize bar" };
-        };
-        return .{ .fifo_path = path };
-    }
-    const path = self.fifos.create(name, target) catch |err| return .{ .fifo_error = createError(err) };
-    return .{ .fifo_path = path };
+/// Returns the line's FIFO, creating it on demand. The basename is the
+/// line's public name, so an ID and a name reach the same pipe.
+pub fn bind(self: *Proxy, index: usize) ![]const u8 {
+    const line = &self.lines.items.items[index];
+    var buf: [20]u8 = undefined;
+    return self.fifos.create(line.publicName(&buf), line.id);
 }
 
-fn createError(err: anyerror) []const u8 {
-    return switch (err) {
-        error.NameConflict => "name already targets another slot or row",
-        error.SlotConflict => "slot already has a FIFO",
-        error.BindingLimit => "FIFO limit reached",
-        error.PathCreateFailed => "FIFO path already exists or cannot be created",
-        error.PathReplaced => "FIFO path was replaced",
-        error.InvalidName => "invalid name",
-        else => "cannot create FIFO",
-    };
+/// Removes a line's binding, keeping the line, its value and its status.
+pub fn unbind(self: *Proxy, id: u64) !void {
+    const index = self.fifos.findLine(id) orelse return;
+    try self.fifos.remove(index);
 }
 
-pub fn remove(self: *Proxy, name: []const u8, now_ms: i64) protocol.Reply {
-    if (!fifo.validName(name)) return .{ .fifo_error = "invalid name" };
-    const index = self.fifos.find(name) orelse return .ok;
-    const target = self.fifos.items.items[index].target;
-    if (!self.fifos.items.items[index].ownedPath()) return .{ .fifo_error = "FIFO path was replaced" };
-    var removed_row: ?@import("session").pushed_rows.Row = null;
-    var removed_index: usize = 0;
-    if (target == .row) {
-        const id = target.row;
-        for (self.pushed.items.items, 0..) |row, i| if (row.id == id) {
-            removed_row = row;
-            removed_index = i;
-            break;
-        };
-        if (removed_row) |_| {
-            _ = self.pushed.pop(id);
-            self.resizeForPushedRows(now_ms) catch {
-                self.pushed.items.insert(self.gpa, removed_index, removed_row.?) catch unreachable;
-                self.composeRows(self.runtime, self.layout, true) catch {};
-                return .{ .fifo_error = "cannot resize bar" };
-            };
-        }
-    }
-    self.fifos.remove(index) catch {
-        if (removed_row) |row| {
-            self.pushed.items.insert(self.gpa, removed_index, row) catch unreachable;
-            self.resizeForPushedRows(now_ms) catch {};
-        }
-        return .{ .fifo_error = "cannot remove FIFO path" };
-    };
-    if (target == .slot) self.runtime.source.setOverrideMode(target.slot, "", true);
-    return .ok;
+/// Applies input already written to a line's FIFO before a request that
+/// follows it, so the request is ordered after that input.
+pub fn flush(self: *Proxy, id: u64, now_ms: i64) void {
+    const index = self.fifos.findLine(id) orelse return;
+    const item = &self.fifos.items.items[index];
+    _ = drainPending(item, now_ms);
+    if (item.sent_revision == item.input_revision and !item.stream.pending()) return;
+    publishBinding(self, item, now_ms) catch {};
 }
 
 /// A control datagram can arrive before bytes already written to the FIFO.
@@ -105,89 +49,26 @@ fn drainPending(item: *fifo.Binding, now_ms: i64) bool {
     return false;
 }
 
-fn pushedBinding(self: *Proxy, name: []const u8) ?struct { binding: *fifo.Binding, row_index: usize } {
-    const binding_index = self.fifos.find(name) orelse return null;
-    const binding = &self.fifos.items.items[binding_index];
-    if (binding.target != .row or !binding.ownedPath()) return null;
-    for (self.pushed.items.items, 0..) |row, index| {
-        if (row.id == binding.target.row) return .{ .binding = binding, .row_index = index };
-    }
-    return null;
-}
-
-pub fn finish(self: *Proxy, name: []const u8, result: @import("session").pushed_rows.Completion, now_ms: i64) protocol.Reply {
-    if (!fifo.validName(name)) return .{ .fifo_error = "invalid name" };
-    const target = pushedBinding(self, name) orelse return .{ .fifo_error = "pushed FIFO not found" };
-    const row = &self.pushed.items.items[target.row_index];
-    if (row.completion) |previous| {
-        return if (std.meta.eql(previous, result)) .ok else .{ .fifo_error = "row already completed; use --start first" };
-    }
-    if (!drainPending(target.binding, now_ms)) return .{ .fifo_error = "FIFO is still receiving output; retry after writers close" };
-    const before = row.*;
-    if (target.binding.stream.candidate_valid) {
-        const value = target.binding.stream.value();
-        @memcpy(row.text[0..value.len], value);
-        row.len = value.len;
-    }
-    row.completion = result;
-    const visible = self.composePushedUpdate(self.runtime, self.layout, target.row_index) catch {
-        row.* = before;
-        self.composeRows(self.runtime, self.layout, true) catch {};
-        return .{ .fifo_error = "cannot update pushed row" };
-    };
-    if (visible) self.requestPaint(now_ms);
-    if (target.binding.stream.candidate_valid) target.binding.stream.markSent(now_ms);
-    target.binding.sent_revision = target.binding.input_revision;
-    return .ok;
-}
-
-pub fn restart(self: *Proxy, name: []const u8, now_ms: i64) protocol.Reply {
-    if (!fifo.validName(name)) return .{ .fifo_error = "invalid name" };
-    const target = pushedBinding(self, name) orelse return .{ .fifo_error = "pushed FIFO not found" };
-    const row = &self.pushed.items.items[target.row_index];
-    if (row.completion == null) return .ok;
-    if (!drainPending(target.binding, now_ms)) return .{ .fifo_error = "FIFO is still receiving output; retry after writers close" };
-    const before = row.*;
-    row.completion = null;
-    row.len = 0;
-    const visible = self.composePushedUpdate(self.runtime, self.layout, target.row_index) catch {
-        row.* = before;
-        self.composeRows(self.runtime, self.layout, true) catch {};
-        return .{ .fifo_error = "cannot update pushed row" };
-    };
-    if (visible) self.requestPaint(now_ms);
-    target.binding.stream = .{};
-    target.binding.input_revision = 0;
-    target.binding.sent_revision = 0;
-    target.binding.utf8_len = 0;
-    target.binding.utf8_expected = 0;
-    return .ok;
-}
-
 pub fn timeout(self: *const Proxy, now_ms: i64) i64 {
     var next: i64 = -1;
     for (self.fifos.items.items) |*item| next = @import("loop.zig").minTimeout(next, item.stream.timeout(now_ms));
     return next;
 }
 
+fn publishBinding(self: *Proxy, item: *fifo.Binding, now_ms: i64) !void {
+    const value = item.stream.value();
+    if (self.lines.findId(item.line)) |index| {
+        if (self.lines.apply(index, .{ .value = .{ .replace = value } })) try self.refreshLine(index, now_ms);
+    }
+    item.stream.markSent(now_ms);
+    item.sent_revision = item.input_revision;
+}
+
 pub fn publish(self: *Proxy, now_ms: i64) !void {
     for (self.fifos.items.items) |*item| {
         if (item.stream.timeout(now_ms) != 0) continue;
         if (item.sent_revision == item.input_revision and !item.stream.pending()) continue;
-        const value = item.stream.value();
-        switch (item.target) {
-            .slot => |slot| self.runtime.source.setOverrideMode(slot, value, true),
-            .row => |id| {
-                if (self.pushed.update(id, value)) {
-                    for (self.pushed.items.items, 0..) |row, index| if (row.id == id) {
-                        if (try self.composePushedUpdate(self.runtime, self.layout, index)) self.requestPaint(now_ms);
-                        break;
-                    };
-                }
-            },
-        }
-        item.stream.markSent(now_ms);
-        item.sent_revision = item.input_revision;
+        try publishBinding(self, item, now_ms);
     }
 }
 
@@ -239,10 +120,10 @@ test "stale poll snapshot cannot update a recreated FIFO" {
     const state = try std.fmt.bufPrint(&state_buf, "/tmp/statusbar-fifo-snapshot-{d}", .{std.posix.system.getpid()});
     var registry = try fifo.Registry.init(std.testing.io, std.testing.allocator, state);
     defer registry.deinit();
-    _ = try registry.create("old", .{ .slot = 0 });
+    _ = try registry.create("old", 1);
     const old = registry.items.items[0];
     try registry.remove(0);
-    _ = try registry.create("new", .{ .slot = 0 });
+    _ = try registry.create("new", 1);
     const current = &registry.items.items[0];
     try sys.writeAll(std.testing.io, current.keepalive_fd, "new");
     var proxy = @import("proxy.zig").schedulerProxy();

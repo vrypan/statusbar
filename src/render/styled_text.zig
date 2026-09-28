@@ -214,6 +214,9 @@ fn control(cp: u21) bool {
 pub const Link = struct { params: []const u8 = "", uri: []const u8 = "" };
 pub const Boundary = struct { offset: usize, region: ?u4 };
 pub const Event = struct { offset: usize, style: Style, link: Link, region: ?u4 = null };
+/// Where a parse begins: a later part of a line continues the style, link
+/// and tracking region that the part before it ended with.
+pub const Start = struct { style: Style, link: Link = .{}, region: ?u4 = null };
 pub const Scratch = struct {
     plain: [4096]u8 = undefined,
     len: usize = 0,
@@ -244,17 +247,25 @@ pub const Scratch = struct {
         return self.parseTracked(input, base, &.{});
     }
     pub fn parseTracked(self: *Scratch, input: []const u8, base: Style, boundaries: []const Boundary) !void {
+        return self.parseFrom(input, base, .{ .style = base }, boundaries);
+    }
+    /// The style and link after the last parsed byte. Links borrow the input.
+    pub fn endState(self: *const Scratch) Start {
+        const last = self.eventItems()[self.count - 1];
+        return .{ .style = last.style, .link = last.link, .region = last.region };
+    }
+    pub fn parseFrom(self: *Scratch, input: []const u8, base: Style, start: Start, boundaries: []const Boundary) !void {
         const plain = self.plainBytes();
         const events = self.eventItems();
         if (input.len > plain.len) return error.TextTooLong;
         if (boundaries.len > 32 or input.len / 3 + 1 + boundaries.len > events.len) return error.TextTooLong;
         self.len = 0;
         self.count = 1;
-        var style = base;
-        var link: Link = .{};
-        var region: ?u4 = null;
+        var style = start.style;
+        var link: Link = start.link;
+        var region: ?u4 = start.region;
         var boundary: usize = 0;
-        events[0] = .{ .offset = 0, .style = style, .link = link };
+        events[0] = .{ .offset = 0, .style = style, .link = link, .region = region };
         var i: usize = 0;
         while (i < input.len) {
             while (boundary < boundaries.len and boundaries[boundary].offset <= i) : (boundary += 1) {
@@ -301,6 +312,13 @@ pub const Scratch = struct {
                 self.len += step.len;
             }
             i += step.len;
+        }
+        // Markers at the end still decide the region a following part of
+        // the line starts in.
+        while (boundary < boundaries.len) : (boundary += 1) {
+            region = boundaries[boundary].region;
+            events[self.count] = .{ .offset = self.len, .style = style, .link = link, .region = region };
+            self.count += 1;
         }
     }
     pub fn iterator(self: *const Scratch) Iterator {
