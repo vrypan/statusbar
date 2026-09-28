@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic PTY checks for configured rows, resizing, and slot updates."""
+"""Deterministic PTY checks for named lines, templates, resizing, and line control."""
 
 import base64
 import fcntl
@@ -22,14 +22,6 @@ import urllib.parse
 
 def resize(fd, rows, cols=80):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-
-
-def session_state_stub(directory, lines):
-    """Give shell integration tests a current row count without a full proxy."""
-    path = os.path.join(directory, f"statusbar-state-{lines}")
-    with open(path, "w", encoding="ascii") as state:
-        state.write(f"statusbar-state 2\nlines {lines}\n")
-    return path
 
 
 def read_until(fd, data, needle, timeout=5):
@@ -119,421 +111,6 @@ def capture_pty(argv, env=None, rows=24, timeout=5):
     raise AssertionError(f"timed out running {argv!r}; tail={data[-500:]!r}")
 
 
-def osc_value(data, slot):
-    prefix = f"\x1b]1337;SetUserVar=StatusBarSlot{slot}=".encode()
-    start = data.find(prefix)
-    if start < 0:
-        raise AssertionError(f"slot {slot} update missing from {data!r}")
-    start += len(prefix)
-    end = data.find(b"\x07", start)
-    if end < 0:
-        raise AssertionError("unterminated slot update")
-    return base64.b64decode(data[start:end])
-
-
-def check_set_dash(binary):
-    env = os.environ.copy()
-    with tempfile.TemporaryDirectory() as directory:
-        env["STATUSBAR_STATE"] = session_state_stub(directory, 2)
-        for args, value in ((["4", "-"], b"-"),
-                            (["4", "--", "-"], b"-"),
-                            (["--", "4", "-"], b"-"),
-                            (["4", "-", "extra"], b"- extra")):
-            code, data = capture_pty([binary, "set", *args], env)
-            assert code == 0 and osc_value(data, 4) == value, data
-
-        command = f"printf 'ignored' | {shlex.quote(binary)} set 4 -"
-        code, data = capture_pty(["/bin/sh", "-c", command], env)
-        assert code == 0 and osc_value(data, 4) == b"-", data
-    print("set treats a sole dash as literal text")
-def check_init_invocation(binary):
-    env = os.environ.copy()
-    env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
-    with tempfile.TemporaryDirectory() as directory:
-        stable = os.path.join(directory, "statusbar")
-        os.symlink(binary, stable)
-
-        absolute = subprocess.run(
-            [stable, "init", "zsh"], env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
-        )
-        assert f"command '{stable}' set".encode() in absolute.stdout
-        assert f"command '{binary}' set".encode() not in absolute.stdout
-
-        path_env = env.copy()
-        path_env["PATH"] = directory + os.pathsep + path_env.get("PATH", "")
-        by_name = subprocess.run(
-            ["statusbar", "init", "zsh"], env=path_env,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
-        )
-        assert b"command 'statusbar' set" in by_name.stdout
-
-    outside_env = env.copy()
-    outside_env.pop("STATUSBAR_STATE")
-    outside_env["STATUSBAR_LINES"] = "2"  # obsolete variable is ignored
-    outside = subprocess.run([binary, "init", "zsh"], env=outside_env,
-                             capture_output=True, check=True)
-    assert outside.stdout == b"", outside
-
-    print("shell init preserves upgrade-safe invocation paths")
-
-
-def check_stdin_config(binary):
-    config = "interval = 0.1\nstyle = fg=blue\n[line.1]\nleft = PIPE_ONE\n[line.2]\nleft = #(printf PIPE_TWO)\n"
-    q = shlex.quote
-    child = r'''printf '__READY__:%s:%s\n' "$(stty size)" "${STATUSBAR_LINES-unset}"
-while IFS= read -r value; do
-    case "$value" in
-        SIZE) printf '__SIZE__:%s\n' "$(stty size)" ;;
-        RELOAD) printf '[line.1]\nleft = RELOADED\n' | "$1" config ;;
-        EXIT) exit 7 ;;
-        *) printf '__INPUT__:%s\n' "$value" ;;
-    esac
-done
-'''
-    command = shlex.join([binary, "--config=-", "--", "/bin/sh", "-c", child, "sh", binary])
-    env = os.environ.copy()
-    env["STATUSBAR_CONFIG"] = "/does/not/exist/statusbar-config"
-    env["STATUSBAR_LINES"] = "9"  # obsolete parent value must not reach the child
-    script = f"printf %s {q(config)} | {command}"
-    pid, master = spawn(["/bin/sh", "-c", script], env=env)
-    reaped = False
-    try:
-        data = read_until(master, b"", b"__READY__:22 80:unset")
-        data = read_until(master, data, b"PIPE_TWO")
-        assert b"PIPE_ONE" in data, data
-        os.write(master, b"keyboard works\n")
-        data = read_until(master, data, b"__INPUT__:keyboard works")
-        resize(master, 30)
-        time.sleep(0.15)
-        os.write(master, b"SIZE\n")
-        data = read_until(master, data, b"__SIZE__:28 80")
-        os.write(master, b"RELOAD\n")
-        data = read_until(master, data, b"RELOADED")
-        os.write(master, b"EXIT\n")
-        status = reap_while_draining(pid, master)
-        reaped = True
-        assert os.waitstatus_to_exitcode(status) == 7, data
-        flags = termios.tcgetattr(master)[3]
-        assert flags & termios.ICANON and flags & termios.ECHO, flags
-    finally:
-        if reaped:
-            os.close(master)
-        else:
-            stop(pid, master)
-
-    # Here-documents use the same input path and leave the child on a terminal.
-    script = shlex.join([binary, "-c", "-", "--", "/bin/sh", "-c", "test -t 0 && printf HEREDOC_OK"]) + " <<'CONFIG'\n" + config + "CONFIG\n"
-    code, data = capture_pty(["/bin/sh", "-c", script])
-    assert code == 0 and b"HEREDOC_OK" in data, data
-
-    # Validate before entering raw mode, launching the child, or querying the terminal.
-    for text, message in [
-        ("", b"stdin contains no config"),
-        ("# no rows\n", b"config needs at least a [line.1] section"),
-        ("[line.1]\nunknown = value\n", b"stdin:2:"),
-    ]:
-        script = f"printf %s {q(text)} | " + shlex.join([binary, "--config", "-", "--", "/bin/sh", "-c", "printf CHILD_STARTED"])
-        code, data = capture_pty(["/bin/sh", "-c", script])
-        assert code == 2 and message in data, data
-        assert b"CHILD_STARTED" not in data and b"\x1b[" not in data, data
-
-    for text, message in [
-        (b"[line.1]\n#" + b"x" * 65536, b"limit 65536 bytes"),
-        (config.encode(), b"cannot open /dev/tty for keyboard input"),
-    ]:
-        result = subprocess.run([binary, "--config", "-"], input=text, capture_output=True, start_new_session=True, timeout=5)
-        assert result.returncode != 0 and message in result.stderr, result
-
-    # --config - does not make redirected stdout an interactive terminal.
-    with tempfile.TemporaryDirectory() as folder:
-        output = os.path.join(folder, "output")
-        script = f"printf %s {q(config)} | {q(binary)} --config - > {q(output)}"
-        code, data = capture_pty(["/bin/sh", "-c", script])
-        assert code == 1 and b"stdin and stdout must be a terminal" in data, data
-        assert os.path.getsize(output) == 0
-
-    for flag in ["--exec", "--lines", "--interval", "--style", "-e", "-n", "-i", "-s"]:
-        result = subprocess.run([binary, flag, "1"], capture_output=True, timeout=5)
-        assert result.returncode == 2, (flag, result)
-    print("stdin configs, keyboard input, resize, reload, and terminal restoration passed")
-
-
-def check_osc7_titles(binary):
-    local = b"\x1b]7;file:///tmp/a%20project\x07"
-    local_title = b"\x1b]2;/tmp/a project\x1b\\"
-    child_title = b"\x1b]2;child-title\x1b\\"
-    remote = b"\x1b]7;kitty-shell-cwd://server.example/srv/project\x1b\\"
-    remote_title = b"\x1b]2;server.example:/srv/project\x1b\\"
-    malformed = b"\x1b]7;file:///bad%zz\x07"
-    oversized = b"\x1b]7;file:///" + (b"x" * 4097) + b"\x07"
-    deep = b"\x1b]7;file:///one/two/three/four\x07"
-    deep_title = b"\x1b]2;two/three/four\x1b\\"
-    payload = local + child_title + remote + malformed + oversized + deep
-    expected = local + local_title + child_title + remote + remote_title + malformed + oversized + deep + deep_title
-
-    script = "printf '[line.1]\\nleft = bar\\n' | " + shlex.join([
-        binary, "--config", "-",
-        "--", "/bin/sh", "-c", 'printf %s "$1"', "sh", payload.decode("ascii"),
-    ])
-    argv = ["/bin/sh", "-c", script]
-    code, data = capture_pty(argv)
-    assert code == 0, data
-    assert expected in data, data[-6000:]
-    print("OSC 7 forwarding and ordered terminal titles passed")
-
-
-def check_zsh(binary):
-    zsh = shutil.which("zsh")
-    if zsh is None:
-        print("zsh -f integration skipped: zsh unavailable")
-        return
-
-    env = os.environ.copy()
-    env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
-    quoted_binary = shlex.quote(binary)
-    for bad in ("+1", "-1", "zero", "0", "999999999999999999999999999999"):
-        result = subprocess.run(
-            [binary, "init", "zsh", "--starship-slot", bad],
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-        assert result.returncode == 2, (bad, result)
-        assert result.stdout == b"", (bad, result.stdout)
-
-    invalid = subprocess.run(
-        [binary, "init", "zsh"], env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-    )
-    assert invalid.returncode == 0
-    assert b"__statusbar_report_cwd" in invalid.stdout
-
-    zero = subprocess.run(
-        [binary, "init", "zsh", "--starship-slot", "1"], env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-    )
-    assert zero.returncode == 0
-    assert b"__statusbar_report_cwd" in zero.stdout
-
-    with tempfile.TemporaryDirectory() as directory:
-        starship = os.path.join(directory, "starship")
-        with open(starship, "w", encoding="utf-8") as file:
-            file.write("#!/bin/sh\ncase $STARSHIP_TEST_MODE in\n  multi) printf 'bar%%%%literal\\nprompt' ;;\n  one) printf 'one%%%%literal' ;;\nesac\n")
-        os.chmod(starship, 0o755)
-        zenv = env.copy()
-        zenv["STATUSBAR_STATE"] = session_state_stub(directory, 3)
-        zenv["PATH"] = directory + os.pathsep + zenv.get("PATH", "")
-
-        for slot, option in ((3, ""), (5, "--starship-slot 5")):
-            script = (
-                f'export STARSHIP_TEST_MODE=multi; eval "$({quoted_binary} init zsh {option})"; '
-                "__statusbar_prompt"
-            )
-            code, data = capture_pty([zsh, "-f", "-c", script], zenv)
-            assert code == 0, data
-            assert osc_value(data, slot) == b"bar%literal", data
-            assert b"prompt" in data
-
-        script = (
-            f'export STARSHIP_TEST_MODE=one; eval "$({quoted_binary} init zsh)"; '
-            "__statusbar_prompt"
-        )
-        code, data = capture_pty([zsh, "-f", "-c", script], zenv)
-        assert code == 0, data
-        assert b"SetUserVar=StatusBarSlot" not in data
-        assert b"one%%literal" in data, data
-
-        # A slot that is absent from the current layout leaves Starship's
-        # complete prompt in the terminal. The same installed hook can begin
-        # using it after a later configuration reload adds the slot.
-        one_row_env = zenv.copy()
-        one_row_env["STATUSBAR_STATE"] = session_state_stub(directory, 1)
-        script = (
-            f'export STARSHIP_TEST_MODE=multi; eval "$({quoted_binary} init zsh)"; '
-            "__statusbar_prompt"
-        )
-        code, data = capture_pty([zsh, "-f", "-c", script], one_row_env)
-        assert code == 0, data
-        assert b"SetUserVar=StatusBarSlot" not in data
-        assert b"bar%%literal\r\nprompt" in data, data
-
-    print("zsh -f integration passed")
-
-
-def check_fish(binary):
-    fish = shutil.which("fish")
-    if fish is None:
-        print("fish integration skipped: fish unavailable")
-        return
-
-    env = os.environ.copy()
-    env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
-    quoted_binary = shlex.quote(binary)
-    with tempfile.TemporaryDirectory() as directory:
-        starship = os.path.join(directory, "starship")
-        with open(starship, "w", encoding="utf-8") as file:
-            file.write("#!/bin/sh\ncase $STARSHIP_TEST_MODE in\n  multi) printf 'bar%%literal\\nprompt' ;;\n  one) printf 'one%%literal' ;;\nesac\n")
-        os.chmod(starship, 0o755)
-        fenv = env.copy()
-        fenv["STATUSBAR_STATE"] = session_state_stub(directory, 3)
-        fenv["PATH"] = directory + os.pathsep + fenv.get("PATH", "")
-
-        for slot, option in ((3, ""), (5, "--starship-slot 5")):
-            script = (
-                f"set -gx STARSHIP_TEST_MODE multi; {quoted_binary} init fish {option} | source; "
-                "fish_prompt"
-            )
-            code, data = capture_pty([fish, "-N", "-c", script], fenv)
-            assert code == 0, data
-            assert osc_value(data, slot) == b"bar%literal", data
-            assert b"prompt" in data
-
-        script = (
-            f"set -gx STARSHIP_TEST_MODE one; {quoted_binary} init fish | source; "
-            "fish_prompt"
-        )
-        code, data = capture_pty([fish, "-N", "-c", script], fenv)
-        assert code == 0, data
-        assert b"SetUserVar=StatusBarSlot" not in data
-        assert b"one%literal" in data, data
-
-        one_row_env = fenv.copy()
-        one_row_env["STATUSBAR_STATE"] = session_state_stub(directory, 1)
-        script = (
-            f"set -gx STARSHIP_TEST_MODE multi; {quoted_binary} init fish | source; "
-            "fish_prompt"
-        )
-        code, data = capture_pty([fish, "-N", "-c", script], one_row_env)
-        assert code == 0, data
-        assert b"SetUserVar=StatusBarSlot" not in data
-        assert b"bar%literal\r\nprompt" in data, data
-
-    print("fish integration passed")
-
-
-def check_nu(binary):
-    nu = shutil.which("nu")
-    if nu is None:
-        print("Nushell integration skipped: nu unavailable")
-        return
-
-    env = os.environ.copy()
-    env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
-    with tempfile.TemporaryDirectory() as directory:
-        os.symlink(binary, os.path.join(directory, "statusbar"))
-        starship = os.path.join(directory, "starship")
-        with open(starship, "w", encoding="utf-8") as file:
-            file.write("#!/bin/sh\ncase $STARSHIP_TEST_MODE in\n  multi) printf 'bar%%literal\\nprompt' ;;\n  one) printf 'one%%literal' ;;\nesac\n")
-        os.chmod(starship, 0o755)
-        nenv = env.copy()
-        nenv["STATUSBAR_STATE"] = session_state_stub(directory, 3)
-        nenv["PATH"] = directory + os.pathsep + nenv.get("PATH", "")
-
-        sample = os.path.join(os.path.dirname(__file__), "..", "samples", "statusbar.nu")
-        with open(sample, "rb") as file:
-            integration = file.read()
-        for slot in (3, 5):
-            script_path = os.path.join(directory, "statusbar.nu")
-            with open(script_path, "wb") as file:
-                file.write(integration.replace(b"set 3 --", f"set {slot} --".encode()))
-            nenv["STARSHIP_TEST_MODE"] = "multi"
-            script = (
-                '$env.CMD_DURATION_MS = "0823"; $env.LAST_EXIT_CODE = 0; '
-                f'source {script_path}; let prompt = (do $env.PROMPT_COMMAND); print $prompt'
-            )
-            code, data = capture_pty([nu, "-n", "-c", script], nenv)
-            assert code == 0, data
-            assert osc_value(data, slot) == b"bar%literal", data
-            assert b"prompt" in data, data
-
-        nenv["STARSHIP_TEST_MODE"] = "one"
-        code, data = capture_pty([nu, "-n", "-c", script], nenv)
-        assert code == 0 and b"SetUserVar=StatusBarSlot" not in data, data
-        assert b"one%literal" in data, data
-
-        nenv["STARSHIP_TEST_MODE"] = "multi"
-        one_row_env = nenv.copy()
-        one_row_env["STATUSBAR_STATE"] = session_state_stub(directory, 1)
-        code, data = capture_pty([nu, "-n", "-c", script], one_row_env)
-        assert code == 0 and b"SetUserVar=StatusBarSlot" not in data, data
-        assert b"bar%literal\r\nprompt" in data, data
-
-        target = os.path.join(directory, "space % café")
-        os.mkdir(target)
-        cwd_script = (
-            f'source {script_path}; source {script_path}; cd "{target}"; '
-            'print ($env.config.hooks.pre_prompt | length); '
-            'do ($env.config.hooks.pre_prompt | last)'
-        )
-        code, data = capture_pty([nu, "-n", "-c", cwd_script], nenv)
-        assert code == 0 and b"1\r\n" in data, data
-        report = re.search(rb"\x1b\]7;file://(/.*?)\x07", data)
-        assert report is not None, data
-        assert urllib.parse.unquote_to_bytes(report[1].decode()) == target.encode(), data
-
-    print("Nushell integration passed")
-
-
-def check_init_features(binary):
-    env = os.environ.copy()
-    env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
-    for shell in ("zsh", "fish"):
-        for flags in (("--starship=false", "--report-cwd=false"),):
-            result = subprocess.run([binary, "init", shell, *flags], env=env, capture_output=True)
-            assert result.returncode == 0 and result.stdout == b"", result
-        for flags in (("--starship=false", "--starship-slot=1"), ("--report-cwd=wrong",)):
-            result = subprocess.run([binary, "init", shell, *flags], env=env, capture_output=True)
-            assert result.returncode == 2 and result.stdout == b"", result
-        result = subprocess.run([binary, "init", shell, "--report-cwd=false"], env=env, capture_output=True)
-        assert result.returncode == 0 and b"__statusbar_report_cwd" not in result.stdout
-
-        executable = shutil.which(shell)
-        if executable is None:
-            continue
-        # Without Starship, default initialization still works in a one-row
-        # session. Generation must not use the generator's own PATH to decide.
-        generated = subprocess.run([binary, "init", shell], env=env, capture_output=True, check=True).stdout.decode()
-        if shell == "zsh":
-            script = 'PATH=/nonexistent; ' + generated + '\n__statusbar_report_cwd'
-            args = [executable, "-f", "-c", script]
-        else:
-            script = 'set -gx PATH /nonexistent; ' + generated + '\nemit fish_prompt'
-            args = [executable, "-N", "-c", script]
-        code, data = capture_pty(args, env)
-        assert code == 0 and b"\x1b]7;file://" in data, data
-        assert b"does not exist" not in data and b"SetUserVar=" not in data, data
-        with tempfile.TemporaryDirectory(prefix="statusbar-cwd-") as directory:
-            target = os.path.join(directory, "space % café\ncontrol")
-            os.mkdir(target)
-            invocation = shlex.quote(binary) + " init " + shell + " --starship=false"
-            if shell == "zsh":
-                script = (
-                    f'eval "$({invocation})"; eval "$({invocation})"; '
-                    'cd -- "$1"; __statusbar_report_cwd; '
-                    'print -r -- "hooks:${precmd_functions[*]}:${chpwd_functions[*]}"'
-                )
-                argv = [executable, "-f", "-c", script, "zsh", target]
-            else:
-                script = (
-                    f"{invocation} | source; {invocation} | source; "
-                    'cd -- "$argv[1]"; emit fish_prompt'
-                )
-                argv = [executable, "-N", "-c", script, target]
-            code, data = capture_pty(argv, env)
-            assert code == 0, data
-            reports = re.findall(rb"\x1b\]7;file://[^/]*(/.*?)\x1b\\", data)
-            assert len(reports) == 2, data
-            for path in reports:
-                assert urllib.parse.unquote_to_bytes(path.decode()) == target.encode(), (path, target)
-                assert b"\n" not in path and b" " not in path and b"%25" in path, path
-            assert b"SetUserVar=" not in data, data
-            if shell == "zsh":
-                assert b"hooks:__statusbar_report_cwd:__statusbar_report_cwd" in data, data
-    print("independent init features and repeatable encoded CWD hooks passed")
-
-
 def stop(pid, fd):
     try:
         os.write(fd, b"EXIT\n")
@@ -579,6 +156,470 @@ def assert_region_style(data, value, expected):
     assert all(style == expected for _, style in cells[start:start + len(value)]), (value, cells)
 
 
+
+
+ANSI = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
+OSC = re.compile(rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+
+
+def plain(data):
+    """Terminal output without control sequences."""
+    return ANSI.sub(b"", OSC.sub(b"", data))
+
+
+def clean_env(env=None):
+    result = (os.environ if env is None else env).copy()
+    for key in ("STATUSBAR_STATE", "STATUSBAR_SESSION_ID", "STATUSBAR_CONFIG", "STATUSBAR_FIFOS"):
+        result.pop(key, None)
+    return result
+
+
+def run_session(binary, config, child, *args, env=None, timeout=15, rows=24):
+    """Runs a Python child inside a session with an inline config."""
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "session.statusbar")
+        with open(path, "w", encoding="utf-8") as file:
+            file.write(config)
+        return capture_pty([binary, "-c", path, "--", sys.executable, "-c", child, binary, *args],
+                           env=clean_env(env), rows=rows, timeout=timeout)
+
+
+def between(text, start, end):
+    """The output after marker `start` and before marker `end`."""
+    first = text.index(start)
+    return text[first:text.index(end, first)]
+
+
+CHILD_PRELUDE = r"""
+import os, signal, stat, subprocess, sys, tempfile, time
+b = sys.argv[1]
+def run(*args, code=0, input=None, env=None):
+    p = subprocess.run([b, *args], input=input, capture_output=True, env=env, timeout=6)
+    assert p.returncode == code, (args, p.returncode, p.stdout, p.stderr)
+    return p.stdout.decode().strip()
+def settle():
+    time.sleep(.15)
+def mark(name):
+    settle()
+    print(name, flush=True)
+"""
+
+
+def check_set(binary):
+    config = """[line.build]
+default = idle
+text = "BUILD[#(value)|#(status)]"
+done = "DONE[#(value)]"
+failed = ""
+[line.other]
+text = "OTHER[#(value)]"
+"""
+    child = CHILD_PRELUDE + r"""
+mark('STEP_START')
+run('set', 'build'); mark('STEP_UNCHANGED')
+run('set', 'build', '--status', 'running'); mark('STEP_STATUS')
+run('set', 'build', ''); mark('STEP_EMPTY')
+run('set', 'build', 'Build passed', '--status', 'success'); mark('STEP_BOTH')
+run('set', 'build', '--reset'); mark('STEP_RESET')
+run('set', 'build', '--reset', '--status', 'normal'); mark('STEP_RESET_STATUS')
+run('set', 'build', 'a', 'b', '--status', 'failed'); mark('STEP_FAILED')
+run('set', 'build', '--status', 'running'); mark('STEP_RUNNING')
+run('set', '1', '-'); settle()
+run('set', '--', '1', '--dash'); settle()
+run('set', 'build', '#(value) #[fg=red]x ##'); settle()
+run('set', 'other', '\x1b[31mred\x1b[0m'); settle()
+for args in (['build', 'x', '--reset'], ['build', '', '--reset'], ['build', '--status', 'fail'],
+             ['bad.name', 'x'], ['0', 'x'], ['build', 'x' * 1025]):
+    run('set', *args, code=2)
+for args in (['missing', 'x'], ['99', '--status', 'done']):
+    run('set', *args, code=1)
+mark('SET_OK')
+"""
+    code, data = run_session(binary, config, child)
+    assert code == 0 and b"SET_OK" in data, data[-3000:]
+    text = plain(data)
+    assert b"BUILD[idle|normal]" in text[:text.index(b"STEP_START")], text[-3000:]
+    # A set without attributes changes nothing, so nothing is repainted.
+    assert b"BUILD[" not in between(text, b"STEP_START", b"STEP_UNCHANGED"), text[-3000:]
+    assert b"BUILD[idle|running]" in between(text, b"STEP_UNCHANGED", b"STEP_STATUS"), text[-3000:]
+    assert b"BUILD[|running]" in between(text, b"STEP_STATUS", b"STEP_EMPTY"), text[-3000:]
+    assert b"DONE[Build passed]" in between(text, b"STEP_EMPTY", b"STEP_BOTH"), text[-3000:]
+    # A combined change never shows an intermediate state.
+    assert b"BUILD[Build passed|running]" not in text and b"DONE[]" not in text, text[-3000:]
+    assert b"DONE[idle]" in between(text, b"STEP_BOTH", b"STEP_RESET"), text[-3000:]
+    assert b"BUILD[idle|normal]" in between(text, b"STEP_RESET", b"STEP_RESET_STATUS"), text[-3000:]
+    # The failed template is explicitly empty; the value survives it.
+    assert b"BUILD[a b|running]" in between(text, b"STEP_FAILED", b"STEP_RUNNING"), text[-3000:]
+    assert b"BUILD[-|running]" in text and b"BUILD[--dash|running]" in text, text[-3000:]
+    assert b"BUILD[#(value) #[fg=red]x ##|running]" in text, text[-3000:]
+    assert b"\x1b[0;38;5;1mred" in data and b"OTHER[red]" in text, data[-3000:]
+
+    env = clean_env()
+    for args in (["prompt", "x"], ["prompt", "--status", "done"], ["5", "--reset"], ["prompt", ""]):
+        result = subprocess.run([binary, "set", *args], env=env, capture_output=True)
+        assert result.returncode == 0 and not result.stdout and not result.stderr, result
+    for args in (["prompt", "x", "--reset"], ["a.b", "x"], ["prompt", "--status", "fail"]):
+        result = subprocess.run([binary, "set", *args], env=env, capture_output=True)
+        assert result.returncode == 2 and not result.stdout, result
+    print("set changes only supplied attributes, atomically, and is quiet outside a session")
+
+
+def check_init_invocation(binary):
+    env = os.environ.copy()
+    env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
+    with tempfile.TemporaryDirectory() as directory:
+        stable = os.path.join(directory, "statusbar")
+        os.symlink(binary, stable)
+
+        absolute = subprocess.run(
+            [stable, "init", "zsh"], env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+        )
+        assert f"command '{stable}' set prompt".encode() in absolute.stdout
+        assert f"command '{binary}' set".encode() not in absolute.stdout
+
+        path_env = env.copy()
+        path_env["PATH"] = directory + os.pathsep + path_env.get("PATH", "")
+        by_name = subprocess.run(
+            ["statusbar", "init", "zsh"], env=path_env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+        )
+        assert b"command 'statusbar' set prompt" in by_name.stdout
+
+    outside_env = env.copy()
+    outside_env.pop("STATUSBAR_STATE")
+    outside_env["STATUSBAR_LINES"] = "2"  # obsolete variable is ignored
+    outside = subprocess.run([binary, "init", "zsh"], env=outside_env,
+                             capture_output=True, check=True)
+    assert outside.stdout == b"", outside
+
+    print("shell init preserves upgrade-safe invocation paths")
+
+
+def check_stdin_config(binary):
+    config = "interval = 0.1\nstyle = fg=blue\n[line.one]\ntext = PIPE_ONE\n[line.two]\ntext = #(command:two)\n[command.two]\nrun = printf PIPE_TWO\n"
+    q = shlex.quote
+    child = r'''printf '__READY__:%s:%s\n' "$(stty size)" "${STATUSBAR_LINES-unset}"
+while IFS= read -r value; do
+    case "$value" in
+        SIZE) printf '__SIZE__:%s\n' "$(stty size)" ;;
+        RELOAD) printf '[line.one]\ntext = RELOADED\n' | "$1" config ;;
+        EXIT) exit 7 ;;
+        *) printf '__INPUT__:%s\n' "$value" ;;
+    esac
+done
+'''
+    command = shlex.join([binary, "--config=-", "--", "/bin/sh", "-c", child, "sh", binary])
+    env = clean_env()
+    env["STATUSBAR_CONFIG"] = "/does/not/exist/statusbar-config"
+    env["STATUSBAR_LINES"] = "9"  # obsolete parent value must not reach the child
+    script = f"printf %s {q(config)} | {command}"
+    pid, master = spawn(["/bin/sh", "-c", script], env=env)
+    reaped = False
+    try:
+        data = read_until(master, b"", b"__READY__:22 80:unset")
+        data = read_until(master, data, b"PIPE_TWO")
+        assert b"PIPE_ONE" in data, data
+        os.write(master, b"keyboard works\n")
+        data = read_until(master, data, b"__INPUT__:keyboard works")
+        resize(master, 30)
+        time.sleep(0.15)
+        os.write(master, b"SIZE\n")
+        data = read_until(master, data, b"__SIZE__:28 80")
+        os.write(master, b"RELOAD\n")
+        data = read_until(master, data, b"RELOADED")
+        os.write(master, b"EXIT\n")
+        status = reap_while_draining(pid, master)
+        reaped = True
+        assert os.waitstatus_to_exitcode(status) == 7, data
+        flags = termios.tcgetattr(master)[3]
+        assert flags & termios.ICANON and flags & termios.ECHO, flags
+    finally:
+        if reaped:
+            os.close(master)
+        else:
+            stop(pid, master)
+
+    # Here-documents use the same input path and leave the child on a terminal.
+    script = shlex.join([binary, "-c", "-", "--", "/bin/sh", "-c", "test -t 0 && printf HEREDOC_OK"]) + " <<'CONFIG'\n" + config + "CONFIG\n"
+    code, data = capture_pty(["/bin/sh", "-c", script], env=clean_env())
+    assert code == 0 and b"HEREDOC_OK" in data, data
+
+    # A config that cannot be used still reaches the shell, with the
+    # built-in config and a warning line. Keyboard input still works.
+    for text, message in [
+        ("", b"stdin contains no config"),
+        ("# no lines\n", b"config needs at least one [line.NAME] section"),
+        ("[line.a]\nunknown = value\n", b"line 2: unknown line key"),
+        ("[line.1]\nleft = old\n", b"line 1: line names cannot be all digits"),
+    ]:
+        script = f"printf %s {q(text)} | " + shlex.join([binary, "--config", "-", "--", "/bin/sh", "-c", "test -t 0 && printf CHILD_STARTED; exit 4"])
+        code, data = capture_pty(["/bin/sh", "-c", script], env=clean_env())
+        assert code == 4 and b"CHILD_STARTED" in data, data
+        rows = painted(data)
+        assert any(message in row for row in rows), rows
+        assert any(row.startswith(b"\xe2\x94\x80\xe2\x94\x80") for row in rows), rows
+
+    for text, message in [
+        (b"[line.a]\n#" + b"x" * 65536, b"limit 65536 bytes"),
+        (config.encode(), b"cannot open /dev/tty for keyboard input"),
+    ]:
+        result = subprocess.run([binary, "--config", "-"], input=text, capture_output=True, start_new_session=True, timeout=5, env=clean_env())
+        assert result.returncode != 0 and message in result.stderr, result
+
+    # --config - does not make redirected stdout an interactive terminal.
+    with tempfile.TemporaryDirectory() as folder:
+        output = os.path.join(folder, "output")
+        script = f"printf %s {q(config)} | {q(binary)} --config - > {q(output)}"
+        code, data = capture_pty(["/bin/sh", "-c", script], env=clean_env())
+        assert code == 1 and b"stdin and stdout must be a terminal" in data, data
+        assert os.path.getsize(output) == 0
+
+    for flag in ["--exec", "--lines", "--interval", "--style", "-e", "-n", "-i", "-s"]:
+        result = subprocess.run([binary, flag, "1"], capture_output=True, timeout=5)
+        assert result.returncode == 2, (flag, result)
+    print("stdin configs, recovery, keyboard input, resize, reload, and terminal restoration passed")
+
+
+def painted_rows(data):
+    """Every text painted to each bar row, in order."""
+    rows = {}
+    for match in re.finditer(rb"\x1b\[(\d+);1H(.*?)(?=\x1b\[\d+;1H|\x1b8)", data, re.S):
+        text = plain(match.group(2))
+        if text.strip():
+            rows.setdefault(int(match.group(1)), []).append(text)
+    return rows
+
+
+def painted(data):
+    """All painted bar row texts, without trailing spaces."""
+    return [text.rstrip() for texts in painted_rows(data).values() for text in texts]
+
+
+def check_osc7_titles(binary):
+    local = b"\x1b]7;file:///tmp/a%20project\x07"
+    local_title = b"\x1b]2;/tmp/a project\x1b\\"
+    child_title = b"\x1b]2;child-title\x1b\\"
+    remote = b"\x1b]7;kitty-shell-cwd://server.example/srv/project\x1b\\"
+    remote_title = b"\x1b]2;server.example:/srv/project\x1b\\"
+    malformed = b"\x1b]7;file:///bad%zz\x07"
+    oversized = b"\x1b]7;file:///" + (b"x" * 4097) + b"\x07"
+    deep = b"\x1b]7;file:///one/two/three/four\x07"
+    deep_title = b"\x1b]2;two/three/four\x1b\\"
+    payload = local + child_title + remote + malformed + oversized + deep
+    expected = local + local_title + child_title + remote + remote_title + malformed + oversized + deep + deep_title
+
+    script = "printf '[line.a]\\ntext = bar\\n' | " + shlex.join([
+        binary, "--config", "-",
+        "--", "/bin/sh", "-c", 'printf %s "$1"', "sh", payload.decode("ascii"),
+    ])
+    argv = ["/bin/sh", "-c", script]
+    code, data = capture_pty(argv, env=clean_env())
+    assert code == 0, data
+    assert expected in data, data[-6000:]
+    print("OSC 7 forwarding and ordered terminal titles passed")
+
+
+PROMPT_CONFIG = '[line.prompt]\ntext = "P[#(value)]"\n[line.other]\ntext = "O[#(value)]"\n'
+FAKE_STARSHIP = {
+    "zsh": "#!/bin/sh\ncase $STARSHIP_TEST_MODE in\n  multi) printf 'bar%%%%literal\\nprompt' ;;\n  one) printf 'one%%%%literal' ;;\nesac\n",
+    "other": "#!/bin/sh\ncase $STARSHIP_TEST_MODE in\n  multi) printf 'bar%%literal\\nprompt' ;;\n  one) printf 'one%%literal' ;;\nesac\n",
+}
+
+
+def shell_session(binary, config, argv, env, timeout=8):
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "shell.statusbar")
+        with open(path, "w", encoding="utf-8") as file:
+            file.write(config)
+        return capture_pty([binary, "-c", path, "--", *argv], env=clean_env(env), timeout=timeout)
+
+
+def fake_starship(directory, kind):
+    starship = os.path.join(directory, "starship")
+    with open(starship, "w", encoding="utf-8") as file:
+        file.write(FAKE_STARSHIP[kind])
+    os.chmod(starship, 0o755)
+    env = os.environ.copy()
+    env["PATH"] = directory + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def check_prompt_split(binary, argv_for, name):
+    """Starship details move into the named line; one-line prompts and
+    layouts without the line keep the full prompt in the terminal."""
+    for line, option in (("P", []), ("O", ["--starship-line", "other"])):
+        code, data = shell_session(binary, PROMPT_CONFIG, argv_for("multi", option), None)
+        assert code == 0, data
+        assert f"{line}[bar%literal]".encode() in plain(data), plain(data)[-2000:]
+        assert b"prompt" in data
+    code, data = shell_session(binary, PROMPT_CONFIG, argv_for("one", []), None)
+    assert code == 0 and b"P[]" in plain(data), plain(data)[-2000:]
+    assert b"P[one" not in plain(data), data
+    code, data = shell_session(binary, '[line.other]\ntext = "O[#(value)]"\n', argv_for("multi", []), None)
+    assert code == 0 and b"O[]" in plain(data), plain(data)[-2000:]
+    assert b"O[bar" not in plain(data), data
+    print(f"{name} Starship split passed")
+
+
+def check_zsh(binary):
+    zsh = shutil.which("zsh")
+    if zsh is None:
+        print("zsh -f integration skipped: zsh unavailable")
+        return
+    env = os.environ.copy()
+    env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
+    quoted_binary = shlex.quote(binary)
+    for bad in ("a.b", "0", "a b", ""):
+        result = subprocess.run([binary, "init", "zsh", "--starship-line", bad], env=env, capture_output=True)
+        assert result.returncode == 2 and result.stdout == b"", (bad, result)
+    for good in ("prompt", "5"):
+        result = subprocess.run([binary, "init", "zsh", "--starship-line", good], env=env, capture_output=True)
+        assert result.returncode == 0 and b"__statusbar_report_cwd" in result.stdout, result
+
+    with tempfile.TemporaryDirectory() as directory:
+        path_env = fake_starship(directory, "zsh")
+
+        def argv_for(mode, option):
+            options = " ".join(shlex.quote(part) for part in option)
+            script = (
+                f'export PATH={shlex.quote(path_env["PATH"])}; export STARSHIP_TEST_MODE={mode}; '
+                f'eval "$({quoted_binary} init zsh {options})"; __statusbar_prompt; print; sleep 0.3'
+            )
+            return [zsh, "-f", "-c", script]
+        check_prompt_split(binary, argv_for, "zsh")
+        code, data = shell_session(binary, '[line.other]\n', argv_for("multi", []), None)
+        assert b"bar%%literal\r\nprompt" in data, data
+        code, data = shell_session(binary, PROMPT_CONFIG, argv_for("one", []), None)
+        assert b"one%%literal" in data, data
+
+
+def check_fish(binary):
+    fish = shutil.which("fish")
+    if fish is None:
+        print("fish integration skipped: fish unavailable")
+        return
+    quoted_binary = shlex.quote(binary)
+    with tempfile.TemporaryDirectory() as directory:
+        path_env = fake_starship(directory, "other")
+
+        def argv_for(mode, option):
+            options = " ".join(shlex.quote(part) for part in option)
+            script = (
+                f"set -gx PATH {shlex.quote(path_env['PATH'])}; set -gx STARSHIP_TEST_MODE {mode}; "
+                f"{quoted_binary} init fish {options} | source; fish_prompt; echo; sleep 0.3"
+            )
+            return [fish, "-N", "-c", script]
+        check_prompt_split(binary, argv_for, "fish")
+        code, data = shell_session(binary, '[line.other]\n', argv_for("multi", []), None)
+        assert b"bar%literal\r\nprompt" in data, data
+
+
+def check_nu(binary):
+    nu = shutil.which("nu")
+    if nu is None:
+        print("Nushell integration skipped: nu unavailable")
+        return
+    with tempfile.TemporaryDirectory() as directory:
+        os.symlink(binary, os.path.join(directory, "statusbar"))
+        path_env = fake_starship(directory, "other")
+        sample = os.path.join(os.path.dirname(__file__), "..", "samples", "statusbar.nu")
+        with open(sample, "rb") as file:
+            integration = file.read()
+        assert b"set prompt --" in integration
+        scripts = {}
+        for target in ("prompt", "other"):
+            script_path = os.path.join(directory, f"statusbar-{target}.nu")
+            with open(script_path, "wb") as file:
+                file.write(integration.replace(b"set prompt --", f"set {target} --".encode()))
+            scripts[target] = script_path
+
+        def argv_for(mode, option):
+            target = option[1] if option else "prompt"
+            script = (
+                f'$env.PATH = ({json.dumps(path_env["PATH"])} | split row (char esep)); '
+                f'$env.STARSHIP_TEST_MODE = "{mode}"; '
+                '$env.CMD_DURATION_MS = "0823"; $env.LAST_EXIT_CODE = 0; '
+                f'source {scripts[target]}; let prompt = (do $env.PROMPT_COMMAND); print $prompt; sleep 300ms'
+            )
+            return [nu, "-n", "-c", script]
+        check_prompt_split(binary, argv_for, "Nushell")
+
+        target = os.path.join(directory, "space % café")
+        os.mkdir(target)
+        env = os.environ.copy()
+        env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
+        cwd_script = (
+            f'source {scripts["prompt"]}; source {scripts["prompt"]}; cd "{target}"; '
+            'print ($env.config.hooks.pre_prompt | length); '
+            'do ($env.config.hooks.pre_prompt | last)'
+        )
+        code, data = capture_pty([nu, "-n", "-c", cwd_script], env)
+        assert code == 0 and b"1\r\n" in data, data
+        report = re.search(rb"\x1b\]7;file://(/.*?)\x07", data)
+        assert report is not None, data
+        assert urllib.parse.unquote_to_bytes(report[1].decode()) == target.encode(), data
+    print("Nushell integration passed")
+
+
+def check_init_features(binary):
+    env = os.environ.copy()
+    env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
+    for shell in ("zsh", "fish"):
+        for flags in (("--starship=false", "--report-cwd=false"),):
+            result = subprocess.run([binary, "init", shell, *flags], env=env, capture_output=True)
+            assert result.returncode == 0 and result.stdout == b"", result
+        for flags in (("--starship=false", "--starship-line=prompt"), ("--report-cwd=wrong",), ("--starship-slot=3",)):
+            result = subprocess.run([binary, "init", shell, *flags], env=env, capture_output=True)
+            assert result.returncode == 2 and result.stdout == b"", result
+        result = subprocess.run([binary, "init", shell, "--report-cwd=false"], env=env, capture_output=True)
+        assert result.returncode == 0 and b"__statusbar_report_cwd" not in result.stdout
+
+        executable = shutil.which(shell)
+        if executable is None:
+            continue
+        # Without Starship, default initialization still works in a one-line
+        # session. Generation must not use the generator's own PATH to decide.
+        generated = subprocess.run([binary, "init", shell], env=env, capture_output=True, check=True).stdout.decode()
+        if shell == "zsh":
+            script = 'PATH=/nonexistent; ' + generated + '\n__statusbar_report_cwd'
+            args = [executable, "-f", "-c", script]
+        else:
+            script = 'set -gx PATH /nonexistent; ' + generated + '\nemit fish_prompt'
+            args = [executable, "-N", "-c", script]
+        code, data = capture_pty(args, env)
+        assert code == 0 and b"\x1b]7;file://" in data, data
+        assert b"does not exist" not in data and b"SetUserVar=" not in data, data
+        with tempfile.TemporaryDirectory(prefix="statusbar-cwd-") as directory:
+            target = os.path.join(directory, "space % café\ncontrol")
+            os.mkdir(target)
+            invocation = shlex.quote(binary) + " init " + shell + " --starship=false"
+            if shell == "zsh":
+                script = (
+                    f'eval "$({invocation})"; eval "$({invocation})"; '
+                    'cd -- "$1"; __statusbar_report_cwd; '
+                    'print -r -- "hooks:${precmd_functions[*]}:${chpwd_functions[*]}"'
+                )
+                argv = [executable, "-f", "-c", script, "zsh", target]
+            else:
+                script = (
+                    f"{invocation} | source; {invocation} | source; "
+                    'cd -- "$argv[1]"; emit fish_prompt'
+                )
+                argv = [executable, "-N", "-c", script, target]
+            code, data = capture_pty(argv, env)
+            assert code == 0, data
+            reports = re.findall(rb"\x1b\]7;file://[^/]*(/.*?)\x1b\\", data)
+            assert len(reports) == 2, data
+            for path in reports:
+                assert urllib.parse.unquote_to_bytes(path.decode()) == target.encode(), (path, target)
+                assert b"\n" not in path and b" " not in path and b"%25" in path, path
+            assert b"SetUserVar=" not in data, data
+            if shell == "zsh":
+                assert b"hooks:__statusbar_report_cwd:__statusbar_report_cwd" in data, data
+    print("independent init features and repeatable encoded CWD hooks passed")
+
+
 def check_tracking(binary, colors=False):
     with tempfile.TemporaryDirectory(prefix="statusbar-tracking-") as folder:
         value_path = os.path.join(folder, "value")
@@ -589,10 +630,8 @@ def check_tracking(binary, colors=False):
         with open(second_path, "w") as value:
             value.write("other\n")
         with open(config_path, "w") as cfg:
-            cfg.write(f"""[line.1]
-left = PREFIX #[track]#(value)#[notrack] BETWEEN #[track]#(second)#[notrack] SUFFIX
-right = RIGHT
-rule = .
+            cfg.write(f"""[line.a]
+text = PREFIX #[track]#(command:value)#[notrack] BETWEEN #[track]#(command:second)#[notrack] SUFFIX#(fill:.)RIGHT
 [command.value]
 run = cat {shlex.quote(value_path)}
 interval = 0.1
@@ -668,8 +707,8 @@ def check_geometry_results_do_not_highlight(binary):
         with open(value_path, "w") as value:
             value.write("one\n")
         with open(config_path, "w") as cfg:
-            cfg.write(f"""[line.1]
-left = VALUE #[track]#(value)#[notrack]
+            cfg.write(f"""[line.a]
+text = VALUE #[track]#(command:value)#[notrack]
 [command.value]
 run = printf 'cols:%s:' \"$STATUSBAR_COLUMNS\"; cat {shlex.quote(value_path)}
 interval = 0.2
@@ -706,8 +745,8 @@ def check_resize_command_runs(binary):
         runs = os.path.join(folder, "runs")
         config_path = os.path.join(folder, "config")
         with open(config_path, "w") as cfg:
-            cfg.write(f'''[line.1]
-left = #(value)
+            cfg.write(f'''[line.a]
+text = #(command:value)
 [command.value]
 run = echo "$STATUSBAR_COLUMNS" >> {shlex.quote(runs)}; printf 'cols:%s' "$STATUSBAR_COLUMNS"
 interval = 60
@@ -738,12 +777,12 @@ def check_datetime_and_terminal_properties(binary):
         config_path = os.path.join(folder, "config")
         replacement_path = os.path.join(folder, "replacement")
         with open(config_path, "w") as cfg:
-            cfg.write("[line.1]\nleft = STAMP#(datetime:%Y) WINDOW#(terminal:rows)x#(terminal:cols) SHELL#(terminal:content_rows)\n[line.2]\nleft = second\n")
+            cfg.write("[line.a]\ntext = STAMP#(datetime:%Y) WINDOW#(terminal:rows)x#(terminal:cols) SHELL#(terminal:content_rows)\n[line.b]\ntext = second\n")
         with open(replacement_path, "w") as cfg:
-            cfg.write("[line.1]\nleft = STAMP#(datetime:%Y) WINDOW#(terminal:rows)x#(terminal:cols) SHELL#(terminal:content_rows)\n[line.2]\nleft = second\n[line.3]\nleft = third\n")
+            cfg.write("[line.a]\ntext = STAMP#(datetime:%Y) WINDOW#(terminal:rows)x#(terminal:cols) SHELL#(terminal:content_rows)\n[line.b]\ntext = second\n[line.c]\ntext = third\n")
         child = (
             'while IFS= read -r action; do case "$action" in '
-            f'PUSH) printf "payload\\n" | {shlex.quote(binary)} push -t extra ;; '
+            f'PUSH) printf "payload\\n" | {shlex.quote(binary)} push extra ;; '
             f'POP) {shlex.quote(binary)} pop ;; '
             f'RELOAD) {shlex.quote(binary)} config < {shlex.quote(replacement_path)} ;; '
             'EXIT) exit 0 ;; esac; done'
@@ -777,8 +816,8 @@ def check_adaptive_palette(binary):
         with open(value_path, "w") as value:
             value.write("one\n")
         with open(config_path, "w") as cfg:
-            cfg.write(f"""[line.1]
-left = LABEL #[track]#[fg=red,bg=blue]#(value) #[default]D#[notrack] END
+            cfg.write(f"""[line.a]
+text = LABEL #[track]#[fg=red,bg=blue]#(command:value) #[default]D#[notrack] END
 [command.value]
 run = cat {shlex.quote(value_path)}
 interval = 0.1
@@ -852,9 +891,9 @@ time.sleep(10)
 def check_logging(binary):
     with tempfile.TemporaryDirectory() as folder:
         path = os.path.join(folder, "session.log")
-        config_path = os.path.join(folder, "bar.config")
+        config_path = os.path.join(folder, "bar.statusbar")
         with open(config_path, "w") as config_file:
-            config_file.write("[line.1]\nleft = LOG_BAR\n")
+            config_file.write("[line.a]\ntext = LOG_BAR\n")
         for command in (["run", "--log", path], ["--log", path]):
             code, data = capture_pty([
                 binary, *command, "-c", config_path, "--",
@@ -882,8 +921,8 @@ def check_logging(binary):
 
 
 def check_config_snapshots(binary):
-    original = b'# original comment\n[line.1]\nleft = "initial text"'  # No final newline.
-    replacement = b'# live replacement\n[line.1]\nleft = next\n[line.2]\nright = %H:%M\n'
+    original = b'# original comment\n[line.a]\ntext = "initial text"'  # No final newline.
+    replacement = b'# live replacement\n[line.a]\ntext = next\n[line.b]\ntext = "#(fill: )#(datetime:%H:%M)"\n'
     clean_env = os.environ.copy()
     clean_env.pop("STATUSBAR_STATE", None)
     clean_env.pop("STATUSBAR_SESSION_ID", None)
@@ -892,7 +931,7 @@ def check_config_snapshots(binary):
     result = subprocess.run([binary, "config", "--print", "default"], input=b"invalid", env=clean_env, capture_output=True)
     assert result.returncode == 0 and result.stdout == builtin, result
     with tempfile.TemporaryDirectory() as folder:
-        invalid_path = os.path.join(folder, "invalid.config")
+        invalid_path = os.path.join(folder, "invalid.statusbar")
         with open(invalid_path, "wb") as config_file:
             config_file.write(b"[broken\n")
         path_env = clean_env.copy()
@@ -935,7 +974,7 @@ assert show('--print', 'startup') == original
 assert show('--print') == original
 assert show('--default') == show('--print', 'default')
 assert stat.S_IMODE(os.stat(os.environ['STATUSBAR_STATE']).st_mode) == 0o600
-subprocess.run([binary, 'set', '1', 'MANUAL_OVERRIDE'], check=True)
+subprocess.run([binary, 'set', 'a', 'MANUAL_OVERRIDE'], check=True)
 assert show('--print') == original
 subprocess.run([binary, 'config'], input=replacement, check=True)
 current_is(replacement)
@@ -952,7 +991,7 @@ assert show('--print', 'startup') == original
 subprocess.run([binary, 'config'], input=show('--print', 'startup'), check=True)
 current_is(original)
 # Nested sessions have their own snapshots; the outer session is unaffected.
-nested_text = b'[line.1]\nleft = nested\n'
+nested_text = b'[line.a]\ntext = nested\n'
 code = "import subprocess,sys; r=subprocess.run([sys.argv[1],'config','--print','startup'],capture_output=True); assert r.returncode == 0 and r.stdout == bytes.fromhex(sys.argv[2])"
 r = subprocess.run([binary, '--config', '-', '--', sys.executable, '-c', code, binary, nested_text.hex()], input=nested_text)
 assert r.returncode == 0
@@ -966,7 +1005,7 @@ print('SNAPSHOTS_OK', flush=True)
 '''
     with tempfile.TemporaryDirectory() as folder:
         for mode in ("file", "stdin"):
-            config_path = os.path.join(folder, "initial.config")
+            config_path = os.path.join(folder, "initial.statusbar")
             metadata_path = os.path.join(folder, mode + ".json")
             with open(config_path, "wb") as config_file:
                 config_file.write(original)
@@ -986,9 +1025,9 @@ print('SNAPSHOTS_OK', flush=True)
 
 
 def check_osc_config(binary):
-    initial = "[line.1]\nleft = ORIGINAL\n"
-    replacement = "[line.1]\nleft = REPLACED_ONE\n[line.2]\nleft = REPLACED_TWO\n"
-    direct = '[line.1]\nleft = "DIRECT; Καλημέρα"\n'
+    initial = "[line.a]\ntext = ORIGINAL\n"
+    replacement = "[line.a]\ntext = REPLACED_ONE\n[line.b]\ntext = REPLACED_TWO\n"
+    direct = '[line.a]\ntext = "DIRECT; Καλημέρα"\n'
     with tempfile.TemporaryDirectory() as folder:
         initial_path = os.path.join(folder, "initial")
         replacement_path = os.path.join(folder, "replacement")
@@ -1051,7 +1090,7 @@ binary, replacement, direct, nested_token_path, rejected_command_path = sys.argv
 help_result = subprocess.run([binary, "config"], capture_output=True)
 explicit_help = subprocess.run([binary, "config", "--help"], capture_output=True)
 assert help_result.returncode == 0 and help_result.stdout == explicit_help.stdout, help_result
-assert b"EXAMPLES" in help_result.stdout and b"statusbar config < my.config" in help_result.stdout
+assert b"EXAMPLES" in help_result.stdout and b"statusbar config < my.statusbar" in help_result.stdout
 def frame(config, token=None):
     token = token or os.environ["STATUSBAR_SESSION_ID"]
     envelope = b"1;" + token.encode() + b";" + config.encode()
@@ -1062,7 +1101,7 @@ print("OSC_CONFIG_READY", flush=True)
 for command in sys.stdin:
     command = command.strip()
     if command == "BAD":
-        rejected = f"[line.1]\nleft = #(bad)\n[command.bad]\nrun = touch {rejected_command_path}\n"
+        rejected = f"[line.a]\ntext = #(command:bad)\n[command.bad]\nrun = touch {rejected_command_path}\n"
         emit(rejected, "0" * 32)
         print("__BAD__", flush=True)
     elif command == "LOAD":
@@ -1071,7 +1110,7 @@ for command in sys.stdin:
         assert not result.stdout and result.returncode == 0, result
         print(f"__LOAD__:{result.returncode}", flush=True)
     elif command == "STDIN":
-        result = subprocess.run([binary, "config"], input=b'[line.1]\nleft = FROM_STDIN\n', capture_output=True)
+        result = subprocess.run([binary, "config"], input=b'[line.a]\ntext = FROM_STDIN\n', capture_output=True)
         assert not result.stdout and result.returncode == 0, result
         print("__STDIN__", flush=True)
     elif command == "PIPE":
@@ -1084,20 +1123,21 @@ for command in sys.stdin:
         emit(direct)
         print("__DIRECT__", flush=True)
     elif command == "ORDER":
-        first = "[line.1]\nleft = ORDER_ONE\n[line.2]\nleft = ORDER_TWO\n"
-        final = "[line.1]\nleft = FINAL_ONE\n[line.2]\nleft = FINAL_TWO\n"
+        first = "[line.a]\ntext = ORDER_ONE\n[line.b]\ntext = ORDER_TWO\n"
+        final = "[line.a]\ntext = FINAL_ONE\n[line.b]\ntext = FINAL_TWO\n"
+        # Removed slot variables are ordinary output now.
         slot = b"\x1b]1337;SetUserVar=StatusBarSlot4=S0VFUA==\x1b\\"
         os.write(1, frame(first) + slot + frame(final))
         print("__ORDER__", flush=True)
     elif command == "SAVED":
         os.write(1, b"\x1b7")
-        emit('[line.1]\nleft = AFTER_RESTORE\n')
+        emit('[line.a]\ntext = AFTER_RESTORE\n')
         time.sleep(.01)
         os.write(1, b"\x1b8")
         print("__SAVED__", flush=True)
     elif command == "HELD":
         os.write(1, b"\x1b7")
-        emit('[line.1]\nleft = AFTER_PAUSE\n')
+        emit('[line.a]\ntext = AFTER_PAUSE\n')
         print("__HELD__", flush=True)
     elif command == "NESTED":
         code = 'import os,sys; open(sys.argv[1], "w").write(os.environ["STATUSBAR_SESSION_ID"])'
@@ -1133,7 +1173,7 @@ for command in sys.stdin:
             data = read_until(master, data, b"__DIRECT__", timeout=3)
             os.write(master, b"ORDER\n")
             data = read_until(master, data, b"FINAL_TWO", timeout=5)
-            data = read_until(master, data, b"KEEP", timeout=5)
+            data = read_until(master, data, b"SetUserVar=StatusBarSlot4=S0VFUA==", timeout=5)
             data = read_until(master, data, b"__ORDER__", timeout=3)
             os.write(master, b"NESTED\n")
             data = read_until(master, data, b"__NESTED__:0:True", timeout=5)
@@ -1163,13 +1203,13 @@ def check_theme_growth(binary):
     # The new region must precede text in the very same child write.
     child = r'''
 import os, base64, time
-text = ''.join('[line.%d]\nleft = ROW%d\n' % (n, n) for n in range(1, 6))
+text = ''.join('[line.r%d]\ntext = ROW%d\n' % (n, n) for n in range(1, 6))
 envelope = b'1;' + os.environ['STATUSBAR_SESSION_ID'].encode() + b';' + text.encode()
 frame = b'\x1b]3110;STATUSBAR;CONFIG;' + base64.b64encode(envelope) + b'\x1b\\'
 os.write(1, frame + b'\nAFTER_CONFIG\n')
 time.sleep(.3)
 '''
-    config = "[line.1]\nleft = BEFORE_BAR\n[line.2]\n"
+    config = "[line.a]\ntext = BEFORE_BAR\n[line.b]\n"
     script = f"printf %s {shlex.quote(config)} | " + shlex.join([binary, "-c", "-", "--", sys.executable, "-c", child])
     pid, master = spawn(["/bin/sh", "-c", script], rows=24)
     try:
@@ -1177,8 +1217,8 @@ time.sleep(.3)
         assert data.index(b"\x1b7\x1b[1;19r\x1b8") < data.index(b"AFTER_CONFIG"), data
     finally:
         stop(pid, master)
-    pastel = os.path.abspath("samples/themes/pastel-powerline.config")
-    multi = os.path.abspath("samples/themes/multi-line.config")
+    pastel = os.path.abspath("samples/themes/pastel-powerline.statusbar")
+    multi = os.path.abspath("samples/themes/multi-line.statusbar")
     script = r'''
 printf THEME_GROWTH_READY
 IFS= read -r command
@@ -1208,7 +1248,7 @@ def check_background_job_exit(binary):
     # The job ignores SIGHUP and keeps the pty open after the shell exits.
     script = "(trap '' HUP; exec sleep 10) & printf LAST_WORDS; exit 3"
     started = time.monotonic()
-    command = "printf '[line.1]\\nleft = BAR\\n' | " + shlex.join([binary, "-c", "-", "--", "/bin/sh", "-c", script])
+    command = "printf '[line.a]\\ntext = BAR\\n' | " + shlex.join([binary, "-c", "-", "--", "/bin/sh", "-c", script])
     code, data = capture_pty(["/bin/sh", "-c", command], timeout=4)
     assert code == 3, (code, data[-500:])
     assert b"LAST_WORDS" in data, data[-500:]
@@ -1217,323 +1257,264 @@ def check_background_job_exit(binary):
 
 
 def check_push_pop(binary):
-    child = r'''
-import os, subprocess, sys, time
-b = sys.argv[1]
-def run(*args, **kwargs):
-    result = subprocess.run([b, *args], capture_output=True, **kwargs)
-    assert result.returncode == 0, (args, result.returncode, result.stderr)
-    return result.stdout
-first = run('push', input=b'partial\rfirst final\n').strip()
-second = run('push', input='Καλημέρα ## #[bold]'.encode()).strip()
-assert first == b'1' and second == b'2', (first, second)
-with open(os.environ['STATUSBAR_STATE'], 'rb') as state:
-    state.readline()
-    assert state.readline() == b'lines 1\n'
+    child = CHILD_PRELUDE + r'''
+from subprocess import PIPE, Popen
+first = run('push', input=b'partial\rfirst final\n')
+second = run('push', 'named', input='Καλημέρα ## #[bold]'.encode())
+assert first == '2' and second == 'named', (first, second)
+for args in (['5'], ['a.b'], ['1', 'x']):
+    run('push', *args, input=b'x', code=2)
+for taken in ('named', 'base'):
+    run('push', taken, input=b'x', code=1)
+assert os.get_terminal_size(0).lines == 21
 print('PUSHED_TWO', flush=True)
-run('config', input=b'[line.push]\nstyle = fg=#654321\nleft = #[fg=#abcdef]> #[default]#(stream)\nright = #[fg=#abcdef,bold]<#(tag) [#(id)]>#[default]\n[line.1]\nleft = reloaded\n[line.2]\nright = new\n')
-time.sleep(.1)
-run('pop', first.decode())
-assert run('pop', first.decode()) == b''
+run('config', input=b'[line.base]\ntext = reloaded\n[line.extra]\ntext = new\n[push]\ntext = "#[fg=#654321]> #[default]#(value)#(fill: )#[fg=#abcdef,bold]<#(name)>#[default]"\n')
+settle()
+run('pop', first)
+run('pop', first, code=1)
+run('pop', 'base', code=1)
 print('POPPED_FIRST', flush=True)
-p = subprocess.Popen([b, 'push'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-p.stdin.write(b'in progress')
-p.stdin.flush()
-time.sleep(1.0)
-run('pop', '3')
-p.stdin.write(b'\rfinished')
-p.stdin.close()
+# A removed producer can still finish, and its ID is never reused.
+p = Popen([b, 'push'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
+p.stdin.write(b'in progress'); p.stdin.flush(); time.sleep(1)
+run('pop', '5')
+p.stdin.write(b'\rfinished'); p.stdin.close()
 assert p.wait(timeout=4) == 0, p.stderr.read()
-assert p.stdout.read() == b'3\n'
-simultaneous = [subprocess.Popen([b, 'push'], stdin=subprocess.PIPE,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                for _ in range(2)]
+assert p.stdout.read() == b'5\n'
+# A retired producer cannot touch a replacement with the same name.
+p = Popen([b, 'push', 'job'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
+p.stdin.write(b'old job'); p.stdin.flush(); time.sleep(1)
+run('pop', 'job')
+assert run('push', 'job', input=b'new job\n') == 'job'
+p.stdin.write(b'\rSTALE UPDATE'); p.stdin.close()
+assert p.wait(timeout=4) == 0, p.stderr.read()
+assert p.stdout.read() == b'job\n'
+mark('REPLACED_JOB')
+run('pop', 'job')
+simultaneous = [Popen([b, 'push'], stdin=PIPE, stdout=PIPE, stderr=PIPE) for _ in range(2)]
 for stream, value in zip(simultaneous, (b'left', b'right')):
-    stream.stdin.write(value)
-    stream.stdin.close()
+    stream.stdin.write(value); stream.stdin.close()
 ids = []
 for stream in simultaneous:
     assert stream.wait(timeout=5) == 0, stream.stderr.read()
     ids.append(stream.stdout.read().strip())
-assert set(ids) == {b'4', b'5'}, ids
-for row_id in ids:
-    run('pop', row_id.decode())
-empty = run('push', input=b'').strip()
-assert empty == b'6', empty
-run('pop', empty.decode())
-wide = run('push', input=b'#' * 74 + b' 99.9%').strip()
-assert wide == b'7', wide
-time.sleep(.1)
-run('pop', wide.decode())
+assert set(ids) == {b'8', b'9'}, ids
+for line_id in ids:
+    run('pop', line_id.decode())
+assert run('push', input=b'') == '10'
+run('pop', '10')
 command = subprocess.run([b, 'push', '--', sys.executable, '-c',
                           'import os,sys; '
                           'sys.stdout.write("started\\n"); sys.stdout.flush(); '
                           'w=int(os.environ["COLUMNS"]); '
                           'sys.stderr.write("#" * (w-6) + " 99.9%\\r"); '
-                          'sys.exit(7 if w==71 else 9)'], capture_output=True)
+                          'sys.exit(7 if w==74 else 9)'], capture_output=True)
 assert command.returncode == 7, (command.returncode, command.stderr)
-assert command.stdout == b'8\n', command.stdout
+assert command.stdout == b'11\n', command.stdout
 assert command.stderr == b'', command.stderr
-time.sleep(.1)
-run('pop', '8')
-assert run('pop', second.decode()) == b''
-stack = [run('push', input=value).strip() for value in (b'older', b'middle', b'newer')]
-assert stack == [b'9', b'10', b'11'], stack
-run('pop', '10')
-assert run('pop') == b''
-run('pop', '9')
-empty_pop = subprocess.run([b, 'pop'], capture_output=True)
-assert empty_pop.returncode == 1 and b'no pushed rows' in empty_pop.stderr, empty_pop
-wrong = os.environ.copy()
-wrong['STATUSBAR_SESSION_ID'] = '0' * 32
-assert subprocess.run([b, 'pop', '2'], env=wrong, capture_output=True).returncode != 0
-tagged = subprocess.run([b, 'push', '-t', '100Mb.dat', '--', sys.executable,
-                         '-c', 'import os; print("width=" + os.environ["COLUMNS"])'],
-                        capture_output=True)
-assert tagged.returncode == 0 and tagged.stdout == b'12\n', tagged
-time.sleep(.1)
-run('pop', '12')
-literal_tag = run('push', '-t', '#[bold]', input=b'plain').strip()
-assert literal_tag == b'13', literal_tag
-time.sleep(.1)
-run('pop', '13')
-bad_tag = subprocess.run([b, 'push', '-t', 'bad\nname'], input=b'value', capture_output=True)
-assert bad_tag.returncode != 0, bad_tag
-run('config', input=b'[line.1]\nleft = configured\n')
-default_row = subprocess.run([b, 'push', '-t', '100Mb.dat', '--', sys.executable,
-                              '-c', 'import os; print("width=" + os.environ["COLUMNS"])'],
-                             capture_output=True)
-assert default_row.returncode == 0 and default_row.stdout == b'14\n', default_row
-time.sleep(.1)
+settle()
+run('pop', '11')
+named = subprocess.run([b, 'push', 'download', '--', sys.executable, '-c', 'import os; print("width=" + os.environ["COLUMNS"])'], capture_output=True)
+assert named.returncode == 0 and named.stdout == b'download\n', named
+settle()
+run('pop', 'download')
+run('pop', 'named')
+missing = subprocess.run([b, 'push', '--', '/nonexistent/command'], capture_output=True)
+assert missing.returncode == 1 and b'cannot start command' in missing.stderr, missing
+stack = [run('push', input=value) for value in (b'older', b'middle', b'newer')]
+assert stack == ['14', '15', '16'], stack
+run('pop', '15')
+assert run('pop') == ''
 run('pop', '14')
-# A cursor save that is never restored must not starve row requests.
-sys.stdout.write('\x1b7')
-sys.stdout.flush()
-saved = run('push', input=b'saved cursor').strip()
-assert saved == b'15', saved
-run('pop', saved.decode())
-# Remove both active and completed lines with one request.
-p = subprocess.Popen([b, 'push'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-p.stdin.write(b'active before clear'); p.stdin.flush()
-time.sleep(1)
-completed = run('push', input=b'completed before clear').strip()
-assert completed == b'17', completed
-assert os.get_terminal_size(0).lines == 21
-conflict = subprocess.run([b, 'pop', '--all', '17'], capture_output=True)
-assert conflict.returncode == 2 and b'choose an ID or --all' in conflict.stderr, conflict
+empty = subprocess.run([b, 'pop'], capture_output=True)
+assert empty.returncode == 1 and b'no pushed lines' in empty.stderr, empty
+wrong = os.environ.copy(); wrong['STATUSBAR_SESSION_ID'] = '0' * 32
+assert subprocess.run([b, 'pop', 'named'], env=wrong, capture_output=True).returncode != 0
+assert subprocess.run([b, 'push'], env=wrong, input=b'x', capture_output=True).returncode != 0
+# A cursor save that is never restored must not starve line requests.
+sys.stdout.write('\x1b7'); sys.stdout.flush()
+assert run('push', input=b'saved cursor') == '17'
+run('pop', '17')
+p = Popen([b, 'push'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
+p.stdin.write(b'active before clear'); p.stdin.flush(); time.sleep(1)
+assert run('push', input=b'completed before clear') == '19'
+assert os.get_terminal_size(0).lines == 20
+run('pop', '--all', '19', code=2)
 assert subprocess.run([b, 'pop', '--all'], env=wrong, capture_output=True).returncode != 0
-assert os.get_terminal_size(0).lines == 21
-assert run('pop', '--all') == b''
-assert os.get_terminal_size(0).lines == 23
-assert run('pop', '-a') == b''
-assert run('pop', '--all') == b''
-assert subprocess.run([b, 'pop'], capture_output=True).returncode == 1
-# A removed producer can still finish, and its ID is never reused.
+assert os.get_terminal_size(0).lines == 20
+assert run('pop', '--all') == ''
+assert os.get_terminal_size(0).lines == 22
+assert run('pop', '-a') == ''
 p.stdin.write(b'late output'); p.stdin.close()
 assert p.wait(timeout=4) == 0, p.stderr.read()
-assert p.stdout.read() == b'16\n'
-assert run('push', input=b'new after clear').strip() == b'18'
-assert run('pop', '-a') == b''
-assert os.get_terminal_size(0).lines == 23
+assert p.stdout.read() == b'18\n'
+assert run('push', input=b'new after clear') == '20'
+assert run('pop', '-a') == ''
 print('PUSH_POP_OK', flush=True)
 '''
-    config = b'[line.push]\nstyle = fg=#123456\nleft = #[fg=#abcdef]> #[default]#(stream)\nright = #[fg=#abcdef,bold]<#(tag) [#(id)]>#[default]\n[line.1]\nleft = configured\n'
-    with tempfile.NamedTemporaryFile(delete=False) as cfg:
-        cfg.write(config)
-        path = cfg.name
-    try:
-        code, data = capture_pty([binary, '-c', path, '--', sys.executable,
-                                  '-c', child, binary], timeout=20)
-        assert code == 0 and b'PUSH_POP_OK' in data, data[-2500:]
-        assert b'[1]' in data and b'first final' in data, data[-2500:]
-        painted = re.findall(rb'\x1b\[24;1H(.*?)(?=\x1b8)', data, re.S)
-        plain = [re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'',
-                        re.sub(rb'\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)', b'', row))
-                 for row in painted]
-        assert any(row.startswith(b'> first final') and row.endswith(b'< [1]>')
-                   for row in plain), plain[-4:]
-        assert b'[2]' in data and 'Καλημέρα ## #[bold]'.encode() in data, data[-2500:]
-        assert b'\x1b[0;38;2;18;52;86m' in data, data[-2500:]
-        assert b'38;2;171;205;239' in data, data[-2500:]
-        assert b'\x1b[0;38;2;101;67;33m' in data, data[-2500:]
-        assert b'reloaded' in data and b'[3]' in data and b'in progress' in data, data[-700:]
-        assert b'[7]' in data, data[-700:]
-        assert b'[8]' in data and b'99.9%' in data, data[-700:]
-        assert any(row.startswith(b'> width=61') and row.endswith(b'<100Mb.dat [12]>')
-                   for row in plain), plain[-4:]
-        assert any(row.startswith(b'> plain') and row.endswith(b'<#[bold] [13]>')
-                   for row in plain), plain[-4:]
-        assert any(row.startswith(b'[14] 100Mb.dat > width=63') and row.count(b'[14]') == 1
-                   for row in plain), plain[-4:]
-    finally:
-        os.unlink(path)
-    print('push/pop streams, command width, stable IDs, reloads, pop --all, active removal, and authentication passed')
+    config = '[line.base]\ntext = configured\n[push]\ntext = "#[fg=#123456]> #[default]#(value)#(fill: )#[fg=#abcdef,bold]<#(name)>#[default]"\n'
+    code, data = run_session(binary, config, child, timeout=25)
+    assert code == 0 and b'PUSH_POP_OK' in data, data[-2500:]
+    rows = painted(data)
+    assert any(row.startswith(b'> first final') and row.endswith(b'<2>') for row in rows), rows[-6:]
+    assert any(row.startswith('> Καλημέρα ## #[bold]'.encode()) and row.endswith(b'<named>') for row in rows), rows[-6:]
+    assert b'\x1b[0;38;2;18;52;86m' in data and b'38;2;171;205;239' in data, data[-2500:]
+    assert b'\x1b[0;38;2;101;67;33m' in data, data[-2500:]
+    assert b'reloaded' in plain(data) and b'in progress' in plain(data), data[-700:]
+    assert any(row.startswith(b'> new job') for row in rows), rows
+    assert b'STALE UPDATE' not in plain(data), data[-2000:]
+    assert any(row.startswith(b'> width=68') and row.endswith(b'<download>') for row in rows), rows[-8:]
+    assert any(b'99.9%' in row and row.endswith(b'<11>') for row in rows), rows[-8:]
+    print('push/pop names, IDs, command width, reloads, retired producers, pop --all, and authentication passed')
 
 
 def check_fifo(binary):
-    child = r'''
-import os, stat, subprocess, sys, tempfile, time
-b = sys.argv[1]
-directory = os.environ['STATUSBAR_SLOTS']
-assert directory == os.environ['STATUSBAR_STATE'] + '.slots'
+    child = CHILD_PRELUDE + r'''
+directory = os.environ['STATUSBAR_FIFOS']
+assert directory == os.environ['STATUSBAR_STATE'] + '.fifos'
+assert 'STATUSBAR_SLOTS' not in os.environ
 assert not os.path.exists(directory)
-def run(*args, env=None, input=None):
-    p = subprocess.run([b, *args], input=input, capture_output=True, env=env, timeout=4)
-    assert p.returncode == 0, (args, p.returncode, p.stderr)
-    return p.stdout.strip().decode()
-slot = run('fifo', '--slot', '3', 'prompt')
-assert slot == directory + '/prompt' and stat.S_ISFIFO(os.stat(slot).st_mode)
-assert os.stat(slot).st_mode & 0o777 == 0o600
+rows = os.get_terminal_size(0).lines
+prompt = run('bind', 'prompt')
+assert prompt == directory + '/prompt' and stat.S_ISFIFO(os.stat(prompt).st_mode)
+assert os.stat(prompt).st_mode & 0o777 == 0o600
 assert os.stat(directory).st_mode & 0o777 == 0o700
-assert run('fifo', '--slot', '3', 'prompt') == slot
-with open(slot, 'wb') as writer:
+# Binding by ID or name reaches one pipe, named after the line.
+assert run('bind', '2') == prompt and run('bind', 'prompt') == prompt
+assert os.get_terminal_size(0).lines == rows
+with open(prompt, 'wb') as writer:
     writer.write(b'one '); writer.flush(); writer.write(b'two\n')
-time.sleep(.12)
-run('set', '3', 'manual')
-time.sleep(.12)
-with open(slot, 'wb') as writer: writer.write(b'one two\n')
-time.sleep(.12)
-with open(slot, 'wb') as writer: writer.write(b'\x1b[31mRED\x1b[0m\rBLUE\n')
-time.sleep(.12)
-with open(slot, 'wb') as writer: writer.write(b'PARTIAL')
-time.sleep(.12)
-with open(slot, 'wb') as writer: writer.write(b'\n#[bold]LITERAL\n')
-time.sleep(.12)
-row = run('fifo', 'build')
-assert row == directory + '/build' and stat.S_ISFIFO(os.stat(row).st_mode)
-assert run('fifo', 'build') == row
-with open(row, 'wb') as writer: writer.write('Καλημέρα\n'.encode())
-time.sleep(.12)
-with open(row, 'wb') as writer: writer.write(b'FINAL_SUCCESS')
-run('fifo', '--finish', 'build', '--exit-code', '0')
-time.sleep(.12)
-assert run('fifo', '--finish', 'build', '--exit-code', '0') == ''
-assert subprocess.run([b, 'fifo', '--finish', 'build', '--exit-code', '7'], capture_output=True).returncode != 0
-run('fifo', '--start', 'build')
-with open(row, 'wb') as writer: writer.write(b'FINAL_FAILED\n')
-run('fifo', '--finish', '--exit-code', '7', 'build')
-time.sleep(.12)
-run('fifo', '--start', 'build')
-with open(row, 'wb') as writer: writer.write(b'FINAL_DONE\n')
-run('fifo', '--finish', 'build')
-time.sleep(.12)
-run('fifo', '--start', 'build')
-assert subprocess.run([b, 'fifo', '--finish', 'prompt'], capture_output=True).returncode != 0
-assert subprocess.run([b, 'fifo', '--start', 'prompt'], capture_output=True).returncode != 0
-assert subprocess.run([b, 'fifo', '--exit-code', '0', 'build'], capture_output=True).returncode != 0
+settle()
+run('set', 'prompt', 'manual')
+settle()
+with open(prompt, 'wb') as writer: writer.write(b'one two\n')
+settle()
+with open(prompt, 'wb') as writer: writer.write(b'\x1b[31mRED\x1b[0m\rBLUE\n')
+settle()
+with open(prompt, 'wb') as writer: writer.write(b'PARTIAL')
+settle()
+with open(prompt, 'wb') as writer: writer.write(b'\n#[bold]LITERAL #(value)\n')
+mark('LITERAL_WRITTEN')
+build = run('push', 'build', '--fifo')
+assert build == directory + '/build' and stat.S_ISFIFO(os.stat(build).st_mode)
+assert run('bind', 'build') == build and run('bind', '3') == build
+assert os.get_terminal_size(0).lines == rows - 1
+with open(build, 'wb') as writer: writer.write('Καλημέρα\n'.encode())
+settle()
+# Input written before a status change is applied first.
+with open(build, 'wb') as writer: writer.write(b'FINAL')
+run('set', 'build', '--status', 'success')
+mark('BUILD_SUCCESS')
+# A status is not a stream end: later input still updates the value.
+with open(build, 'wb') as writer: writer.write(b'\nLATER\n')
+mark('BUILD_LATER')
+unnamed = run('push', '--fifo')
+name = os.path.basename(unnamed)
+assert name == '4' and unnamed == directory + '/4'
+with open(unnamed, 'wb') as writer: writer.write(b'UNNAMED\n')
+settle()
+run('set', name, '--status', 'failed')
+settle()
+run('pop', name)
+assert not os.path.exists(unnamed)
 fd, nested_info = tempfile.mkstemp(); os.close(fd)
 try:
     nested_code = ('import os,subprocess,sys; '
-        'p=subprocess.run([sys.argv[2],"fifo","nested"],capture_output=True,check=True).stdout.strip().decode(); '
-        'open(sys.argv[1],"w").write(os.environ["STATUSBAR_SLOTS"]+"\\n"+p); '
+        'p=subprocess.run([sys.argv[2],"push","nested","--fifo"],capture_output=True,check=True).stdout.strip().decode(); '
+        'open(sys.argv[1],"w").write(os.environ["STATUSBAR_FIFOS"]+"\\n"+p); '
         'open(p,"wb").write(b"NESTED\\n")')
     assert subprocess.run([b, '--', sys.executable, '-c', nested_code, nested_info, b], timeout=8).returncode == 0
     nested_dir, nested_path = open(nested_info).read().splitlines()
     assert nested_dir != directory and nested_path.startswith(nested_dir + '/')
     assert not os.path.exists(nested_path) and not os.path.exists(nested_dir)
-    assert os.path.exists(row) and os.path.exists(slot)
+    assert os.path.exists(build) and os.path.exists(prompt)
 finally:
     os.unlink(nested_info)
+# macOS does not wake poll for one large blocking FIFO write; the clock
+# on the base line wakes the loop, which then drains the pipe.
 flood = subprocess.Popen([sys.executable, '-c',
-    'import sys; f=open(sys.argv[1],"wb"); f.write(b"flood\\n"*30000); f.close()', row])
-run('set', '1', 'RESPONSIVE')
-spare = run('fifo', '--slot', '4', 'spare')
-with open(spare, 'wb') as writer: writer.write(b'SPARE\n')
-assert flood.wait(timeout=4) == 0
-run('fifo', '--remove', 'spare')
-run('config', input=b'[line.1]\nleft = CHANGED\n[line.2]\nleft = NEWBASE\n')
-time.sleep(.12)
-assert os.path.exists(slot) and os.path.exists(row)
+    'import sys; f=open(sys.argv[1],"wb"); f.write(b"flood\\n"*30000); f.close()', build])
+run('set', 'base', 'RESPONSIVE')
+assert flood.wait(timeout=10) == 0
+# Surviving lines keep their pipes across reloads; failed reloads change nothing.
+run('config', input=b'[line.base]\ntext = "CHANGED #(value)"\n[line.prompt]\ntext = "NEW[#(value)]"\n[push]\ntext = "#(value)#(fill: )#(status) [#(name)]"\n')
+settle()
+assert os.path.exists(prompt) and os.path.exists(build)
 assert subprocess.run([b, 'config'], input=b'[bad]\n', capture_output=True).returncode != 0
-assert os.path.exists(slot) and os.path.exists(row)
-run('set', '3', 'AFTER_FIFO')
-run('fifo', '--remove', 'prompt')
-time.sleep(.12)
-assert not os.path.exists(slot)
-assert run('fifo', '--slot', '3', 'prompt') == slot
-assert subprocess.run([b, 'fifo', '--slot', '1', 'prompt'], capture_output=True).returncode != 0
-assert subprocess.run([b, 'fifo', '--slot', '3', 'other'], capture_output=True).returncode != 0
-assert subprocess.run([b, 'fifo', '--slot', '9', 'outside'], capture_output=True).returncode != 0
-assert subprocess.run([b, 'fifo', '123'], capture_output=True).returncode != 0
-assert subprocess.run([b, 'fifo', '../escape'], capture_output=True).returncode != 0
-assert subprocess.run([b, 'fifo', '--slot', '3', '--remove', 'prompt'], capture_output=True).returncode != 0
-wrong = os.environ.copy(); wrong['STATUSBAR_SESSION_ID'] = '0' * 32
-assert subprocess.run([b, 'fifo', 'wrong'], env=wrong, capture_output=True).returncode != 0
-assert not os.path.exists(directory + '/wrong')
-outside = os.environ.copy(); outside.pop('STATUSBAR_SESSION_ID'); outside.pop('STATUSBAR_STATE')
-assert subprocess.run([b, 'fifo', 'outside'], env=outside, capture_output=True).returncode != 0
-run('pop', '--all')
-assert not os.path.exists(row) and os.path.exists(slot)
-row2 = run('fifo', 'build')
-assert row2 == row
-old_writer = os.open(row2, os.O_WRONLY)
-os.write(old_writer, b'REBUILT\n')
-time.sleep(.12)
-run('fifo', '--remove', 'build')
-assert not os.path.exists(row)
+assert os.path.exists(prompt) and os.path.exists(build)
+# Unbinding keeps the line, its value and its status.
+old_writer = os.open(prompt, os.O_WRONLY)
+os.write(old_writer, b'BEFORE_UNBIND\n')
+settle()
+run('bind', '-u', 'prompt')
+assert not os.path.exists(prompt)
 try:
     os.write(old_writer, b'OLD\n')
     raise AssertionError('removed FIFO writer stayed connected')
 except BrokenPipeError:
     pass
 os.close(old_writer)
-assert run('fifo', 'build') == row
-run('pop')
-assert not os.path.exists(row)
-run('config', input=b'[line.1]\nleft = SHRUNK\n')
+run('bind', '--unbind', '2')
+mark('UNBOUND')
+assert run('bind', 'prompt') == prompt
+run('bind', '--unbind', 'build')
+assert not os.path.exists(build)
+assert run('bind', 'build') == build
+for args, code in ((['missing'], 1), (['../escape'], 2), (['a.b'], 2), (['0'], 2), ([], 2)):
+    run('bind', *args, code=code)
+wrong = os.environ.copy(); wrong['STATUSBAR_SESSION_ID'] = '0' * 32
+assert subprocess.run([b, 'bind', 'base'], env=wrong, capture_output=True).returncode != 0
+assert not os.path.exists(directory + '/base')
+outside = os.environ.copy(); outside.pop('STATUSBAR_SESSION_ID'); outside.pop('STATUSBAR_STATE')
+assert subprocess.run([b, 'bind', 'base'], env=outside, capture_output=True).returncode == 2
+run('pop', '--all')
+assert not os.path.exists(build) and os.path.exists(prompt)
+# Removing a configured line in a reload removes its pipe.
+run('config', input=b'[line.base]\ntext = SHRUNK\n')
 deadline = time.monotonic() + 2
-while os.path.exists(slot) and time.monotonic() < deadline: time.sleep(.02)
-assert not os.path.exists(slot)
-run('fifo', '--remove', 'prompt')
-assert not os.path.exists(slot)
-assert run('fifo', '--remove', 'prompt') == ''
+while os.path.exists(prompt) and time.monotonic() < deadline: time.sleep(.02)
+assert not os.path.exists(prompt)
 with open(directory + '/collision', 'wb') as file: file.write(b'keep')
-assert subprocess.run([b, 'fifo', 'collision'], capture_output=True).returncode != 0
+rows = os.get_terminal_size(0).lines
+run('push', 'collision', '--fifo', code=1)
 assert open(directory + '/collision', 'rb').read() == b'keep'
+assert os.get_terminal_size(0).lines == rows
+run('set', 'collision', 'x', code=1)
 os.unlink(directory + '/collision')
-end = run('fifo', 'end')
+end = run('push', 'end', '--fifo')
 print('FIFO_CLEANUP=' + end, flush=True)
 print('FIFO_OK', flush=True)
 '''
-    config = (b'[line.1]\nleft = BASE\n[line.2]\nleft = SLOTBASE\n'
-              b'[line.push]\nleft = #(stream)\nright = FIFO_RUNNING\n'
-              b'[line.push.done]\nright = FIFO_DONE\n'
-              b'[line.push.success]\nright = FIFO_SUCCESS #(exit_code)\n'
-              b'[line.push.failed]\nright = FIFO_FAILED #(exit_code)\n')
-    with tempfile.NamedTemporaryFile(delete=False) as cfg:
-        cfg.write(config)
-        path = cfg.name
-    try:
-        code, data = capture_pty([binary, '-c', path, '--', sys.executable,
-                                  '-c', child, binary], timeout=15)
-        assert code == 0 and b'FIFO_OK' in data, data[-2500:]
-        assert b'one two' in data and b'manual' in data, data[-2500:]
-        assert data.find(b'one two', data.find(b'manual')) > data.find(b'manual'), data[-2500:]
-        assert b'BLUE' in data and b'PARTIAL' in data, data[-2500:]
-        assert b'#[bold]LITERAL' in data, data[-2500:]
-        assert 'Καλημέρα'.encode() in data and b'REBUILT' in data, data[-2500:]
-        assert b'FINAL_SUCCESS' in data and b'FIFO_SUCCESS 0' in data, data[-2500:]
-        assert b'FINAL_FAILED' in data and b'FIFO_FAILED 7' in data, data[-2500:]
-        assert b'FINAL_SUCCESSFINAL_FAILED' not in data, data[-2500:]
-        assert b'FINAL_DONE' in data and b'FIFO_DONE' in data, data[-2500:]
-        assert b'RESPONSIVE' in data and b'SPARE' in data, data[-2500:]
-        assert b'NEWBASE' in data, data[-2500:]
-        cleanup = re.search(rb'FIFO_CLEANUP=([^\r\n]+)', data)
-        assert cleanup and not os.path.exists(cleanup.group(1).decode()), data[-2500:]
-        assert not os.path.exists(os.path.dirname(cleanup.group(1).decode())), data[-2500:]
-    finally:
-        os.unlink(path)
-    print('named FIFOs for slots and pushed rows passed')
+    config = ('[line.base]\ntext = "BASE #(value)#(fill: )#(datetime:%S)"\n[line.prompt]\ndefault = SLOTBASE\ntext = "PROMPT[#(value)]"\n'
+              '[push]\ntext = "#(value)#(fill: )#(status) [#(name)]"\n')
+    code, data = run_session(binary, config, child, timeout=20)
+    assert code == 0 and b'FIFO_OK' in data, data[-2500:]
+    text = plain(data)
+    assert b'PROMPT[SLOTBASE]' in text and b'PROMPT[one two]' in text and b'PROMPT[manual]' in text, text[-2500:]
+    assert text.find(b'PROMPT[one two]', text.find(b'PROMPT[manual]')) > text.find(b'PROMPT[manual]'), text[-2500:]
+    assert b'PROMPT[BLUE]' in text and b'PROMPT[PARTIAL]' in text, text[-2500:]
+    assert b'PROMPT[#[bold]LITERAL #(value)]' in text, text[-2500:]
+    rows = painted(data)
+    assert any('Καλημέρα'.encode() in row and row.endswith(b'running [build]') for row in rows), rows[-10:]
+    assert any(row.startswith(b'FINAL') and row.endswith(b'success [build]') for row in rows), rows[-10:]
+    assert any(row.startswith(b'LATER') and row.endswith(b'success [build]') for row in rows), rows[-10:]
+    assert any(row.startswith(b'UNNAMED') and row.endswith(b'failed [4]') for row in rows), rows[-10:]
+    assert b'BASE RESPONSIVE' in text and b'NEW[BEFORE_UNBIND]' in text, text[-2500:]
+    assert b'NEW[OLD]' not in text, text[-2500:]
+    cleanup = re.search(rb'FIFO_CLEANUP=([^\r\n]+)', data)
+    assert cleanup and not os.path.exists(cleanup.group(1).decode()), data[-2500:]
+    assert not os.path.exists(os.path.dirname(cleanup.group(1).decode())), data[-2500:]
+    print('bind, push --fifo, ID/name equivalence, input order, unbind, reload pruning, and cleanup passed')
 
 
 def check_fifo_signal_cleanup(binary):
     child = r'''
 import os, subprocess, sys, time
-path = subprocess.run([sys.argv[1], 'fifo', 'signal'], capture_output=True, check=True).stdout.strip().decode()
+path = subprocess.run([sys.argv[1], 'push', 'signal', '--fifo'], capture_output=True, check=True).stdout.strip().decode()
 print('SIGNAL_FIFO=' + path, flush=True)
 time.sleep(30)
 '''
-    pid, master = spawn([binary, '--', sys.executable, '-c', child, binary])
+    pid, master = spawn([binary, '--', sys.executable, '-c', child, binary], env=clean_env())
     reaped = False
     try:
         data = read_until(master, b'', b'SIGNAL_FIFO=', timeout=5)
@@ -1555,61 +1536,48 @@ time.sleep(30)
 
 
 def check_push_completion(binary):
-    child = r'''
-import os, signal, subprocess, sys, time
-b = sys.argv[1]
-def pause():
-    time.sleep(.2)
+    child = CHILD_PRELUDE + r'''
 def pop():
     subprocess.run([b, 'pop'], check=True, capture_output=True)
 p = subprocess.Popen([b, 'push'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 p.stdin.write(b'PIPE_CONTENT'); p.stdin.flush(); time.sleep(1)
 p.stdin.close()
 assert p.wait(timeout=4) == 0
-pause(); pop()
+settle(); pop()
 for code in (0, 7, 130):
     command = subprocess.run([b, 'push', '--', sys.executable, '-c',
-                              f'print("COMMAND_CONTENT"); raise SystemExit({code})'], capture_output=True)
+                              f'print("COMMAND_{code}"); raise SystemExit({code})'], capture_output=True)
     assert command.returncode == code, command
-    pause(); pop()
+    settle(); pop()
 command = subprocess.run([b, 'push', '--', sys.executable, '-c',
-                          'import os,signal; os.kill(os.getpid(), signal.SIGTERM)'], capture_output=True)
+                          'import os,signal; print("SIGNALED", flush=True); os.kill(os.getpid(), signal.SIGTERM)'], capture_output=True)
 assert command.returncode == 128 + signal.SIGTERM, command
-pause()
-# Reload must use the stored result, including signal identity.
-subprocess.run([b, 'config'], input=b'[line.1]\n[line.push.failed]\nleft = RELOADED_CODE_#(exit_code)_SIGNAL_#(signal)\n', check=True, capture_output=True)
-pause(); pop()
+settle()
+# Reload renders the stored status with the new templates.
+subprocess.run([b, 'config'], input=b'[line.a]\n[push]\ntext = RUNNING_AGAIN #(value)\nfailed = RELOADED_#(status)_#(value)\n', check=True, capture_output=True)
+settle()
+# Any transition is allowed, keeping the value.
+run('set', '6', '--status', 'running'); settle()
+run('set', '6', '--status', 'normal'); settle()
+pop()
 print('COMPLETION_OK', flush=True)
 '''
-    config = b'''[line.1]
-left = configured
-[line.push]
-left = ACTIVE #(stream)
-right = ""
-[line.push.done]
-left = PIPE_DONE #(stream)
-right = CODE_#(exit_code)_SIGNAL_#(signal)_END
-[line.push.success]
-left = COMMAND_OK #(stream)
-[line.push.failed]
-left = COMMAND_FAILED #(stream)
+    config = '''[line.a]
+text = configured
+[push]
+text = "ACTIVE #(value)"
+done = "PIPE_DONE #(value)"
+success = "COMMAND_OK #(value)"
+failed = "COMMAND_FAILED #(value)"
 '''
-    with tempfile.NamedTemporaryFile(delete=False) as cfg:
-        cfg.write(config)
-        path = cfg.name
-    try:
-        code, data = capture_pty([binary, '-c', path, '--', sys.executable, '-c', child, binary], timeout=12)
-        assert code == 0 and b'COMPLETION_OK' in data, data[-3000:]
-        plain = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', data)
-        assert plain.index(b'PIPE_CONTENT') < plain.index(b'PIPE_DONE'), plain[-1000:]
-        for expected in (b'PIPE_DONE PIPE_CONTENT', b'CODE__SIGNAL__END',
-                         b'COMMAND_OK COMMAND_CONTENT', b'COMMAND_FAILED COMMAND_CONTENT',
-                         b'CODE_0_SIGNAL__END', b'CODE_7_SIGNAL__END', b'CODE_130_SIGNAL__END',
-                         b'CODE_143_SIGNAL_15_END', b'RELOADED_CODE_143_SIGNAL_15'):
-            assert expected in plain, (expected, plain[-4000:])
-    finally:
-        os.unlink(path)
-    print('push completion, exit codes, signals, and completion after reload passed')
+    code, data = run_session(binary, config, child, timeout=15)
+    assert code == 0 and b'COMPLETION_OK' in data, data[-3000:]
+    text = plain(data)
+    assert text.index(b'ACTIVE PIPE_CONTENT') < text.index(b'PIPE_DONE PIPE_CONTENT'), text[-1000:]
+    for expected in (b'COMMAND_OK COMMAND_0', b'COMMAND_FAILED COMMAND_7', b'COMMAND_FAILED COMMAND_130',
+                     b'COMMAND_FAILED SIGNALED', b'RELOADED_failed_SIGNALED', b'RUNNING_AGAIN SIGNALED'):
+        assert expected in text, (expected, text[-4000:])
+    print('push completion statuses, exit codes, signals, transitions, and reload passed')
 
 
 def check_push_spinner(binary):
@@ -1618,76 +1586,170 @@ import os, subprocess, sys, time
 b = sys.argv[1]
 r = subprocess.run([b, 'push', '--', sys.executable, '-c',
     'import os,time; print("width=" + os.environ["COLUMNS"], flush=True); time.sleep(.8)'], capture_output=True)
-assert r.returncode == 0 and r.stdout == b'1\n', r
+assert r.returncode == 0 and r.stdout == b'2\n', r
 # A completed line must remain quiet even while the session stays open.
 time.sleep(.4)
 with open(os.environ['SPINNER_COUNTER']) as f:
     assert f.read().splitlines() == ['once']
 print('SPINNER_OK', flush=True)
 '''
-    config = '''[line.1]
-left = #(note)
-[line.push]
+    config = '''[line.a]
+text = #(command:note)
+[push]
 spinner = "-界"
 spinner_interval = 0.1
-left = "<#(spinner)>#(stream)"
-right = "[#(id)]"
-[line.push.done]
-left = "DONE #(spinner)#(stream)"
+text = "<#(spinner)>#(value)#(fill: )[#(name)]"
+done = "DONE #(spinner)#(value)"
+success = "DONE #(spinner)#(value)"
 [command.note]
 run = printf 'once\\n' >> "$SPINNER_COUNTER"; printf snapshot
 interval = 86400
 '''
     with tempfile.TemporaryDirectory() as directory:
-        path = os.path.join(directory, 'config')
-        with open(path, 'w') as f:
-            f.write(config)
         env = os.environ.copy()
         env['SPINNER_COUNTER'] = os.path.join(directory, 'counter')
-        code, data = capture_pty([binary, '-c', path, '--', sys.executable, '-c', child, binary], env=env, timeout=8)
+        code, data = run_session(binary, config, child, env=env, timeout=8)
         assert code == 0 and b'SPINNER_OK' in data, data[-2000:]
-        plain = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', data)
-        assert plain.count(b'<- >width=72') >= 2, plain[-2000:]
-        assert plain.count('<界>width=72'.encode()) >= 2, plain[-2000:]
-        assert b'DONE width=72' in plain, plain[-2000:]
-        completed = plain[plain.index(b'DONE width=72'):]
+        text = plain(data)
+        assert text.count(b'<- >width=73') >= 2, text[-2000:]
+        assert text.count('<界>width=73'.encode()) >= 2, text[-2000:]
+        assert b'DONE width=73' in text, text[-2000:]
+        completed = text[text.index(b'DONE width=73'):]
         assert b'<- >' not in completed and '<界>'.encode() not in completed, completed
     print('push spinner animation, stable command width, completion, and command pacing passed')
+
+
+def check_reload_lines(binary):
+    child = CHILD_PRELUDE + r'''
+run('set', 'a', 'kept', '--status', 'success')
+run('set', 'b', '')
+c = run('bind', 'c')
+mark('BEFORE_RELOAD')
+run('config', input=b'[line.c]\ntext = "C[#(value)]"\n[line.b]\ndefault = B1\ntext = "B[#(value)]"\n[line.a]\ndefault = A1\ntext = "A[#(value)|#(status)]"\n[line.d]\ntext = "D[#(value)]"\n')
+mark('REORDERED')
+assert os.path.exists(c)
+# IDs survive reordering: a is still ID 1, and d is new.
+run('set', '1', 'by-id'); run('set', '4', 'new-line')
+mark('BY_ID')
+run('set', 'a', '--reset')
+run('config', input=b'[line.a]\ndefault = A2\ntext = "A[#(value)|#(status)]"\n[line.b]\ntext = "B[#(value)]"\n')
+mark('DROPPED')
+deadline = time.monotonic() + 2
+while os.path.exists(c) and time.monotonic() < deadline: time.sleep(.02)
+assert not os.path.exists(c)
+run('set', 'c', 'x', code=1)
+# A configured name used by a pushed line, or a bad config, changes nothing.
+assert run('push', 'job', input=b'pushed\n') == 'job'
+run('config', input=b'[line.a]\n[line.job]\n')
+run('config', input=b'[line.a]\ntext = #(nope)\n', code=2)
+mark('REJECTED')
+run('set', 'a', 'still')
+mark('RELOAD_OK')
+'''
+    config = '[line.a]\ndefault = A0\ntext = "A[#(value)|#(status)]"\n[line.b]\ndefault = B0\ntext = "B[#(value)]"\n[line.c]\ntext = "C[#(value)]"\n'
+    code, data = run_session(binary, config, child, timeout=15)
+    assert code == 0 and b'RELOAD_OK' in data, data[-3000:]
+    text = plain(data)
+    before = between(text, b'BEFORE_RELOAD', b'REORDERED')
+    assert b'A[kept|success]' in before and b'B[]' in before, before
+    by_id = between(text, b'REORDERED', b'BY_ID')
+    assert b'A[by-id|success]' in by_id and b'D[new-line]' in by_id, by_id
+    dropped = between(text, b'BY_ID', b'DROPPED')
+    assert b'A[A2|success]' in dropped and b'B[]' in dropped, dropped
+    rejected = between(text, b'DROPPED', b'RELOAD_OK')
+    assert b'A[still|success]' in rejected and b'pushed' in rejected, rejected
+    # Declaration order decides the rows: c, b, a, d from the top.
+    rows = painted_rows(between(data, b'BEFORE_RELOAD', b'BY_ID'))
+    tops = {row: texts[-1] for row, texts in rows.items()}
+    assert tops[21].startswith(b'C[') and tops[22].startswith(b'B[') and tops[23].startswith(b'A[') and tops[24].startswith(b'D['), tops
+    print('reload keeps line state by name, follows declaration order, prunes bindings, and rolls back')
+
+
+def check_startup_recovery(binary):
+    """A config that cannot be used never keeps the shell from starting."""
+    child = "test -t 0 && printf CHILD_STARTED; exit 5"
+    with tempfile.TemporaryDirectory() as folder:
+        invalid = os.path.join(folder, "bad config.statusbar")
+        with open(invalid, "w") as file:
+            file.write("[line.a]\ntext = fine\n[line.b]\nleft = old syntax\n")
+        valid = os.path.join(folder, "valid.config")
+        with open(valid, "w") as file:
+            file.write("[line.a]\ntext = VALID_ANY_SUFFIX\n")
+        cases = [
+            ([binary, "--config", invalid], {}, b"statusbar: line 4: left, right and rule were removed"),
+            ([binary], {"STATUSBAR_CONFIG": invalid}, b"statusbar: line 4:"),
+            ([binary, "--config", os.path.join(folder, "missing.statusbar")], {}, b"statusbar: cannot read config: FileNotFound"),
+            ([binary, "--config", folder], {}, b"statusbar: cannot read config:"),
+        ]
+        for argv, extra, message in cases:
+            env = clean_env()
+            env.update(extra)
+            env["XDG_CONFIG_HOME"] = os.path.join(folder, "empty-xdg")
+            code, data = capture_pty([*argv, "--", "/bin/sh", "-c", child], env=env)
+            assert code == 5 and b"CHILD_STARTED" in data, (argv, data[-1500:])
+            assert any(message in row for row in painted(data)), (message, painted(data))
+        with open(invalid) as file:
+            assert "left = old syntax" in file.read()
+        # An explicit path works whatever its suffix.
+        code, data = capture_pty([binary, "--config", valid, "--", "/bin/sh", "-c", child], env=clean_env())
+        assert code == 5 and b"VALID_ANY_SUFFIX" in plain(data), data[-1500:]
+
+        # Default discovery: the new file wins; an old file alone warns; no
+        # file at all is an ordinary built-in start.
+        xdg = os.path.join(folder, "xdg")
+        directory = os.path.join(xdg, "statusbar")
+        os.makedirs(directory)
+        env = clean_env()
+        env["XDG_CONFIG_HOME"] = xdg
+        code, data = capture_pty([binary, "--", "/bin/sh", "-c", child], env=env)
+        assert code == 5 and not any(b"statusbar:" in row for row in painted(data)), painted(data)
+        assert subprocess.run([binary, "config", "--path"], env=env, capture_output=True).stdout == b"built-in\n"
+        legacy = os.path.join(directory, "config")
+        with open(legacy, "w") as file:
+            file.write("[line.1]\nleft = LEGACY\n")
+        code, data = capture_pty([binary, "--", "/bin/sh", "-c", child], env=env)
+        assert code == 5 and b"LEGACY" not in plain(data), data[-1500:]
+        assert any(b"the old config file is no longer loaded" in row for row in painted(data)), painted(data)
+        current = os.path.join(directory, "config.statusbar")
+        with open(current, "w") as file:
+            file.write("[line.a]\ntext = NEW_DEFAULT\n")
+        code, data = capture_pty([binary, "--", "/bin/sh", "-c", child], env=env)
+        assert code == 5 and b"NEW_DEFAULT" in plain(data), data[-1500:]
+        assert not any(b"old config" in row for row in painted(data)), painted(data)
+        result = subprocess.run([binary, "config", "--path"], env=env, capture_output=True)
+        assert result.stdout == os.fsencode(current) + b"\n", result
+
+        # A valid replacement removes the warning; an invalid one keeps it.
+        session = CHILD_PRELUDE + r'''
+rows = os.get_terminal_size(0).lines
+assert subprocess.run([b, 'config'], input=b'[bad]\n', capture_output=True).returncode == 2
+run('config', input=b'[line.a]\ntext = #(unknown)\n', code=2)
+mark('STILL_WARNED')
+assert os.get_terminal_size(0).lines == rows
+run('config', input=b'[line.a]\ntext = RECOVERED\n')
+settle()
+assert os.get_terminal_size(0).lines == rows + 2
+mark('RECOVERED_OK')
+'''
+        env = clean_env()
+        env["XDG_CONFIG_HOME"] = os.path.join(folder, "empty-xdg")
+        code, data = capture_pty([binary, "--config", invalid, "--", sys.executable, "-c", session, binary], env=env, timeout=10)
+        assert code == 0 and b"RECOVERED_OK" in data, data[-2000:]
+        after = painted_rows(data[data.index(b"STILL_WARNED"):])
+        assert any(b"RECOVERED" in text for texts in after.values() for text in texts), after
+        final = painted_rows(data[data.index(b"STILL_WARNED"):])
+        assert not any(b"statusbar: line" in texts[-1] for texts in final.values()), final
+    print("startup recovery: invalid, missing and legacy configs start the shell with a warning; reload clears it")
 
 
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: multirow_pty.py STATUSBAR")
     binary = os.path.abspath(sys.argv[1])
-    check_set_dash(binary)
-
-    with tempfile.TemporaryDirectory() as directory:
-        env = os.environ.copy()
-        env["STATUSBAR_STATE"] = session_state_stub(directory, 1)
-        code, data = capture_pty([binary, "set", "1", "   "], env)
-        assert code == 0
-        assert osc_value(data, 1) == b"   ", data
-
-        outside_env = env.copy()
-        outside_env.pop("STATUSBAR_STATE")
-        outside_env["STATUSBAR_LINES"] = "1"  # obsolete fallback is ignored
-        code, data = capture_pty([binary, "set", "1", "x"], outside_env)
-        assert code == 0 and b"SetUserVar=StatusBarSlot" not in data, data
-
-        invalid_path = os.path.join(directory, "invalid-state")
-        with open(invalid_path, "w", encoding="ascii") as state:
-            state.write("malformed\n")
-        invalid_env = env.copy()
-        invalid_env["STATUSBAR_STATE"] = invalid_path
-        invalid = subprocess.run(
-            [binary, "set", "1", "x"], env=invalid_env,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-        )
-        assert invalid.returncode == 2
-        assert b"STATUSBAR_STATE is unavailable or malformed" in invalid.stderr
-
+    check_set(binary)
     check_init_invocation(binary)
     check_stdin_config(binary)
+    check_startup_recovery(binary)
     check_osc7_titles(binary)
     check_zsh(binary)
     check_fish(binary)
@@ -1709,15 +1771,15 @@ def main():
     check_fifo_signal_cleanup(binary)
     check_push_completion(binary)
     check_push_spinner(binary)
+    check_reload_lines(binary)
     config = """\
-[line.1]
-left = one
-rule = -
-[line.2]
-left = two
-[line.3]
-left = three
-right = configured-six
+[line.one]
+text = "one#(fill:-)"
+[line.two]
+default = two
+[line.three]
+default = three
+text = "#(value)#(fill: )configured-six"
 """
     script = r'''
 statusbar_bin=$1
@@ -1726,24 +1788,24 @@ size=$(stty size); rows=${size%% *}; printf "__START__:%s:%s\n" "$rows" "${STATU
 while :; do
   IFS= read -r command || continue
   case "$command" in
-    SET) "$statusbar_bin" set 6 hidden-value; printf '__SET__\n' ;;
-    ROW) "$statusbar_bin" set 3 changed-row-two ;;
+    SET) "$statusbar_bin" set three hidden-value; printf '__SET__\n' ;;
+    ROW) "$statusbar_bin" set two changed-row-two ;;
     CLEAR) printf '\033[2J__CLEAR__\n' ;;
     ALT) printf '\033[?1049h__ALT__\n' ;;
     NORMAL) printf '\033[?1049l__NORMAL__\n' ;;
     BYTES) printf '\033[32m__FORWARDED__\033[0m\n' ;;
-    BAD) "$statusbar_bin" set 7 bad; printf '__BAD__:%s\n' "$?" ;;
+    BAD) "$statusbar_bin" set missing bad 2>/dev/null; printf '__BAD__:%s\n' "$?" ;;
     EXIT) exit 0 ;;
   esac
 done
 '''
-    with tempfile.NamedTemporaryFile("w", delete=False) as cfg:
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".statusbar") as cfg:
         cfg.write(config)
         config_path = cfg.name
     pid = master = None
     try:
         argv = [binary, "-c", config_path, "--", "/bin/sh", "-c", script, "sh", binary]
-        pid, master = spawn(argv)
+        pid, master = spawn(argv, env=clean_env())
         data = read_until(master, b"", b"__START__:21:unset")
         data = read_until(master, data, b"configured-six")
         suffix = b"\x1b[0m\x1b8\x1b[?7h"
@@ -1782,8 +1844,7 @@ done
         data = read_until(master, data, b"hidden-value")
 
         os.write(master, b"BAD\n")
-        data = read_until(master, data, b"__BAD__:2")
-        assert b"StatusBarSlot7=" not in data, "invalid update was written"
+        data = read_until(master, data, b"__BAD__:1")
 
         # A huge width exceeds the bounded renderer budget during resize.
         # It must terminate, restore terminal modes, and print a diagnostic.
