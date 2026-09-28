@@ -1,0 +1,32 @@
+# A three-line example with a bar-wide background.
+interval = 5
+style = bg=#1e1e2e,fg=#cdd6f4
+
+[colors]
+accent = #89b4fa
+muted = #6c7086
+
+[line.build]
+text = "#[fg=muted] Build #(fill:─) ready "
+
+[line.host]
+text = " #[fg=accent,bold]#(command:host)#[default]#(fill: ) #(datetime:%H:%M) "
+
+[line.directory]
+text = " #(command:pwd)#(fill: ) #(command:branch) "
+
+[push]
+text = "#[fg=accent]#(value)#(fill: )[#(name)]"
+done = "#[fg=accent]#(value)#(fill: )done [#(name)]"
+success = "#[fg=accent]#(value)#(fill: )#[fg=green]✓#[fg=accent] [#(name)]"
+failed = "#[fg=accent]#(value)#(fill: )#[fg=red]failed#[fg=accent] [#(name)]"
+
+[command.host]
+run = hostname -s
+interval = 3600
+
+[command.pwd]
+run = pwd
+
+[command.branch]
+run = git branch --show-current 2>/dev/null

@@ -1,0 +1,45 @@
+# Inspired by https://starship.rs/presets/tokyo-night
+# Cool blue badge, dark background, half-block border.
+interval = 5
+
+[colors]
+base = #1d2230
+text = #c0caf5
+muted = #a0a9cb
+accent = #769ff0
+border = #394260
+success = #9ece6a
+failure = #f7768e
+
+[line.border]
+text = "#[fg=border,bg=base]#(fill:▀)"
+
+# Starship's prompt details (the line's value) come first.
+[line.prompt]
+text = "#[fg=text,bg=base]#(value)#[fg=base,bg=accent,bold] #(command:user)@#(command:host) #[default,fg=text,bg=base]  #[fg=muted]load #[fg=accent]#(command:load)#[default,fg=text,bg=base]"
+text .= "#(fill: )"
+text .= "#[fg=muted]#(command:weather)  #(datetime:%a %d) #[default,fg=text,bg=base] #[fg=base,bg=accent,bold] #(datetime:%H:%M:%S) #[default,fg=text,bg=base]"
+
+# Lines created by `statusbar push`.
+[push]
+spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+text = "#[fg=muted,bg=base]#[fg=accent]#(spinner)#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
+done = "#[fg=muted,bg=base]· #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
+success = "#[fg=muted,bg=base]#[fg=success]✔#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
+failed = "#[fg=muted,bg=base]#[fg=failure]✗#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )#[fg=base,bg=failure,bold] failed #[default,fg=muted,bg=base]"
+
+[command.user]
+run = whoami
+interval = 3600
+
+[command.host]
+run = hostname -s
+interval = 3600
+
+[command.load]
+run = uptime | awk -F'load averages?: ' '{ split($2, a, /[, ]+/); print a[1] }'
+interval = 10
+
+[command.weather]
+run = curl https://wttr.in/\?format="%c%t+%m"
+interval = 300

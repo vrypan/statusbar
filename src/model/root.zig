@@ -19,6 +19,7 @@ test {
     _ = display;
     _ = line_source;
     _ = runtime_config;
+    _ = @import("shipped_configs_test.zig");
     _ = spinner;
     _ = status;
     _ = templates;

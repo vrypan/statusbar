@@ -41,7 +41,7 @@ package: all
 		test -x "$$dir/bin/statusbar" || exit 1; \
 		test -x "$$dir/bin/statusbar-theme" || exit 1; \
 		cmp AGENT_SETUP.md "$$dir/AGENT_SETUP.md" || exit 1; \
-		for theme in samples/themes/*.config; do \
+		for theme in samples/themes/*.statusbar; do \
 			cmp "$$theme" "$$dir/themes/$${theme##*/}" || exit 1; \
 		done; \
 		COPYFILE_DISABLE=1 tar -czf "$(DIST)/$$root.tar.gz" -C "$(DIST)" "$$root" || exit 1; \

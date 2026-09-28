@@ -34,12 +34,12 @@ class Statusbar < Formula
   test do
     assert_path_exists bin/"statusbar"
     assert_path_exists bin/"statusbar-theme"
-    assert_path_exists pkgshare/"themes/pure.config"
-    assert_path_exists pkgshare/"themes/pure-native.config"
+    assert_path_exists pkgshare/"themes/pure.statusbar"
+    assert_path_exists pkgshare/"themes/pure-native.statusbar"
     assert_path_exists pkgshare/"AGENT_SETUP.md"
     assert_match "Usage: statusbar-theme", shell_output("#{bin}/statusbar-theme --help")
     assert_match "Default directory: #{opt_pkgshare}/themes", shell_output("#{bin}/statusbar-theme --help")
     assert_match version.to_s, shell_output("#{bin}/statusbar --version")
-    assert_match "[line.1]", shell_output("#{bin}/statusbar config --default")
+    assert_match "[line.prompt]", shell_output("#{bin}/statusbar config --default")
   end
 end

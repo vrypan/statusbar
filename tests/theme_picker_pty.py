@@ -71,18 +71,18 @@ def hint_command(data):
 def check_picker(binary, root):
     themes = root / "themes with spaces"
     themes.mkdir()
-    a = b"[line.1]\nleft = FIRST\n"
-    z = b"[line.1]\nleft = LAST\n"
-    (themes / "z-last.config").write_bytes(z)
-    (themes / "a first's.config").write_bytes(a)
-    (themes / "b-link.config").symlink_to("a first's.config")
-    (themes / "broken.config").symlink_to("missing")
-    (themes / "ignored.config").mkdir()
+    a = b"[line.first]\ntext = FIRST\n"
+    z = b"[line.last]\ntext = LAST\n"
+    (themes / "z-last.statusbar").write_bytes(z)
+    (themes / "a first's.statusbar").write_bytes(a)
+    (themes / "b-link.statusbar").symlink_to("a first's.statusbar")
+    (themes / "broken.statusbar").symlink_to("missing")
+    (themes / "ignored.statusbar").mkdir()
     (themes / "README.md").write_text("not a theme")
-    os.mkfifo(themes / "pipe.config")
+    os.mkfifo(themes / "pipe.statusbar")
     data = pick(binary, themes, b"\x1b[B\x1b[B\r")
-    assert data.index(b"a first's.config") < data.index(b"b-link.config") < data.index(b"z-last.config")
-    for hidden in (b"README.md", b"ignored.config", b"pipe.config", b"broken.config"):
+    assert data.index(b"a first's.statusbar") < data.index(b"b-link.statusbar") < data.index(b"z-last.statusbar")
+    for hidden in (b"README.md", b"ignored.statusbar", b"pipe.statusbar", b"broken.statusbar"):
         assert hidden not in data, data
     frame = re.search(re.escape(PREFIX) + rb"([^\x1b]+)\x1b\\", data)
     assert frame, data
@@ -90,13 +90,13 @@ def check_picker(binary, root):
     assert frame.start() < data.index(b"\x1b[?1049l"), data
     assert b"__RESULT_0__" in data, data
     assert data.index(b"\x1b[?1049l") < data.index(b"To use this theme"), data
-    assert hint_command(data)[1] == str(themes / "z-last.config"), data
+    assert hint_command(data)[1] == str(themes / "z-last.statusbar"), data
 
     data = pick(binary, themes, b"\x1b[F\r", again=b"\x1b[H\r")
     frames = re.findall(re.escape(PREFIX) + rb"([^\x1b]+)\x1b\\", data)
     assert len(frames) == 2 and base64.b64decode(frames[0]).endswith(z) and base64.b64decode(frames[1]).endswith(a), data
 
-    assert hint_command(data)[1] == str(themes / "a first's.config"), data
+    assert hint_command(data)[1] == str(themes / "a first's.statusbar"), data
 
     for keys in (b"q", b"\x1b", b"\x03"):
         data = pick(binary, themes, keys)
@@ -111,17 +111,17 @@ def check_picker(binary, root):
     invalid.mkdir()
     for contents, diagnostic in ((b"[unknown]\n", b"unknown"), (b"", b"empty config"),
                                 (b"#" * 30000, b"limit")):
-        (invalid / "bad.config").write_bytes(contents)
+        (invalid / "bad.statusbar").write_bytes(contents)
         data = pick(binary, invalid, b"\r", apply_marker=diagnostic)
         assert PREFIX not in data and diagnostic in data and b"To use this theme" not in data, data
         assert b"__RESULT_0__" in data, data
     for variables, destination in (
-        ({"HOME": str(root / "home"), "XDG_CONFIG_HOME": "", "STATUSBAR_CONFIG": ""}, root / "home/.config/statusbar/config"),
-        ({"XDG_CONFIG_HOME": str(root / "xdg space"), "STATUSBAR_CONFIG": ""}, root / "xdg space/statusbar/config"),
+        ({"HOME": str(root / "home"), "XDG_CONFIG_HOME": "", "STATUSBAR_CONFIG": ""}, root / "home/.config/statusbar/config.statusbar"),
+        ({"XDG_CONFIG_HOME": str(root / "xdg space"), "STATUSBAR_CONFIG": ""}, root / "xdg space/statusbar/config.statusbar"),
         ({"STATUSBAR_CONFIG": str(root / "custom's config")}, root / "custom's config"),
     ):
         data = pick(binary, themes, b"\r", extra_env=variables)
-        assert hint_command(data) == ["cp", str(themes / "a first's.config"), str(destination)], data
+        assert hint_command(data) == ["cp", str(themes / "a first's.statusbar"), str(destination)], data
         assert not destination.exists(), destination
 
     # Applying the original again leaves no change to persist.
@@ -135,11 +135,11 @@ def check_picker(binary, root):
 def check_live(picker, statusbar, root):
     themes = root / "live"
     themes.mkdir()
-    old = "[line.1]\nleft = OLD_THEME\n"
-    new = "".join(f"[line.{i}]\nleft = NEW_ROW_{i}\n" for i in range(1, 6))
-    initial = root / "initial.config"
+    old = "[line.old]\ntext = OLD_THEME\n"
+    new = "".join(f"[line.row{i}]\ntext = NEW_ROW_{i}\n" for i in range(1, 6))
+    initial = root / "initial.statusbar"
     initial.write_text(old)
-    selected = themes / "new.config"
+    selected = themes / "new.statusbar"
     script = '''
 "$1" "$2"
 printf '__PICKER_DONE__'
@@ -186,7 +186,7 @@ def main():
         root = Path(directory).resolve()
         result = subprocess.run([picker, directory], capture_output=True,
                                 env=dict(env, STATUSBAR_SESSION_ID=TOKEN))
-        assert result.returncode == 1 and b"no .config files" in result.stderr
+        assert result.returncode == 1 and b"no .statusbar files" in result.stderr
         check_picker(picker, root)
         check_live(picker, statusbar, root)
 

@@ -2,16 +2,16 @@
 
 Each layout has an original version with fixed RGB colors and a `-native`
 version that uses the terminal's palette. Native versions keep the same
-commands, refresh intervals, and number of lines.
+commands, refresh intervals, and lines.
 
 | Original | Terminal palette version | Layout |
 | --- | --- | --- |
-| [pure.config](pure.config) | [pure-native.config](pure-native.config) | Transparent background, blue host, purple clock, muted divider |
-| [tokyo-night.config](tokyo-night.config) | [tokyo-night-native.config](tokyo-night-native.config) | Blue badges and a half-block border |
-| [gruvbox.config](gruvbox.config) | [gruvbox-native.config](gruvbox-native.config) | Rounded Powerline segments |
-| [pastel-powerline.config](pastel-powerline.config) | [pastel-powerline-native.config](pastel-powerline-native.config) | Multicolored segments with Powerline arrows |
-| [minimal.config](minimal.config) | [minimal-native.config](minimal-native.config) | Starship placeholder and a small braille ornament |
-| [multi-line.config](multi-line.config) | [multi-line-native.config](multi-line-native.config) | Five lines with Starship space, Hacker News, GitHub notifications, load, and weather |
+| [pure.statusbar](pure.statusbar) | [pure-native.statusbar](pure-native.statusbar) | Transparent background, blue host, purple clock, muted divider |
+| [tokyo-night.statusbar](tokyo-night.statusbar) | [tokyo-night-native.statusbar](tokyo-night-native.statusbar) | Blue badges and a half-block border |
+| [gruvbox.statusbar](gruvbox.statusbar) | [gruvbox-native.statusbar](gruvbox-native.statusbar) | Rounded Powerline segments |
+| [pastel-powerline.statusbar](pastel-powerline.statusbar) | [pastel-powerline-native.statusbar](pastel-powerline-native.statusbar) | Multicolored segments with Powerline arrows |
+| [minimal.statusbar](minimal.statusbar) | [minimal-native.statusbar](minimal-native.statusbar) | Starship placeholder and a small braille ornament |
+| [multi-line.statusbar](multi-line.statusbar) | [multi-line-native.statusbar](multi-line-native.statusbar) | Five lines with Starship space, Hacker News, GitHub notifications, load, and weather |
 
 Pure, Tokyo Night, Gruvbox, and Pastel Powerline share a baseline of user,
 host, load, weather, and a clock. The multi-line sample also needs `jq` and
@@ -76,14 +76,14 @@ Inside a running statusbar session, browse this directory interactively:
 ./zig-out/bin/statusbar-theme ./samples/themes
 ```
 
-The separate `statusbar-theme` binary lists `.config` files alphabetically
+The separate `statusbar-theme` binary lists `.statusbar` files alphabetically
 in the given directory, including symlinks to regular files. It does not
 recurse. Use arrows or `j`/`k`, Page Up/Down, and Home/End to navigate.
 Enter validates and applies the selected config while keeping the picker open.
 Esc, `q`, or Ctrl-C closes it, leaving the last applied theme active.
 After a change, the picker prints a copy command to make the selected theme
 your startup config. The destination respects `STATUSBAR_CONFIG` and
-`XDG_CONFIG_HOME`, otherwise using `~/.config/statusbar/config`. It only
+`XDG_CONFIG_HOME`, otherwise using `~/.config/statusbar/config.statusbar`. It only
 prints the command; run it yourself to save the theme.
 Invalid or oversized configs report an error and leave the session unchanged.
 Selecting a theme replaces the entire session config, just like
@@ -100,36 +100,37 @@ From the repository root, try one in a fresh terminal outside an existing
 statusbar session:
 
 ```sh
-./zig-out/bin/statusbar --config "$PWD/samples/themes/tokyo-night-native.config"
+./zig-out/bin/statusbar --config "$PWD/samples/themes/tokyo-night-native.statusbar"
 ```
 
 Replace the filename to compare alternatives. Exit the child shell to return.
 To load a native layout inside an existing statusbar session:
 
 ```sh
-statusbar config < ./samples/themes/tokyo-night-native.config
+statusbar config < ./samples/themes/tokyo-night-native.statusbar
 ```
 
-If your shell enables statusbar's Starship integration, Starship may replace a
-left slot with its own content and colors. For an isolated preview using Zsh
-without startup files:
+If your shell enables statusbar's Starship integration, Starship's details
+become the value of each theme's `prompt` line, shown before its own content,
+in Starship's colors. For an isolated preview using Zsh without startup files:
 
 ```sh
-./zig-out/bin/statusbar --config "$PWD/samples/themes/tokyo-night-native.config" -- /bin/zsh -f
+./zig-out/bin/statusbar --config "$PWD/samples/themes/tokyo-night-native.statusbar" -- /bin/zsh -f
 ```
 
 All layouts except multi-line define two lines; multi-line defines five.
-Minimal leaves a placeholder for Starship, and multi-line leaves its second
-line's left slot empty. Their rules fill unused space and can frame left
-and right labels on the same line. On narrow terminals the right side clips
-first. Weather uses the original wttr.in command and may remain empty until
-it responds; these themes do not change that network behavior.
+Each has a line named `prompt` for Starship: Minimal shows a placeholder
+default until Starship replaces it, and multi-line leaves its left side empty.
+Fills draw the rules, carry line backgrounds, and separate left and right
+labels on the same line. On narrow terminals the right side clips first.
+Weather uses the original wttr.in command and may remain empty until it
+responds; these themes do not change that network behavior.
 Each variant also styles temporary lines created by `statusbar push` through
-`[line.push]`. The left side shows a spinner, muted ID, brighter tag, and stream
-text. Completion replaces the spinner with a neutral dot, a success checkmark,
-or a failure cross. Failed commands show their exit status on the right;
-Pastel Powerline and Tokyo Night keep their badge shapes for that label.
-See [completion settings](../../docs/config.md#completion-settings) and
+`[push]`. The line shows a spinner, the line's name, and its latest text.
+Its status templates replace the spinner with a neutral dot, a success
+checkmark, or a failure cross, and failed commands show `failed` on the
+right; Pastel Powerline and Tokyo Night keep their badge shapes for that
+label. See [`[push]`](../../docs/config.md#push) and
 [spinners](../../docs/config.md#spinner).
 
 Inspiration:

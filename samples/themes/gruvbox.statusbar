@@ -1,0 +1,48 @@
+# Inspired by https://starship.rs/presets/gruvbox-rainbow
+# Warm rounded segments; requires Powerline glyphs (e.g. a Nerd Font).
+interval = 5
+
+[colors]
+base = #3c3836
+text = #fbf1c7
+orange = #d65d0e
+yellow = #d79921
+aqua = #689d6a
+muted = #bdae93
+success = #b8bb26
+failure = #fb4934
+
+[line.rule]
+text = "#[fg=yellow]#(fill:━)"
+
+# Starship's prompt details (the line's value) come first.
+[line.prompt]
+text = "#[fg=text,bg=base]#(value)"
+text .= "#[fg=orange]#[fg=text,bg=orange,bold] #(command:user) #[fg=orange,bg=yellow,nobold]#[fg=base,bg=yellow,bold] #(command:host) "
+text .= "#[fg=yellow,bg=aqua,nobold]#[fg=base,bg=aqua] load #(command:load) #[fg=aqua,bg=base,nobold]#[default,fg=text,bg=base]"
+text .= "#(fill: )"
+text .= "#[fg=aqua]#[fg=base,bg=aqua] #(command:weather) #[fg=aqua,bg=yellow,nobold]#[fg=base,bg=yellow,bold] #(datetime:%H:%M:%S) #[fg=yellow,bg=base,nobold]#[default,fg=text,bg=base]"
+
+# Lines created by `statusbar push`.
+[push]
+spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+text = "#[fg=muted,bg=base]#[fg=yellow]#(spinner)#[default,fg=muted,bg=base] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
+done = "#[fg=muted,bg=base]· #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
+success = "#[fg=muted,bg=base]#[fg=success]✔#[default,fg=muted,bg=base] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
+failed = "#[fg=muted,bg=base]#[fg=failure]✗#[default,fg=muted,bg=base] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )#[fg=failure]failed#[default,fg=muted,bg=base]"
+
+[command.user]
+run = whoami
+interval = 3600
+
+[command.host]
+run = hostname -s
+interval = 3600
+
+[command.load]
+run = uptime | awk -F'load averages?: ' '{ split($2, a, /[, ]+/); print a[1] }'
+interval = 10
+
+[command.weather]
+run = curl https://wttr.in/\?format="%c%t+%m"
+interval = 300

@@ -1,0 +1,45 @@
+# Native palette variant of pure.statusbar.
+# Colors follow the terminal theme; see README.md for palette mappings.
+# Inspired by https://starship.rs/presets/pure-preset
+# Transparent, restrained; no Powerline font required.
+interval = 5
+
+[colors]
+accent = colour13
+muted = colour8
+blue = colour12
+success = colour10
+failure = colour1
+
+[line.rule]
+text = "#[fg=muted,dim]#(fill:─)"
+
+# Starship's prompt details (the line's value) come first.
+[line.prompt]
+text = " #(value)#[fg=muted]#(command:user)@#[fg=blue,bold]#(command:host)#[default]  #[fg=muted]load #[default]#(command:load)"
+text .= "#(fill: )"
+text .= "#[fg=muted]#(command:weather)  #(datetime:%a %d)  #[fg=accent,bold]#(datetime:%H:%M:%S)#[default] "
+
+# Lines created by `statusbar push`.
+[push]
+spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+text = "#[fg=blue]#(spinner)#[fg=muted] #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )"
+done = "#[fg=muted]· #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )"
+success = "#[fg=success]✔#[fg=muted] #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )"
+failed = "#[fg=failure]✗#[fg=muted] #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )#[fg=failure]failed#[default]"
+
+[command.user]
+run = whoami
+interval = 3600
+
+[command.host]
+run = hostname -s
+interval = 3600
+
+[command.load]
+run = uptime | awk -F'load averages?: ' '{ split($2, a, /[, ]+/); print a[1] }'
+interval = 10
+
+[command.weather]
+run = curl https://wttr.in/\?format="%c%t+%m"
+interval = 300

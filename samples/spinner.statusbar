@@ -1,0 +1,12 @@
+# Start with: statusbar --config samples/spinner.statusbar
+# Inside the session, try: statusbar push wait -- sleep 3
+[line.title]
+text = "statusbar"
+
+[push]
+spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+spinner_interval = 0.1
+text = "#(spinner) #(value)#(fill: )[#(name)]"
+done = "· #(value)#(fill: )[#(name)]"
+success = "#[fg=green]✓#[default] #(value)#(fill: )[#(name)]"
+failed = "#[fg=red]✗#[default] #(value)#(fill: )failed [#(name)]"

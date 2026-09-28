@@ -19,6 +19,29 @@ const layer_imports = [_]struct { Layer, []const Layer }{
 
 const Layers = std.enums.EnumArray(Layer, *std.Build.Module);
 
+/// Every shipped config, embedded for the model's parser tests. Themes are
+/// discovered from the directory so a new one is always covered.
+fn shippedConfigs(b: *std.Build) *std.Build.Module {
+    const io = b.graph.io;
+    const files = b.addWriteFiles();
+    var index: std.ArrayList(u8) = .empty;
+    index.appendSlice(b.allocator, "pub const Config = struct { name: []const u8, text: []const u8 };\npub const all = [_]Config{\n") catch @panic("OOM");
+    for ([_][]const u8{ "samples", "samples/themes" }) |directory| {
+        var dir = b.build_root.handle.openDir(io, directory, .{ .iterate = true }) catch @panic("cannot open shipped config directory");
+        defer dir.close(io);
+        var it = dir.iterate();
+        while (it.next(io) catch @panic("cannot list shipped configs")) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".statusbar")) continue;
+            const path = b.fmt("{s}/{s}", .{ directory, entry.name });
+            const copy = b.fmt("{s}", .{path});
+            _ = files.addCopyFile(b.path(path), copy);
+            index.print(b.allocator, "    .{{ .name = \"{s}\", .text = @embedFile(\"{s}\") }},\n", .{ path, copy }) catch @panic("OOM");
+        }
+    }
+    index.appendSlice(b.allocator, "};\n") catch @panic("OOM");
+    return b.createModule(.{ .root_source_file = files.add("shipped_configs.zig", index.items) });
+}
+
 const Packages = struct {
     zunic: *std.Build.Module,
     zecli: *std.Build.Module,
@@ -50,6 +73,7 @@ fn addLayers(
     layers.get(.render).addOptions("measurement_options", metrics);
     layers.get(.session).addImport("zunic", packages.zunic);
     layers.get(.model).addImport("zunic", packages.zunic);
+    layers.get(.model).addImport("shipped_configs", shippedConfigs(b));
     const cli = layers.get(.cli);
     cli.addImport("zecli", packages.zecli);
     cli.addImport("completion", packages.completion);
@@ -67,7 +91,7 @@ pub fn build(b: *std.Build) void {
         .source_dir = b.path("samples/themes"),
         .install_dir = .prefix,
         .install_subdir = themes_dir,
-        .include_extensions = &.{".config"},
+        .include_extensions = &.{".statusbar"},
     });
     const guide_dir = b.option([]const u8, "guide-dir", "Agent guide directory relative to the install prefix") orelse "share/statusbar";
     b.installFile("AGENT_SETUP.md", b.pathJoin(&.{ guide_dir, "AGENT_SETUP.md" }));

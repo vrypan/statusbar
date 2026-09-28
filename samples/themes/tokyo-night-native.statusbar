@@ -1,0 +1,50 @@
+# Native palette variant of tokyo-night.statusbar.
+# Colors follow the terminal theme; see README.md for palette mappings.
+# Inspired by https://starship.rs/presets/tokyo-night
+# Blue badges, terminal background, and a dim half-block border.
+interval = 5
+
+[colors]
+# Default row background; explicit palette colors for text on colored badges.
+base = default
+text = default
+muted = colour8
+accent = colour12
+border = colour8
+badge_text = colour0
+error_text = colour15
+success = colour10
+failure = colour1
+
+[line.border]
+text = "#[fg=border,bg=base,dim]#(fill:▀)"
+
+# Starship's prompt details (the line's value) come first.
+[line.prompt]
+text = "#[fg=text,bg=base]#(value)#[fg=badge_text,bg=accent,bold] #(command:user)@#(command:host) #[default,fg=text,bg=base]  #[fg=muted]load #[fg=accent]#(command:load)#[default,fg=text,bg=base]"
+text .= "#(fill: )"
+text .= "#[fg=muted]#(command:weather)  #(datetime:%a %d) #[default,fg=text,bg=base] #[fg=badge_text,bg=accent,bold] #(datetime:%H:%M:%S) #[default,fg=text,bg=base]"
+
+# Lines created by `statusbar push`.
+[push]
+spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+text = "#[fg=muted,bg=base]#[fg=accent]#(spinner)#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
+done = "#[fg=muted,bg=base]· #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
+success = "#[fg=muted,bg=base]#[fg=success]✔#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
+failed = "#[fg=muted,bg=base]#[fg=failure]✗#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )#[fg=error_text,bg=failure,bold] failed #[default,fg=muted,bg=base]"
+
+[command.user]
+run = whoami
+interval = 3600
+
+[command.host]
+run = hostname -s
+interval = 3600
+
+[command.load]
+run = uptime | awk -F'load averages?: ' '{ split($2, a, /[, ]+/); print a[1] }'
+interval = 10
+
+[command.weather]
+run = curl https://wttr.in/\?format="%c%t+%m"
+interval = 300

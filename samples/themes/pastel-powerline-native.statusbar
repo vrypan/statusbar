@@ -1,0 +1,55 @@
+# Native palette variant of pastel-powerline.statusbar.
+# Colors follow the terminal theme; see README.md for palette mappings.
+# Inspired by https://starship.rs/presets/pastel-powerline
+# Requires Powerline glyphs (e.g. a Nerd Font).
+interval = 5
+
+[colors]
+# Default row background; explicit palette colors for text on colored badges.
+base = default
+text = default
+purple = colour5
+rose = colour13
+peach = colour11
+blue = colour12
+muted = colour8
+badge_text = colour0
+error_text = colour15
+segment_text = colour15
+success = colour10
+failure = colour1
+
+[line.rule]
+text = "#[fg=rose]#(fill:─)"
+
+# Starship's prompt details (the line's value) come first.
+[line.prompt]
+text = "#[fg=text,bg=base]#(value)"
+text .= "#[fg=segment_text,bg=purple,bold] #(command:user) #[fg=purple,bg=rose,nobold]#[fg=badge_text,bg=rose,bold] #(command:host) "
+text .= "#[fg=rose,bg=peach,nobold]#[fg=badge_text,bg=peach] load #(command:load) #[fg=peach,bg=base]#[default,fg=text,bg=base]"
+text .= "#(fill: )"
+text .= "#[fg=muted]#(command:weather)  #(datetime:%a %d) #[fg=blue,bg=base]#[fg=badge_text,bg=blue,bold] #(datetime:%H:%M:%S) #[default,fg=text,bg=base]"
+
+# Lines created by `statusbar push`.
+[push]
+spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+text = "#[fg=muted,bg=base]#[fg=rose]#(spinner)#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
+done = "#[fg=muted,bg=base]· #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
+success = "#[fg=muted,bg=base]#[fg=success]✔#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
+failed = "#[fg=muted,bg=base]#[fg=failure]✗#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )#[fg=failure,bg=base]#[fg=error_text,bg=failure,bold] failed #[default,fg=muted,bg=base]"
+
+[command.user]
+run = whoami
+interval = 3600
+
+[command.host]
+run = hostname -s
+interval = 3600
+
+[command.load]
+run = uptime | awk -F'load averages?: ' '{ split($2, a, /[, ]+/); print a[1] }'
+interval = 10
+
+[command.weather]
+run = curl https://wttr.in/\?format="%c%t+%m"
+interval = 300

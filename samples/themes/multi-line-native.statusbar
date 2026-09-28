@@ -1,3 +1,5 @@
+# Native palette variant of multi-line.statusbar.
+# Colors follow the terminal theme; see README.md for palette mappings.
 # Adapted from a real day-to-day configuration and shared as a practical
 # multi-line example.
 #
@@ -5,7 +7,8 @@
 # - curl, jq, uptime, awk, and the GitHub CLI (`gh`)
 # - an authenticated GitHub CLI (`gh auth login`) for notifications
 # - network access for Hacker News, GitHub, and wttr.in
-# - optional Starship integration for slot 3; without it, line 2 starts blank
+# - optional Starship integration for the prompt line; without it, its left
+#   side is blank
 #
 # The `#[track]...#[notrack]` regions pulse when their displayed content
 # changes. Their first result establishes a baseline and does not pulse.
@@ -13,60 +16,40 @@
 interval = 5
 
 [colors]
-base = #3c3836
-text = #fbf1c7
-accent = #d79921
-muted = #928374
-pill = #504945
-good = #98971a
-success = #b8bb26
-failure = #fb4934
+base = default
+text = default
+accent = colour3
+muted = colour8
+pill = colour8
+good = colour2
+success = colour10
+failure = colour1
 
-[line.push]
+# A blank separator above the bar's content.
+[line.spacer]
+text = ""
+
+# Starship fills this line's value.
+[line.prompt]
+text = "#[fg=text]#(value)#(fill: )#[fg=pill] (load #(command:load))#[default,fg=text]"
+
+# Dim the dotted fills while keeping the text at normal brightness.
+[line.hn]
+text = "#[fg=pill,dim]#[track]#[fg=text,nodim,bold]*#[nobold] #(command:hn)#[notrack]#[default,fg=pill,dim]#(fill:·)#[fg=muted,nodim] (HackerNews)"
+
+[line.github]
+text = "#[fg=pill,dim]#[track]#[fg=text,nodim,bold]*#[nobold] #(command:gh-notification)#[notrack] #[default,fg=pill,dim]#(fill:·)#[fg=muted,nodim] (GitHub)"
+
+[line.now]
+text = "#[fg=pill,dim]#[fg=text,nodim,bold]*#[nobold] Now #[default,fg=pill,dim]#(fill:·) #[fg=muted,nodim] #(command:weather) #(datetime:%a %d %H:%M:%S)"
+
+# Lines created by `statusbar push`.
+[push]
 spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-style = fg=text
-left = "#[fg=accent]#(spinner)#[fg=muted] [#(id)] #[fg=text,bold]#(tag)#[default] › #(stream)"
-right = ""
-
-# Completion settings inherit from [line.push], then [line.push.done].
-[line.push.done]
-left = "#[fg=muted]·#[fg=muted] [#(id)] #[fg=text,bold]#(tag)#[default] › #(stream)"
-
-[line.push.success]
-left = "#[fg=success]✔#[fg=muted] [#(id)] #[fg=text,bold]#(tag)#[default] › #(stream)"
-
-[line.push.failed]
-left = "#[fg=failure]✗#[fg=muted] [#(id)] #[fg=text,bold]#(tag)#[default] › #(stream)"
-right = "#[fg=failure]exit #(exit_code)#[default]"
-
-[line.1]
-left = ""
-rule = " "
-style = fg=pill
-
-# Slot 3 is intentionally empty here: Starship fills it.
-[line.2]
-left = ""
-right = "#[fg=pill] (load #(load))#[default]"
-style = fg=text
-
-[line.3]
-  left = "#[track]#[fg=bold]*#[default] #(hn)#[notrack]"
-  right = " (HackerNews)"
-  rule = ·
-  style = fg=pill
-
-[line.4]
-  left = "#[track]#[fg=bold]*#[default] #(gh-notification)#[notrack] "
-  right = " (GitHub)"
-  rule = ·
-  style = fg=pill
-
-[line.5]
-  left = "#[fg=bold]*#[default] Now "
-  right = " #[fg=muted] #(weather) #(datetime:%a %d %H:%M:%S)"
-  rule = ·
-  style = fg=pill
+text = "#[fg=text]#[fg=accent]#(spinner)#[fg=muted] #[fg=text,bold]#(name)#[default,fg=text] › #(value)#(fill: )"
+done = "#[fg=text]#[fg=muted]· #[fg=text,bold]#(name)#[default,fg=text] › #(value)#(fill: )"
+success = "#[fg=text]#[fg=success]✔#[fg=muted] #[fg=text,bold]#(name)#[default,fg=text] › #(value)#(fill: )"
+failed = "#[fg=text]#[fg=failure]✗#[fg=muted] #[fg=text,bold]#(name)#[default,fg=text] › #(value)#(fill: )#[fg=failure]failed#[default,fg=text]"
 
 [command.hn]
 run = |

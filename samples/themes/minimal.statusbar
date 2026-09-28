@@ -1,0 +1,26 @@
+# Inspired by https://starship.rs/presets/pure-preset
+# Transparent, restrained; no Powerline font required.
+interval = 5
+
+[colors]
+accent = #c792ea
+muted = #737b91
+blue = #82aaff
+success = #9ece6a
+failure = #f7768e
+
+[line.ornament]
+text = "#(fill: )⡎⠉⠉⢱"
+
+# Starship replaces the placeholder with its prompt details.
+[line.prompt]
+default = "<starship placeholder>"
+text = "#(value)#(fill: )⢇⣒⣒⡸"
+
+# Lines created by `statusbar push`.
+[push]
+spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+text = "#[fg=blue]#(spinner)#[fg=muted] #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )"
+done = "#[fg=muted]· #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )"
+success = "#[fg=success]✔#[fg=muted] #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )"
+failed = "#[fg=failure]✗#[fg=muted] #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )#[fg=failure]failed#[default]"
