@@ -17,11 +17,151 @@ import sys
 import tempfile
 import termios
 import time
+import unicodedata
 import urllib.parse
 
 
 def resize(fd, rows, cols=80):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    bar_screen(fd).cols = cols
+
+
+PAINT_START = b"\x1b7\x1b[?7l"
+PAINT_TOKEN = re.compile(rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[()][0-~]|\x1b.|[^\x1b]+", re.S)
+LINK_CLOSE = b"\x1b]8;;\x1b\\"
+CONTINUATION = None
+
+
+class BarScreen:
+    """Rebuilds each bar row the renderer paints, so checks can read every
+    paint as the whole row it leaves on screen.
+
+    An ordinary update rewrites only the columns that changed. Reads from
+    the PTY pass through `feed`, which replaces each such row with the row
+    as it now appears, written from its first column the way a full
+    repaint writes it. Rows painted after an erase are complete already
+    and pass through unchanged.
+    """
+
+    def __init__(self):
+        self.cols = 80
+        self.rows = {}
+        self.pending = b""
+
+    def row(self, number):
+        return self.rows.setdefault(number, [(" ", b"0", b"")] * self.cols)
+
+    def feed(self, data):
+        self.pending += data
+        out = b""
+        while True:
+            start = self.pending.find(PAINT_START)
+            if start < 0:
+                keep = next((n for n in range(len(PAINT_START) - 1, 0, -1) if self.pending.endswith(PAINT_START[:n])), 0)
+                cut = len(self.pending) - keep
+                out += self.pending[:cut]
+                self.pending = self.pending[cut:]
+                return out
+            end = self.pending.find(b"\x1b8", start)
+            if end < 0:
+                out += self.pending[:start]
+                self.pending = self.pending[start:]
+                return out
+            out += self.pending[:start] + self.paint(self.pending[start:end + 2])
+            self.pending = self.pending[end + 2:]
+
+    def flush(self):
+        out, self.pending = self.pending, b""
+        return out
+
+    def paint(self, batch):
+        tokens = PAINT_TOKEN.findall(batch)
+        header = b""
+        segments = []
+        style, link, row, col = b"0", b"", None, 1
+        for token in tokens:
+            cup = re.fullmatch(rb"\x1b\[(\d+);(\d+)H", token)
+            if cup:
+                row, col = int(cup.group(1)), int(cup.group(2))
+                segments.append([row, b"", False])
+            if row is None:
+                header += token
+                continue
+            segments[-1][1] += token
+            if token.startswith(b"\x1b[") and token.endswith(b"m"):
+                style = token[2:-1]
+            elif token == b"\x1b[2K":
+                segments[-1][2] = True
+                self.rows[row] = [(" ", style, b"")] * self.cols
+            elif token == b"\x1b[K":
+                cells = self.row(row)
+                cells[col - 1:] = [(" ", style, b"")] * (len(cells) - col + 1)
+            elif token.startswith(b"\x1b]8;"):
+                link = b"" if token == LINK_CLOSE else token
+            elif not token.startswith(b"\x1b"):
+                cells = self.row(row)
+                for char in token.decode("utf-8", "replace"):
+                    if unicodedata.combining(char) and col > 1:
+                        glyph, cell_style, cell_link = cells[col - 2]
+                        cells[col - 2] = (glyph + char, cell_style, cell_link)
+                        continue
+                    width = 2 if unicodedata.east_asian_width(char) in "WF" else 1
+                    if col + width - 1 > len(cells):
+                        break
+                    cells[col - 1] = (char, style, link)
+                    if width == 2:
+                        cells[col] = CONTINUATION
+                    col += width
+        trailer = b""
+        if segments:
+            last = segments[-1][1]
+            at = last.rfind(LINK_CLOSE + b"\x1b[0m\x1b8")
+            segments[-1][1], trailer = last[:at], last[at:]
+        else:
+            return batch
+        out = header
+        for number, raw, erased in segments:
+            out += raw if erased else b"\x1b[%d;1H" % number + self.serialize(self.row(number))
+        return out + trailer
+
+    @staticmethod
+    def serialize(cells):
+        out = b""
+        style, link = None, b""
+        for cell in cells:
+            if cell is CONTINUATION:
+                continue
+            glyph, cell_style, cell_link = cell
+            if cell_link != link:
+                if link:
+                    out += LINK_CLOSE
+                out += cell_link
+                link = cell_link
+            if cell_style != style:
+                out += b"\x1b[" + cell_style + b"m"
+                style = cell_style
+            out += glyph.encode()
+        return out + (LINK_CLOSE if link else b"")
+
+
+_bar_screens = {}
+
+
+def bar_screen(fd):
+    return _bar_screens.setdefault(fd, BarScreen())
+
+
+def read_pty(fd):
+    """Reads PTY output with every bar paint shown as whole rows."""
+    screen = bar_screen(fd)
+    try:
+        data = os.read(fd, 65536)
+    except OSError:
+        rest = screen.flush()
+        if rest:
+            return rest
+        raise
+    return screen.feed(data) if data else screen.flush()
 
 
 def read_until(fd, data, needle, timeout=5):
@@ -32,7 +172,7 @@ def read_until(fd, data, needle, timeout=5):
         ready, _, _ = select.select([fd], [], [], 0.1)
         if ready:
             try:
-                data += os.read(fd, 65536)
+                data += read_pty(fd)
             except OSError:
                 break
     return data
@@ -47,6 +187,7 @@ def spawn(argv, rows=24, env=None):
         os.close(ready_r)
         os.execve(argv[0], argv, env or os.environ)
     os.close(ready_r)
+    _bar_screens.pop(master, None)
     resize(master, rows)
     os.write(ready_w, b"x")
     os.close(ready_w)
@@ -66,7 +207,7 @@ def reap_while_draining(pid, fd, timeout=5):
         ready, _, _ = select.select([fd], [], [], min(0.05, remaining))
         if ready:
             try:
-                if not os.read(fd, 65536):
+                if not read_pty(fd):
                     time.sleep(min(0.01, remaining))
             except OSError:
                 time.sleep(min(0.01, remaining))
@@ -80,7 +221,7 @@ def capture_pty(argv, env=None, rows=24, timeout=5):
         ready, _, _ = select.select([master], [], [], 0.05)
         if ready:
             try:
-                chunk = os.read(master, 65536)
+                chunk = read_pty(master)
                 if chunk:
                     data += chunk
             except OSError:
@@ -92,7 +233,7 @@ def capture_pty(argv, env=None, rows=24, timeout=5):
                 if not ready:
                     break
                 try:
-                    chunk = os.read(master, 65536)
+                    chunk = read_pty(master)
                     if not chunk:
                         break
                     data += chunk

@@ -49,6 +49,11 @@ pub const State = struct {
     painted_valid: bool = false,
     layout_invalid: bool = true,
     selected: bool = false,
+    /// With `selected`: erase and rewrite the whole row, or else write
+    /// only columns `span_start..span_end`.
+    erase: bool = false,
+    span_start: usize = 0,
+    span_end: usize = 0,
     pending: bool = true,
     output_bound: usize = 0,
     region_changed: [max_regions]bool = @splat(false),

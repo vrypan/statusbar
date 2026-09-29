@@ -103,7 +103,10 @@ whose active template shows them; clock ticks likewise dirty only lines whose
 active template shows a date. A value or status change dirties its own line.
 A value never disables a line's other expressions. Identical command
 updates format no lines. Dirty lines compare their cells, and only lines whose
-appearance changed are repainted. Startup, resize and screen damage repaint all visible lines. Damage
+appearance changed are repainted, and only from their first changed column
+to their last, widened so no wide glyph is written by half. A changed tail
+reaching the row end uses EL when that is shorter than writing its blanks.
+Startup, resize and screen damage erase and repaint all visible lines. Damage
 repair uses existing cells without parsing content again. Paints still use the
 same safe output boundaries and cursor-save timing as before.
 
