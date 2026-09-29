@@ -4,12 +4,12 @@ const Io = std.Io;
 const posix = std.posix;
 const zunic = @import("zunic");
 const sys = @import("platform").sys;
+const builtin = @import("builtin");
 const max_value = @import("line_types.zig").max_value;
 const line_protocol = @import("line_protocol.zig");
 const control = @import("session_control.zig");
 
 pub const State = struct {
-    line: [max_value]u8 = undefined,
     line_len: usize = 0,
     overflow: bool = false,
     candidate: [max_value]u8 = undefined,
@@ -21,6 +21,7 @@ pub const State = struct {
     last_sent_ms: ?i64 = null,
     first_input_ms: ?i64 = null,
     last_input_ms: ?i64 = null,
+    candidate_bytes_written: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
 
     pub fn noteInput(self: *State, now_ms: i64) void {
         if (!self.pending()) self.first_input_ms = null;
@@ -31,7 +32,6 @@ pub const State = struct {
     pub fn feed(self: *State, bytes: []const u8) void {
         for (bytes) |byte| {
             if (byte == '\n' or byte == '\r') {
-                if (self.line_len > 0) self.updateCandidate();
                 self.line_len = 0;
                 self.overflow = false;
                 continue;
@@ -43,16 +43,12 @@ pub const State = struct {
                 continue;
             }
             if (self.overflow) continue;
-            self.line[self.line_len] = if (byte == '\t') ' ' else byte;
+            self.candidate[self.line_len] = if (byte == '\t') ' ' else byte;
             self.line_len += 1;
+            self.candidate_len = self.line_len;
+            self.candidate_valid = true;
+            if (builtin.is_test) self.candidate_bytes_written += 1;
         }
-        if (self.line_len > 0) self.updateCandidate();
-    }
-
-    fn updateCandidate(self: *State) void {
-        @memcpy(self.candidate[0..self.line_len], self.line[0..self.line_len]);
-        self.candidate_len = self.line_len;
-        self.candidate_valid = true;
     }
 
     pub fn feedScalar(self: *State, bytes: []const u8) void {
@@ -325,4 +321,55 @@ test "short CR fragments coalesce and continuous input reaches its deadline" {
     try std.testing.expectEqual(@as(i64, 0), state.timeout(250));
     state.markSent(250);
     try std.testing.expectEqual(@as(i64, -1), state.timeout(250));
+}
+
+test "scalar feeds write each accepted candidate byte once" {
+    var state: State = .{};
+    for (0..max_value) |_| state.feedScalar("x");
+    try std.testing.expectEqual(@as(usize, max_value), state.candidate_bytes_written);
+    try std.testing.expectEqual(@as(usize, max_value), state.value().len);
+
+    var discarded: [64 * 1024]u8 = @splat('y');
+    state.feed(&discarded);
+    try std.testing.expectEqual(@as(usize, max_value), state.candidate_bytes_written);
+    try std.testing.expectEqual(@as(usize, max_value), state.value().len);
+
+    state.feed("\r\nOK");
+    try std.testing.expectEqualStrings("OK", state.value());
+    try std.testing.expectEqual(@as(usize, max_value + 2), state.candidate_bytes_written);
+}
+
+test "bulk and scalar feeds preserve last nonempty line and pacing" {
+    const input = "first\r\n\nsecond\t界\nthird";
+    var bulk: State = .{};
+    var scalar: State = .{};
+    bulk.noteInput(100);
+    bulk.feed(input);
+    scalar.noteInput(100);
+    for (input) |byte| scalar.feed(&.{byte});
+    try std.testing.expectEqualStrings("third", bulk.value());
+    try std.testing.expectEqualStrings(bulk.value(), scalar.value());
+    try std.testing.expectEqual(bulk.pending(), scalar.pending());
+    try std.testing.expectEqual(bulk.timeout(101), scalar.timeout(101));
+    bulk.markSent(106);
+    scalar.markSent(106);
+    try std.testing.expect(!bulk.pending() and !scalar.pending());
+    bulk.feed("\r\n");
+    scalar.feed("\r");
+    scalar.feed("\n");
+    try std.testing.expectEqualStrings("third", bulk.value());
+    try std.testing.expect(!bulk.pending() and !scalar.pending());
+}
+
+test "multibyte scalar crossing the cap leaves candidate unchanged" {
+    var state: State = .{};
+    var prefix: [max_value - 1]u8 = @splat('a');
+    state.feed(&prefix);
+    state.feedScalar("界");
+    try std.testing.expectEqual(@as(usize, max_value - 1), state.value().len);
+    try std.testing.expectEqual(@as(usize, max_value - 1), state.candidate_bytes_written);
+    state.feedScalar("b");
+    try std.testing.expectEqual(@as(usize, max_value - 1), state.value().len);
+    state.feed("\n界");
+    try std.testing.expectEqualStrings("界", state.value());
 }
