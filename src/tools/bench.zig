@@ -383,7 +383,7 @@ pub fn main(init: std.process.Init) !u8 {
     try stdout.writeAll("output.feed:\n");
     inline for (.{ .text, .sgr, .cursor, .utf8 }) |kind| {
         fill(buf, kind);
-        var out: Output = .{ .bar = 2, .rows = 22 };
+        var out: Output = .{ .screen = .{ .bar = 2, .rows = 22 } };
         var sink: Sink = .{};
         var done: usize = 0;
         const start = std.Io.Clock.now(.awake, init.io).toNanoseconds();

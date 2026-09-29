@@ -40,14 +40,14 @@ pub fn replaceConfig(self: *Proxy, text: []const u8, now_ms: i64, diag: *config.
     self.layout = new_layout;
     sys.setWinsize(self.master, &new_layout.child) catch {
         self.layout = old_layout;
-        self.output.damaged = true;
+        self.output.screen.damaged = true;
         self.requestPaint(now_ms);
         return error.ChildResizeFailed;
     };
     pending_state.replace(self.io) catch |err| {
         self.layout = old_layout;
         try sys.setWinsize(self.master, &old_layout.child);
-        self.output.damaged = true;
+        self.output.screen.damaged = true;
         self.requestPaint(now_ms);
         return err;
     };
@@ -59,15 +59,15 @@ pub fn replaceConfig(self: *Proxy, text: []const u8, now_ms: i64, diag: *config.
         if (self.fifos.findLine(id)) |index| self.fifos.remove(index) catch |err| if (self.log) |log| log.write("FIFO cleanup failed after reload: {t}", .{err});
     }
     self.renderer = &self.runtime.renderer;
-    self.output.resize(new_layout.bar, new_layout.child.row);
+    self.output.screen.resize(new_layout.bar, new_layout.child.row);
     // DECSTBM homes the cursor. Install the new margins immediately,
     // preserving the corrected cursor before any following child bytes.
     self.terminal.write("\x1b7");
-    self.output.writeRegion(&self.terminal);
+    self.output.screen.writeRegion(&self.terminal);
     self.terminal.write("\x1b8");
     self.setInputGeometry(new_layout);
     self.runtime.source.refreshNow(now_ms);
-    self.output.damaged = true;
+    self.output.screen.damaged = true;
     self.requestPaint(now_ms);
     candidate.deinit();
 }
@@ -79,7 +79,7 @@ pub fn applyConfigRequest(self: *Proxy, payload: []const u8, now_ms: i64) bool {
         return false;
     };
     // Replacement borrows the terminal's cursor save slot, like a paint.
-    if (self.output.cursor_saved) {
+    if (self.output.screen.cursor_saved) {
         @memcpy(self.held_config[0..text.len], text);
         self.held_config_len = text.len;
         if (self.log) |log| log.write("OSC config held: child cursor is saved", .{});
@@ -93,7 +93,7 @@ pub fn applyConfigRequest(self: *Proxy, payload: []const u8, now_ms: i64) bool {
 /// output pauses as long as a paint waits.
 pub fn heldConfigDue(self: *const Proxy, now_ms: i64) bool {
     if (self.held_config_len == null or !self.output.atBoundary()) return false;
-    return !self.output.cursor_saved or now_ms - self.last_output_ms >= paint_quiet_ms;
+    return !self.output.screen.cursor_saved or now_ms - self.last_output_ms >= paint_quiet_ms;
 }
 
 pub fn applyHeldConfig(self: *Proxy, now_ms: i64) bool {
@@ -121,7 +121,7 @@ test "a config request waits while the child holds a saved cursor" {
     defer std.testing.allocator.free(frame);
     const payload = frame[2 + config_protocol.namespace.len .. frame.len - 2];
 
-    proxy.output.cursor_saved = true;
+    proxy.output.screen.cursor_saved = true;
     proxy.last_output_ms = 100;
     try std.testing.expect(!proxy.applyConfigRequest(payload, 100));
     try std.testing.expectEqualStrings("[line.a]\ntext = HELD\n", proxy.held_config[0..proxy.held_config_len.?]);
@@ -130,14 +130,14 @@ test "a config request waits while the child holds a saved cursor" {
     // never in the middle of a sequence.
     try std.testing.expect(!proxy.heldConfigDue(120));
     try std.testing.expect(proxy.heldConfigDue(130));
-    proxy.output.cursor_saved = false;
+    proxy.output.screen.cursor_saved = false;
     try std.testing.expect(proxy.heldConfigDue(101));
     proxy.output.state = .csi;
     try std.testing.expect(!proxy.heldConfigDue(1000));
 
     // A request that cannot be authenticated is never held.
     proxy.output.state = .ground;
-    proxy.output.cursor_saved = true;
+    proxy.output.screen.cursor_saved = true;
     proxy.held_config_len = null;
     proxy.session_token = "fedcba9876543210fedcba9876543210".*;
     try std.testing.expect(!proxy.applyConfigRequest(payload, 100));

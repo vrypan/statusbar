@@ -139,7 +139,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         .io = io,
         .master = pty.master,
         .layout = layout,
-        .output = .{ .bar = layout.bar, .rows = layout.child.row },
+        .output = .{ .screen = .{ .bar = layout.bar, .rows = layout.child.row } },
         .input = .{ .bar = layout.bar, .rows = layout.child.row, .pixel_rows = layout.child.ypixel },
         .runtime = &runtime,
         .renderer = &runtime.renderer,
@@ -274,8 +274,7 @@ test "OSC 7 directory titles preserve child output order" {
     @memcpy(terminal.hostname[0..4], "host");
     terminal.hostname_len = 4;
     var output: Output = .{
-        .bar = 0,
-        .rows = 24,
+        .screen = .{ .bar = 0, .rows = 24 },
         .osc7_handler = .{ .context = &terminal, .callback = receiveOsc7 },
     };
 
@@ -304,7 +303,7 @@ test "OSC 7 directory titles preserve child output order" {
 
 pub fn schedulerProxy() Proxy {
     var proxy: Proxy = undefined;
-    proxy.output = .{ .bar = 1, .rows = 10 };
+    proxy.output = .{ .screen = .{ .bar = 1, .rows = 10 } };
     proxy.paint_requested_ms = null;
     proxy.last_output_ms = 0;
     return proxy;

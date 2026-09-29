@@ -84,7 +84,7 @@ pub fn setInputGeometry(self: *Proxy, layout: Layout) void {
 
 pub fn feedTerminalInput(self: *Proxy, bytes: []const u8) void {
     // Mouse reports arrive in whichever encoding the child last chose.
-    self.input.sgr_pixels = self.output.sgr_pixels;
+    self.input.sgr_pixels = self.output.screen.sgr_pixels;
     var translated: [4096 + input_headroom]u8 = undefined;
     var translated_writer = std.Io.Writer.fixed(&translated);
     if (self.palette_probe.bypassable()) {
@@ -107,7 +107,7 @@ pub fn flushPalette(self: *Proxy, stop: bool) void {
     var writer = std.Io.Writer.fixed(&buf);
     const sink = WriterSink{ .w = &writer };
     if (stop) self.palette_probe.stop(&sink) else self.palette_probe.flush(&sink);
-    self.input.sgr_pixels = self.output.sgr_pixels;
+    self.input.sgr_pixels = self.output.screen.sgr_pixels;
     var translated: [128 + input_headroom]u8 = undefined;
     var translated_writer = std.Io.Writer.fixed(&translated);
     self.input.feed(writer.buffered(), &WriterSink{ .w = &translated_writer });

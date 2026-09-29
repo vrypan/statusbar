@@ -193,14 +193,14 @@ pub fn drainControl(self: *Proxy, now_ms: i64) void {
 /// requests only until the child's output pauses.
 pub fn controlDue(self: *const Proxy, now_ms: i64) bool {
     if (!self.output.atBoundary()) return false;
-    return !self.output.cursor_saved or now_ms - self.last_output_ms >= paint_quiet_ms;
+    return !self.output.screen.cursor_saved or now_ms - self.last_output_ms >= paint_quiet_ms;
 }
 
 test "control requests wait out a saved cursor like a paint" {
     var proxy = schedulerProxy();
     try std.testing.expect(proxy.controlDue(0));
     // A save that is never restored must not block line requests forever.
-    proxy.output.cursor_saved = true;
+    proxy.output.screen.cursor_saved = true;
     proxy.last_output_ms = 100;
     try std.testing.expect(!proxy.controlDue(120));
     try std.testing.expect(proxy.controlDue(130));

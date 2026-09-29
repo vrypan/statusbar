@@ -16,7 +16,7 @@ const stdin_fd = @import("proxy.zig").stdin_fd;
 /// those does the top of the screen scroll into scrollback.
 pub fn reserveRows(self: *Proxy, outer_rows: u16) !void {
     self.terminal = .init(self.io);
-    self.output.damaged = true;
+    self.output.screen.damaged = true;
     const bar_rows = self.layout.bar;
     const cursor = self.queryCursorRow();
     if (bar_rows > 0) {
@@ -25,7 +25,7 @@ pub fn reserveRows(self: *Proxy, outer_rows: u16) !void {
         var buf: [64]u8 = undefined;
         self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H", .{outer_rows}) catch "");
         for (0..up) |_| self.terminal.write("\n");
-        self.output.writeRegion(&self.terminal);
+        self.output.screen.writeRegion(&self.terminal);
         self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H", .{row - up}) catch "");
     }
     try self.paint();
@@ -74,7 +74,7 @@ pub fn resizeForLines(self: *Proxy, now_ms: i64) !void {
         self.layout = old;
         self.runtime.source.setTerminalSize(previous_terminal);
         self.runtime.renderer.resize(old.bar, old.cols) catch {};
-        self.output.damaged = true;
+        self.output.screen.damaged = true;
         self.requestPaint(now_ms);
     }
     self.runtime.source.setTerminalSize(.{ .rows = outer.row, .cols = outer.col, .content_rows = next.child.row });
@@ -83,9 +83,9 @@ pub fn resizeForLines(self: *Proxy, now_ms: i64) !void {
     self.eraseRows(old);
     self.layout = next;
     try sys.setWinsize(self.master, &next.child);
-    self.output.resize(next.bar, next.child.row);
+    self.output.screen.resize(next.bar, next.child.row);
     self.setInputGeometry(next);
-    self.output.damaged = true;
+    self.output.screen.damaged = true;
     self.requestPaint(now_ms);
 }
 
@@ -122,7 +122,7 @@ pub fn eraseRows(self: *Proxy, old: Layout) void {
     self.terminal.write("\x1b7\x1b[?7l");
     for (0..old.bar) |n| self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H\x1b[2K", .{old.barRow() + n}) catch "");
     self.terminal.write("\x1b8");
-    if (self.output.autowrap) self.terminal.write("\x1b[?7h");
+    if (self.output.screen.autowrap) self.terminal.write("\x1b[?7h");
 }
 
 test "a line update reuses storage and prepares one row" {

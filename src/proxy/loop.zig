@@ -51,13 +51,13 @@ pub fn requestPaint(self: *Proxy, now_ms: i64) void {
 pub fn paint(self: *Proxy) !void {
     var region_buf: [32]u8 = undefined;
     var region: std.Io.Writer = .fixed(&region_buf);
-    self.output.writeRegion(&WriterSink{ .w = &region });
-    const bytes = try self.renderer.build(self.layout.barRow(), region.buffered(), self.output.autowrap, self.output.damaged);
+    self.output.screen.writeRegion(&WriterSink{ .w = &region });
+    const bytes = try self.renderer.build(self.layout.barRow(), region.buffered(), self.output.screen.autowrap, self.output.screen.damaged);
     self.terminal.write(bytes);
     if (self.terminal.broken) return error.TerminalWriteFailed;
     self.renderer.commit();
     self.paint_requested_ms = null;
-    self.output.damaged = false;
+    self.output.screen.damaged = false;
 }
 
 pub fn paintIfDue(self: *Proxy, now_ms: i64) !void {
@@ -71,7 +71,7 @@ pub fn paintTimeout(self: *const Proxy, now_ms: i64) i64 {
     const quiet = self.last_output_ms + paint_quiet_ms;
     // DECSC owns the terminal save slot. Its quiet-time rule deliberately
     // takes precedence over the usual maximum paint delay.
-    if (self.output.cursor_saved) return @max(quiet - now_ms, 0);
+    if (self.output.screen.cursor_saved) return @max(quiet - now_ms, 0);
     const forced = requested + paint_max_delay_ms;
     return @max(@min(quiet, forced) - now_ms, 0);
 }
@@ -160,13 +160,13 @@ pub fn pump(self: *Proxy, sig_r: sys.Fd, pid: posix.pid_t) !void {
                             }
                         }
                         self.last_output_ms = now_ms;
-                        if (self.output.damaged) {
+                        if (self.output.screen.damaged) {
                             // Repaint in the same write as the erase, so
                             // the terminal never renders a frame without
                             // the bar. Unless the child is holding a saved
                             // cursor, which the paint would overwrite:
                             // then wait for a pause.
-                            if (self.output.atBoundary() and !self.output.cursor_saved) {
+                            if (self.output.atBoundary() and !self.output.screen.cursor_saved) {
                                 // Damage repair is the one urgent paint
                                 // path. Sample existing effects first;
                                 // it must never consume source events or
@@ -278,7 +278,7 @@ pub fn drainSignals(self: *Proxy, sig_r: sys.Fd, pid: posix.pid_t, now_ms: i64) 
     self.layout = Layout.of(ws, @intCast(self.lines.items.items.len));
     self.runtime.source.setTerminalSize(.{ .rows = ws.row, .cols = ws.col, .content_rows = self.layout.child.row });
     sys.setWinsize(self.master, &self.layout.child) catch {};
-    self.output.resize(self.layout.bar, self.layout.child.row);
+    self.output.screen.resize(self.layout.bar, self.layout.child.row);
     self.setInputGeometry(self.layout);
     if (width_changed) {
         self.runtime.source.setColumns(ws.col);
@@ -339,12 +339,12 @@ test "paint timeout waits for a safe output boundary" {
     try std.testing.expectEqual(@as(i64, -1), proxy.paintTimeout(paint_max_delay_ms + 1));
 
     proxy.output.utf8_pending = 0;
-    proxy.output.cursor_saved = true;
+    proxy.output.screen.cursor_saved = true;
     proxy.last_output_ms = 100;
     try std.testing.expectEqual(@as(i64, 10), proxy.paintTimeout(120));
     try std.testing.expectEqual(@as(i64, 0), proxy.paintTimeout(130));
 
-    proxy.output.cursor_saved = false;
+    proxy.output.screen.cursor_saved = false;
     proxy.last_output_ms = 1_000;
     proxy.paint_requested_ms = 0;
     try std.testing.expectEqual(@as(i64, 0), proxy.paintTimeout(paint_max_delay_ms));
@@ -355,7 +355,7 @@ test "paint timeout waits for a safe output boundary" {
 }
 
 test "a completed scalar makes an overdue paint eligible" {
-    var output: Output = .{ .bar = 1, .rows = 10 };
+    var output: Output = .{ .screen = .{ .bar = 1, .rows = 10 } };
     var sink = struct {
         pub fn write(_: *@This(), _: []const u8) void {}
     }{};
