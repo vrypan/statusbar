@@ -213,6 +213,7 @@ A template is text with explicit expressions:
 | `#(datetime:FORMAT)` | local date and time using strftime(3), re-read every second, e.g. `#(datetime:%H:%M)` |
 | `#(terminal:rows)`, `#(terminal:cols)` | the outer terminal window size |
 | `#(terminal:content_rows)` | rows available to the child after the bar takes its rows |
+| `#(env:NAME)` | environment variable NAME as statusbar started with it, e.g. `#(env:USER)`; empty if unset |
 | `#(spinner)` | a spinner frame, in `[push]` templates; see [spinner](#spinner) |
 | `#[...]` | a [style](#markup) |
 | `#[track]...#[notrack]` | a [highlighted region](#highlight-changes) |
@@ -221,7 +222,7 @@ A template is text with explicit expressions:
 Anything else in `#(...)` is an error; there is no implicit shell command.
 Define shell commands in `[command.NAME]` and show them with
 `#(command:NAME)`. `%` is plain text outside `#(datetime:...)`; inside it,
-`%%` writes a literal `%`. Command output, dates and names are displayed as
+`%%` writes a literal `%`. Command output, dates, environment values and names are displayed as
 written, like values.
 
 `terminal` values update on window resize; `content_rows` also updates when

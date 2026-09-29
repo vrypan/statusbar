@@ -37,6 +37,7 @@ order they were added.
   `config.statusbar` by default and warn about an old `config` file
 - Start the shell with the built-in config and a warning line when the
   startup config is missing, unreadable or invalid
+- Add `#(env:NAME)` to show an environment variable in templates
 
 ## v0.4.3
 

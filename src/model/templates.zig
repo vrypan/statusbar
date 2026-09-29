@@ -3,6 +3,7 @@
 //!
 //!     #(value) #(name) #(status) #(spinner)
 //!     #(fill:PATTERN) #(datetime:FORMAT) #(terminal:PROPERTY) #(command:NAME)
+//!     #(env:NAME)
 //!     #[fg=accent,bold] ... #[default]    style directives
 //!     #[track] ... #[notrack]             tracked regions
 //!     ##                                  a literal #
@@ -38,6 +39,8 @@ pub const Part = union(enum) {
     datetime: []const u8,
     terminal: TerminalProperty,
     command: u8,
+    /// An environment variable of the statusbar process.
+    env: []const u8,
     track_start: u4,
     track_end: u4,
 };
@@ -165,12 +168,22 @@ fn expression(body: []const u8, commands: Commands, kind: Kind, diag: *Diagnosti
         const index = commands.find(body[8..]) orelse return fail(diag, "unknown command; define it in a [command.NAME] section");
         return .{ .command = @intCast(index) };
     }
+    if (std.mem.startsWith(u8, body, "env:")) {
+        if (!validEnvName(body[4..])) return fail(diag, "#(env:NAME) needs a variable name of letters, digits and _, not starting with a digit");
+        return .{ .env = body[4..] };
+    }
     if (std.mem.startsWith(u8, body, "exec:")) return fail(diag, "inline shell commands are not supported; define [command.NAME] and use #(command:NAME)");
     if (eql(u8, body, "tag") or eql(u8, body, "id")) return fail(diag, "#(tag) and #(id) were removed; use #(name)");
     if (eql(u8, body, "stream")) return fail(diag, "#(stream) was removed; use #(value)");
     if (eql(u8, body, "exit_code") or eql(u8, body, "signal")) return fail(diag, "#(exit_code) and #(signal) were removed; use status templates such as success = and failed =");
     if (commands.find(body) != null) return fail(diag, "use #(command:NAME) to show a named command");
-    return fail(diag, "unknown expression; expected value, name, status, fill:, datetime:, terminal:, command: or spinner");
+    return fail(diag, "unknown expression; expected value, name, status, fill:, datetime:, terminal:, command:, env: or spinner");
+}
+
+fn validEnvName(name: []const u8) bool {
+    if (name.len == 0 or std.ascii.isDigit(name[0])) return false;
+    for (name) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '_') return false;
+    return true;
 }
 
 /// A fill pattern must occupy at least one terminal cell and hold only
@@ -222,6 +235,17 @@ test "explicit expressions compile with dependencies" {
     try std.testing.expectEqual(@as(u8, 0), template.parts[6].command);
     try std.testing.expectEqual(@as(u16, 1), template.commands);
     try std.testing.expect(template.clock and template.terminal and !template.spinner);
+}
+
+test "environment variables compile by name" {
+    var diag: Diagnostic = .{};
+    const template = try compileTest("#(env:USER)@#(env:_X9)", .configured, &diag);
+    defer std.testing.allocator.free(template.parts);
+    try std.testing.expectEqualStrings("USER", template.parts[0].env);
+    try std.testing.expectEqualStrings("_X9", template.parts[2].env);
+    for ([_][]const u8{ "#(env:)", "#(env:9A)", "#(env:A-B)", "#(env:A B)", "#(env:$USER)" }) |text| {
+        try std.testing.expectError(error.InvalidConfig, compileTest(text, .configured, &diag));
+    }
 }
 
 test "escapes and percents stay literal text" {

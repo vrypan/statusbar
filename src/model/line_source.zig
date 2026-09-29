@@ -23,6 +23,7 @@ const status = @import("status.zig");
 const Lines = @import("session").lines.Lines;
 const Line = @import("session").lines.Line;
 const Status = @import("session").line_types.Status;
+const environment = @import("platform").environment;
 
 const max_output_line = 512;
 
@@ -342,6 +343,7 @@ pub const Source = struct {
             },
             .terminal => |property| self.terminal.write(&w, property),
             .command => |n| writeLiteral(&w, self.outputs[n][0..self.output_lens[n]]),
+            .env => |name| writeLiteral(&w, environment.map().get(name) orelse ""),
             .track_start => |id| {
                 meta.spans[meta.len] = .{ .id = id, .start = @intCast(w.end), .end = @intCast(w.end) };
                 meta.len += 1;
@@ -489,6 +491,15 @@ test "templates escape data and keep directives" {
     f.set(0, .{ .value = .{ .replace = "\x1b[31mred\x1b]8;;https://example.com/#x\x1b\\link\x1b]8;;\x1b\\" } });
     _ = f.source.rebuild();
     try std.testing.expectEqualStrings("#[fg=red]##[x] ## \x1b[31mred\x1b]8;;https://example.com/#x\x1b\\link\x1b]8;;\x1b\\", f.source.content.line(0));
+}
+
+test "environment values display literally and missing ones are empty" {
+    try environment.map().put("STATUSBAR_TEST_ENV", "#[bold] me");
+    var f: Fixture = undefined;
+    try f.init(std.testing.allocator, "[line.a]\ntext = \"[#(env:STATUSBAR_TEST_ENV)|#(env:STATUSBAR_TEST_UNSET)]\"\n");
+    defer f.deinit();
+    _ = f.source.rebuild();
+    try std.testing.expectEqualStrings("[##[bold] me|]", f.source.content.line(0));
 }
 
 test "an unterminated OSC does not unescape the markup after it" {
