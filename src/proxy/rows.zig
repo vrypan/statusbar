@@ -63,12 +63,18 @@ pub fn refreshLine(self: *Proxy, index: usize, now_ms: i64) !void {
 /// caller restores the store and the previous geometry is put back.
 pub fn resizeForLines(self: *Proxy, now_ms: i64) !void {
     const outer = try sys.getWinsize(stdin_fd);
+    try resizeForLinesWithWinsize(self, now_ms, outer);
+}
+
+fn resizeForLinesWithWinsize(self: *Proxy, now_ms: i64, outer: std.posix.winsize) !void {
     const count = self.lines.items.items.len;
     if (count > config.max_lines) return error.RowLimit;
     const old = self.layout;
     const previous_terminal = self.runtime.source.terminal;
     const next = Layout.of(outer, @intCast(count));
+    const same_visible = canPreservePreparedRows(self, outer, next);
     try self.runtime.source.syncLines();
+    if (same_visible) return;
     try self.runtime.renderer.resize(next.bar, next.cols);
     errdefer {
         self.layout = old;
@@ -87,6 +93,18 @@ pub fn resizeForLines(self: *Proxy, now_ms: i64) !void {
     self.setInputGeometry(next);
     self.output.screen.damaged = true;
     self.requestPaint(now_ms);
+}
+
+fn canPreservePreparedRows(self: *const Proxy, outer: std.posix.winsize, next: Layout) bool {
+    const old = self.layout;
+    const terminal = self.runtime.source.terminal;
+    if (old.bar != next.bar or old.cols != next.cols or !std.meta.eql(old.child, next.child) or
+        !std.meta.eql(terminal, @TypeOf(terminal){ .rows = outer.row, .cols = outer.col, .content_rows = next.child.row }) or
+        self.runtime.renderer.rows.len != next.bar) return false;
+    for (self.runtime.renderer.rows, self.lines.items.items[0..next.bar]) |row, line| {
+        if (!row.prepared or row.meta.identity != line.id) return false;
+    }
+    return true;
 }
 
 /// After a failed `resizeForLines` and the caller's store rollback, brings
@@ -152,4 +170,64 @@ test "a line update reuses storage and prepares one row" {
     try std.testing.expectEqual(allocations, counted.allocations);
     try std.testing.expectEqualStrings("[3] CCCC", runtime.source.content.line(2));
     try std.testing.expectEqualStrings("[4] ", runtime.source.content.line(3));
+}
+
+test "hidden tail changes synchronize source without changing prepared rows" {
+    var counted = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const gpa = counted.allocator();
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(gpa, "[line.a]\ntext = configured\n[push]\ntext = \"#(value)\"\n", &diag);
+    defer cfg.deinit();
+    var lines = Lines.init(gpa);
+    defer lines.deinit();
+    try lines.configure(&.{"a"});
+    for (0..2) |_| _ = try lines.push(null, null);
+    const outer: std.posix.winsize = .{ .row = 5, .col = 80, .xpixel = 800, .ypixel = 500 };
+    const layout = Layout.of(outer, 3);
+    var runtime = try Runtime.initInitial(gpa, std.testing.io, &cfg, &lines, layout.bar, layout.cols);
+    defer runtime.deinit();
+    runtime.source.setTerminalSize(.{ .rows = outer.row, .cols = outer.col, .content_rows = layout.child.row });
+    var proxy = schedulerProxy();
+    proxy.runtime = &runtime;
+    proxy.renderer = &runtime.renderer;
+    proxy.lines = &lines;
+    proxy.layout = layout;
+    proxy.output.screen.damaged = true;
+    proxy.paint_requested_ms = 123;
+    runtime.renderer.rows[0].highlight_until[0] = 456;
+    const rows_ptr = runtime.renderer.rows.ptr;
+    const parsed = runtime.renderer.parsed_rows;
+    const budget_bytes = runtime.renderer.budget.live;
+    const budget_allocations = runtime.renderer.budget.allocations;
+    const hidden_id = try lines.push(null, null);
+    try std.testing.expect(canPreservePreparedRows(&proxy, outer, Layout.of(outer, 4)));
+    const old_id = lines.items.items[0].id;
+    lines.items.items[0].id = hidden_id;
+    try std.testing.expect(!canPreservePreparedRows(&proxy, outer, Layout.of(outer, 4)));
+    lines.items.items[0].id = old_id;
+    var changed_pixels = outer;
+    changed_pixels.xpixel += 1;
+    try std.testing.expect(!canPreservePreparedRows(&proxy, changed_pixels, Layout.of(changed_pixels, 4)));
+    try resizeForLinesWithWinsize(&proxy, 200, outer);
+    try std.testing.expectEqual(rows_ptr, runtime.renderer.rows.ptr);
+    try std.testing.expectEqual(parsed, runtime.renderer.parsed_rows);
+    try std.testing.expectEqual(budget_bytes, runtime.renderer.budget.live);
+    try std.testing.expectEqual(budget_allocations, runtime.renderer.budget.allocations);
+    try std.testing.expectEqual(@as(?i64, 456), runtime.renderer.rows[0].highlight_until[0]);
+    try std.testing.expectEqual(@as(?i64, 123), proxy.paint_requested_ms);
+    try std.testing.expect(proxy.output.screen.damaged);
+    const second_hidden = try lines.push(null, null);
+    try resizeForLinesWithWinsize(&proxy, 201, outer);
+    try std.testing.expectEqual(rows_ptr, runtime.renderer.rows.ptr);
+    try std.testing.expectEqual(hidden_id, lines.remove(3).id);
+    try resizeForLinesWithWinsize(&proxy, 202, outer);
+    try std.testing.expectEqual(rows_ptr, runtime.renderer.rows.ptr);
+    try std.testing.expectEqual(second_hidden, lines.remove(3).id);
+    try resizeForLinesWithWinsize(&proxy, 203, outer);
+    try std.testing.expectEqual(rows_ptr, runtime.renderer.rows.ptr);
+    try std.testing.expectEqual(parsed, runtime.renderer.parsed_rows);
+    _ = runtime.source.rebuild();
+    try runtime.renderer.acceptContent(&runtime.source.content, &runtime.look);
+    try std.testing.expectEqual(@as(usize, 0), runtime.renderer.parsed_rows);
+    try std.testing.expectEqual(budget_allocations, runtime.renderer.budget.allocations);
 }

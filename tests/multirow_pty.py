@@ -213,15 +213,16 @@ def reap_while_draining(pid, fd, timeout=5):
                 time.sleep(min(0.01, remaining))
 
 
-def capture_pty(argv, env=None, rows=24, timeout=5):
+def capture_pty(argv, env=None, rows=24, timeout=5, raw=False):
     pid, master = spawn(argv, rows, env)
+    reader = (lambda fd: os.read(fd, 65536)) if raw else read_pty
     data = b""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         ready, _, _ = select.select([master], [], [], 0.05)
         if ready:
             try:
-                chunk = read_pty(master)
+                chunk = reader(master)
                 if chunk:
                     data += chunk
             except OSError:
@@ -233,7 +234,7 @@ def capture_pty(argv, env=None, rows=24, timeout=5):
                 if not ready:
                     break
                 try:
-                    chunk = read_pty(master)
+                    chunk = reader(master)
                     if not chunk:
                         break
                     data += chunk
@@ -315,14 +316,14 @@ def clean_env(env=None):
     return result
 
 
-def run_session(binary, config, child, *args, env=None, timeout=15, rows=24):
+def run_session(binary, config, child, *args, env=None, timeout=15, rows=24, raw=False):
     """Runs a Python child inside a session with an inline config."""
     with tempfile.TemporaryDirectory() as directory:
         path = os.path.join(directory, "session.statusbar")
         with open(path, "w", encoding="utf-8") as file:
             file.write(config)
         return capture_pty([binary, "-c", path, "--", sys.executable, "-c", child, binary, *args],
-                           env=clean_env(env), rows=rows, timeout=timeout)
+                           env=clean_env(env), rows=rows, timeout=timeout, raw=raw)
 
 
 def between(text, start, end):
@@ -1397,6 +1398,26 @@ def check_background_job_exit(binary):
     print("a background job holding the pty does not keep the session open")
 
 
+def check_hidden_push_without_paint(binary):
+    config = ('[line.a]\ntext = A\n[line.b]\ntext = B\n'
+              '[line.c]\ntext = C\n[push]\ntext = "#(value)"\n')
+    child = CHILD_PRELUDE + r'''
+mark('HIDDEN_READY')
+assert run('push', input=b'hidden value') == '4'
+mark('HIDDEN_ADDED')
+run('pop', '4')
+mark('HIDDEN_REMOVED')
+'''
+    code, data = run_session(binary, config, child, rows=5, raw=True)
+    assert code == 0, data[-1000:]
+    for start, end in ((b'HIDDEN_READY', b'HIDDEN_ADDED'),
+                       (b'HIDDEN_ADDED', b'HIDDEN_REMOVED')):
+        segment = between(data, start, end)
+        assert PAINT_START not in segment, segment
+        assert b'\x1b[2K' not in segment, segment
+    print('hidden tail push/pop emit no bar paint or erase')
+
+
 def check_push_pop(binary):
     child = CHILD_PRELUDE + r'''
 from subprocess import PIPE, Popen
@@ -1957,6 +1978,7 @@ def main():
     check_osc_config(binary)
     check_theme_growth(binary)
     check_background_job_exit(binary)
+    check_hidden_push_without_paint(binary)
     check_push_pop(binary)
     check_fifo(binary)
     check_fifo_signal_cleanup(binary)
