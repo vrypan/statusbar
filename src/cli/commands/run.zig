@@ -36,7 +36,10 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stde
 
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
     defer _ = debug_allocator.deinit();
-    const gpa = if (@import("builtin").mode == .Debug) debug_allocator.allocator() else std.heap.smp_allocator;
+    // A session makes few, long-lived allocations and none per frame. libc's
+    // malloc packs them into pages it already has, where smp_allocator
+    // dedicates a slab to every size class.
+    const gpa = if (@import("builtin").mode == .Debug) debug_allocator.allocator() else std.heap.c_allocator;
 
     // The config pipe is consumed before terminal setup. Reconnect stdin only
     // for this explicit mode so ordinary redirected input remains an error.
