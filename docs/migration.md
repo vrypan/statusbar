@@ -12,10 +12,11 @@ The default config moved from `~/.config/statusbar/config` to
 `~/.config/statusbar/config.statusbar` (under `$XDG_CONFIG_HOME` when it is
 set). The old file is never loaded. If it is the only one present, statusbar
 starts with the built-in config and a line pointing at it, and your shell
-starts as usual. Convert it, save it under the new name, then load it without
-restarting:
+starts as usual. Convert it, save it under the new name, validate the draft,
+then load it without restarting:
 
 ```sh
+statusbar config --check ~/.config/statusbar/config.statusbar
 statusbar config < ~/.config/statusbar/config.statusbar
 ```
 

@@ -316,6 +316,35 @@ def clean_env(env=None):
     return result
 
 
+def check_config_file(binary):
+    """Standalone validation never starts a session or executes commands."""
+    with tempfile.TemporaryDirectory() as directory:
+        valid = os.path.join(directory, "draft with spaces.statusbar")
+        marker = os.path.join(directory, "command-ran")
+        with open(valid, "w") as file:
+            file.write(f'[line.a]\ntext = #(command:probe)\n[command.probe]\nrun = touch "{marker}"\n')
+        result = subprocess.run([binary, "config", "--check", valid], env=clean_env(), capture_output=True, timeout=5)
+        assert result.returncode == 0 and result.stdout == b"" and result.stderr == b"", result
+        assert not os.path.exists(marker), "validation executed a configured command"
+
+        invalid = os.path.join(directory, "invalid.statusbar")
+        with open(invalid, "w") as file:
+            file.write("[line.a]\nleft = old\n")
+        result = subprocess.run([binary, "config", "--check", invalid], env=clean_env(), capture_output=True, timeout=5)
+        assert result.returncode == 2 and f"{invalid}:2:".encode() in result.stderr, result
+        assert b"left, right and rule were removed" in result.stderr and result.stdout == b"", result
+
+        empty = os.path.join(directory, "empty.statusbar")
+        open(empty, "w").close()
+        result = subprocess.run([binary, "config", "--check", empty], env=clean_env(), capture_output=True, timeout=5)
+        assert result.returncode == 2 and b"empty config" in result.stderr, result
+        result = subprocess.run([binary, "config", "--check", os.path.join(directory, "missing")], env=clean_env(), capture_output=True, timeout=5)
+        assert result.returncode == 1 and b"cannot read" in result.stderr, result
+        result = subprocess.run([binary, "config", "--check", valid, "--print"], env=clean_env(), capture_output=True, timeout=5)
+        assert result.returncode == 2 and b"choose one of" in result.stderr, result
+    print("standalone config validation reports errors without executing commands")
+
+
 def run_session(binary, config, child, *args, env=None, timeout=15, rows=24, raw=False):
     """Runs a Python child inside a session with an inline config."""
     with tempfile.TemporaryDirectory() as directory:
@@ -1958,6 +1987,7 @@ def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: multirow_pty.py STATUSBAR")
     binary = os.path.abspath(sys.argv[1])
+    check_config_file(binary)
     check_set(binary)
     check_init_invocation(binary)
     check_stdin_config(binary)

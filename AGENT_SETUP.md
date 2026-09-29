@@ -40,10 +40,11 @@ be read or parsed, including an explicit one, starts the built-in config with
 a warning line; the shell always starts. The pre-`.statusbar` default file
 (`statusbar/config`) is never loaded: if it exists, convert it with the
 [migration guide](https://github.com/vrypan/statusbar/blob/main/docs/migration.md)
-and save the result as `config.statusbar`. Inside a session, `statusbar
-config --print current` and `statusbar config --print startup` show the
-active and original configs. These snapshots exclude values and statuses set
-at runtime.
+and save the result as `config.statusbar`. Run `statusbar config --check FILE`
+to validate a draft outside a session without executing its commands. Inside a
+session, `statusbar config --print current` and
+`statusbar config --print startup` show the active and original configs.
+These snapshots exclude values and statuses set at runtime.
 
 Locate bundled themes:
 

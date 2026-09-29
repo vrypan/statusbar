@@ -7,7 +7,7 @@
 //!     statusbar pop [NAME | --all]
 //!     statusbar bind [-u] NAME
 //!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]
-//!     statusbar config [--print [default|startup|current] | --default | --path]
+//!     statusbar config [--print [default|startup|current] | --default | --path | --check FILE]
 //!     statusbar completion <bash|zsh|fish>
 
 const std = @import("std");
@@ -26,6 +26,7 @@ const config_flags = [_]zecli.FlagSpec{
     .{ .name = "print", .description = "Print a config (current if omitted)" },
     .{ .name = "default", .description = "Same as --print default" },
     .{ .name = "path", .description = "Print the config path for a new session" },
+    .{ .name = "check", .value = .string, .value_name = "FILE", .description = "Validate a config file without starting a session", .completion = .files },
 };
 
 const status_names = [_][]const u8{ "normal", "running", "done", "success", "failed" };
@@ -200,7 +201,7 @@ const commands = [_]zecli.CommandSpec{
     .{
         .name = "config",
         .description = "View configuration or load a new layout",
-        .usage = "statusbar config [--print [default|startup|current] | --default | --path]",
+        .usage = "statusbar config [--print [default|startup|current] | --default | --path | --check FILE]",
         .flags = &config_flags,
         .arguments = &.{.{ .name = "SOURCE", .description = "Config to show with --print: default, startup, or current", .completion = .{ .values = &.{ "default", "startup", "current" } } }},
         .double_dash = .positionals,
@@ -215,6 +216,8 @@ const commands = [_]zecli.CommandSpec{
         \\$XDG_CONFIG_HOME/statusbar/config.statusbar (or
         \\~/.config/statusbar/config.statusbar when $XDG_CONFIG_HOME is unset).
         \\A missing default file shows 'built-in'.
+        \\--check FILE validates a file without loading it or running commands;
+        \\it works outside a session and reports syntax errors with file and line.
         \\Display options ignore stdin and do not change the running bar.
         \\
         \\With no flags, shows this help when run directly in a terminal.
@@ -233,6 +236,7 @@ const commands = [_]zecli.CommandSpec{
             "statusbar config --print current > active.statusbar",
             "statusbar config --default > my.statusbar",
             "statusbar config --path",
+            "statusbar config --check my.statusbar",
             "statusbar config < my.statusbar",
             "statusbar config --default | statusbar config",
         },

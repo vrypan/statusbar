@@ -6,6 +6,7 @@ const cli = @import("../cli.zig");
 const common = @import("../common.zig");
 const config_source = @import("../config_source.zig");
 const config_send = @import("../config_send.zig");
+const config = @import("model").config;
 
 /// Print a config snapshot or submit a complete replacement from stdin.
 pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer, help_output: anytype) !u8 {
@@ -13,7 +14,18 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     const print = command.enabled("print");
     const defaults = command.enabled("default");
     const path = command.enabled("path");
-    if ((print and defaults) or (path and (print or defaults))) return common.usageError(stderr, command, "choose one of --print, --default, or --path");
+    const check_file = command.getValue([]const u8, "check");
+    if (@as(u8, @intFromBool(print)) + @as(u8, @intFromBool(defaults)) + @as(u8, @intFromBool(path)) + @as(u8, @intFromBool(check_file != null)) > 1)
+        return common.usageError(stderr, command, "choose one of --print, --default, --path, or --check");
+    if (check_file) |file| {
+        if (args.len > 0) return common.usageError(stderr, command, "--check takes a file after the flag and no other arguments");
+        const text = Io.Dir.cwd().readFileAlloc(io, file, arena, .limited(config.max_config)) catch |err| {
+            try stderr.print("statusbar: cannot read {s}: {t}\n", .{ file, err });
+            try stderr.flush();
+            return 1;
+        };
+        return config_send.validateText(arena, text, file, stderr);
+    }
     if (args.len > 0 and !print) return common.usageError(stderr, command, "a config selection requires --print");
     if (!print and !path and !defaults) {
         if (!(try Io.File.stdin().isTty(io))) return sendConfig(arena, io, command, stderr);

@@ -78,6 +78,17 @@ mkdir -p ~/.config/statusbar
 statusbar config --default > ~/.config/statusbar/config.statusbar
 ```
 
+Validate a draft file without starting a session or running its configured
+commands:
+
+```sh
+statusbar config --check ~/.config/statusbar/config.statusbar
+```
+
+A valid file produces no output and exits 0. A syntax error exits 2 with its
+file and line; a file that cannot be read exits 1. This checks config syntax;
+check command dependencies and the layout in a session afterward.
+
 `statusbar config --print` prints the running session's active config. Use
 `--print startup` for its original config, or `--print default` (also
 `--default`) for the built-in config. `--path` shows the file a new session
