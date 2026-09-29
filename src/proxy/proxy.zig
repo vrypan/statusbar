@@ -80,15 +80,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
         defer gpa.free(names);
         try lines.configure(names);
     }
-    var warning_id: ?u64 = null;
-    if (opts.warning) |text| {
-        const id = try lines.push(null, null);
-        var value: [@import("session").line_types.max_value]u8 = undefined;
-        const kept = text[0..@min(text.len, value.len)];
-        @memcpy(value[0..kept.len], kept);
-        _ = lines.apply(lines.findId(id).?, .{ .value = .{ .replace = @import("session").line_types.normalizeValue(value[0..kept.len]) }, .status = .failed });
-        warning_id = id;
-    }
+    const warning_id: ?u64 = if (opts.warning) |text| try lines.pushNote(text, .failed) else null;
     const layout = Layout.of(outer_ws, @intCast(lines.items.items.len));
 
     const pty = try sys.openPty(io, &outer_term, &layout.child);
@@ -114,7 +106,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     defer runtime.deinit();
     runtime.source.setTerminalSize(.{ .rows = outer_ws.row, .cols = outer_ws.col, .content_rows = layout.child.row });
     const session_token = config_protocol.makeToken(io);
-    var session_state = try SessionState.init(io, opts.cfg.lineCount(), opts.config_text, session_token);
+    var session_state = try SessionState.init(io, opts.config_text, session_token);
     defer session_state.deinit();
     var control_path: [128]u8 = undefined;
     var endpoint = try control.Endpoint.init(io, session_state.path(), &control_path);

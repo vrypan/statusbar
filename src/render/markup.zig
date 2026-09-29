@@ -34,12 +34,6 @@ pub const Palette = struct {
     }
 };
 
-/// Expands markup into `out`, stopping early rather than failing when `out`
-/// fills up. Only whole sequences are ever written.
-pub fn expand(text: []const u8, out: []u8, palette: Palette) []const u8 {
-    return expandMapped(text, out, palette, &.{});
-}
-
 /// Each raw byte boundary maps to an output boundary. Boundaries inside a
 /// token map to its endpoint; truncated input maps to the retained endpoint.
 pub fn expandMapped(text: []const u8, out: []u8, palette: Palette, offsets: []usize) []const u8 {
@@ -193,6 +187,10 @@ fn writeColor(w: *std.Io.Writer, color: []const u8, layer: enum { fg, bg }) !boo
 }
 
 // --- tests -----------------------------------------------------------------
+
+fn expand(text: []const u8, out: []u8, palette: Palette) []const u8 {
+    return expandMapped(text, out, palette, &.{});
+}
 
 fn expectExpansion(input: []const u8, expected: []const u8) !void {
     var buf: [256]u8 = undefined;

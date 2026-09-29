@@ -247,7 +247,6 @@ pub const Renderer = struct {
     pub const preparePulseRanges = effects.preparePulseRanges;
     pub const prepareHighlightRanges = effects.prepareHighlightRanges;
     pub const highlightChange = effects.highlightChange;
-    pub const cancelHighlight = effects.cancelHighlight;
     pub const highlightTimeout = effects.highlightTimeout;
     pub const nextFrameTimeout = effects.nextFrameTimeout;
     pub const advanceHighlights = effects.advanceHighlights;

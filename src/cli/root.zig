@@ -3,6 +3,7 @@
 
 pub const spec = @import("cli.zig");
 pub const common = @import("common.zig");
+pub const config_send = @import("config_send.zig");
 pub const config_source = @import("config_source.zig");
 pub const startup_config = @import("startup_config.zig");
 
@@ -21,6 +22,7 @@ pub const commands = struct {
 test {
     _ = spec;
     _ = common;
+    _ = config_send;
     _ = config_source;
     _ = startup_config;
     _ = commands.run;

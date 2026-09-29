@@ -255,14 +255,14 @@ this list:
 
 | Directory | Contents |
 |---|---|
-| `shared/` | Leaf types used across layers: terminal colors |
+| `shared/` | Leaf types used across layers: terminal colors and the config size limit |
 | `platform/` | System calls, raw mode, process execution, the log file |
 | `terminal/` | Byte-stream filters between the terminal and the child, the palette probe, OSC 3110 framing |
 | `render/` | Markup, styled text, the cell grid, and the `Renderer` in `bar.zig`, with line content in `content.zig`, fill placement and clipping in `line_layout.zig`, highlight scheduling in `effects.zig` and paint bytes in `serialize.zig` |
 | `session/` | Line names, statuses and value operations in `line_types.zig`, the line store in `lines.zig`, the control protocol in `line_protocol.zig` and socket in `session_control.zig`, the session state file, stream pacing, and the FIFO registry in `fifo.zig` |
 | `model/` | The config parser in `config.zig`, with statements and `.=` fragments in `config_statements.zig` and template compilation in `templates.zig`; line evaluation and dependencies in `line_source.zig`, runtime generations in `runtime_config.zig`, status commands, datetime formatting in `datetime.zig`, terminal values in `terminal_properties.zig`, and the parser test of every shipped config in `shipped_configs_test.zig` |
 | `proxy/` | Session setup and the `Proxy` state in `proxy.zig`; its methods grouped by concern in `loop.zig`, `rows.zig`, `line_control.zig`, `fifo.zig`, `terminal_input.zig` and `reload.zig` |
-| `cli/` | One file per subcommand in `commands/`, config discovery in `config_source.zig`, startup recovery in `startup_config.zig`, shell integration scripts in `shell/`; `main.zig` stays at the root of `src/` |
+| `cli/` | One file per subcommand in `commands/`, config discovery in `config_source.zig`, startup recovery in `startup_config.zig`, validated config replacement (shared with the theme picker) in `config_send.zig`, shell integration scripts in `shell/`; `main.zig` stays at the root of `src/` |
 
 `terminal/` and `render/` are independent of each other, as are `shared/` and
 `platform/`. `build.zig` lists the modules each layer may import, and the

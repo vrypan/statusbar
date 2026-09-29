@@ -128,7 +128,7 @@ fn applyTheme(arena: std.mem.Allocator, io: Io, dir: Io.Dir, token: []const u8, 
         try stderr.print("statusbar-theme: cannot read {s} (limit {d} bytes): {t}\n", .{ label, protocol.max_config, err });
         return null;
     };
-    return if (try @import("cli").commands.config.sendText(arena, io, token, text, label, stderr) == 0) text else null;
+    return if (try @import("cli").config_send.sendText(arena, io, token, text, label, stderr) == 0) text else null;
 }
 
 fn discover(arena: std.mem.Allocator, io: Io, dir: Io.Dir) ![][]const u8 {

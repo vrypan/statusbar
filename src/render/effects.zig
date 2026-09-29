@@ -144,12 +144,6 @@ pub fn highlightChange(self: *Renderer, row: usize, now_ms: i64) void {
     }
 }
 
-pub fn cancelHighlight(self: *Renderer, row: usize) void {
-    for (&self.rows[row].highlight_until) |*deadline| {
-        if (deadline.* != null) deadline.* = 0;
-    }
-}
-
 pub fn highlightTimeout(self: *const Renderer, now_ms: i64) i64 {
     var result: i64 = -1;
     for (self.rows) |row| for (row.highlight_until, 0..) |deadline, id| {
@@ -477,7 +471,7 @@ test "region highlights expire restart and preserve base styling across repair a
     try std.testing.expect(!try r.advanceHighlights(301 + r.highlight.duration()));
 }
 
-test "invisible changes do not highlight and cancellation restores the region" {
+test "invisible changes do not highlight" {
     var content = try Content.init(std.testing.allocator, 1);
     defer content.deinit();
     const look: Look = .{};
@@ -498,10 +492,7 @@ test "invisible changes do not highlight and cancellation restores the region" {
     try r.prepare(&content, &look, false);
     r.highlightChange(0, 10);
     _ = try r.advanceHighlights(10);
-    r.cancelHighlight(0);
-    try std.testing.expect(try r.advanceHighlights(20));
-    try std.testing.expect(!r.rows[0].desired.cells.items[0].style.bold);
-    try std.testing.expectEqual(@as(i64, -1), r.highlightTimeout(20));
+    try std.testing.expect(r.rows[0].desired.cells.items[0].style.bold);
 }
 
 test "adaptive regions derive each grapheme from base and restore after palette updates" {

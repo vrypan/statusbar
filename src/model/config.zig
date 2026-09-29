@@ -44,21 +44,19 @@ const markup = @import("render").markup;
 const Status = @import("session").line_types.Status;
 const line_types = @import("session").line_types;
 
-pub const max_config = 64 * 1024;
+pub const max_config = @import("shared").limits.max_config;
 pub const max_lines = 65533;
 pub const max_commands = 16;
 pub const max_colors = 32;
 pub const max_regions = templates.max_regions;
 
 pub const Diagnostic = statements.Diagnostic;
-pub const Error = statements.Error;
+const Error = statements.Error;
 pub const Template = templates.Template;
-pub const Part = templates.Part;
-pub const TerminalProperty = templates.TerminalProperty;
 const fail = statements.fail;
 
 /// Which end of an overflowing line stays visible.
-pub const Keep = enum { left, right };
+pub const Keep = @import("render").content.Keep;
 
 pub const Variants = struct {
     text: Template = .{},
@@ -76,16 +74,6 @@ pub const Variants = struct {
             .done => if (self.done) |*t| t else &self.text,
             .success => if (self.success) |*t| t else if (self.done) |*t| t else &self.text,
             .failed => if (self.failed) |*t| t else if (self.done) |*t| t else &self.text,
-        };
-    }
-
-    pub fn all(self: *const Variants) [5]?*const Template {
-        return .{
-            &self.text,
-            if (self.running) |*t| t else null,
-            if (self.done) |*t| t else null,
-            if (self.success) |*t| t else null,
-            if (self.failed) |*t| t else null,
         };
     }
 };

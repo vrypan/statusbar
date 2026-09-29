@@ -126,7 +126,7 @@ def check_picker(binary, root):
 
     # Applying the original again leaves no change to persist.
     state = root / "state"
-    state.write_bytes(f"statusbar-state 2\nlines 1\nsession {TOKEN}\nstartup {len(a)}\ncurrent {len(a)}\n".encode() + a + a)
+    state.write_bytes(f"statusbar-state 3\nsession {TOKEN}\nstartup {len(a)}\ncurrent {len(a)}\n".encode() + a + a)
     data = pick(binary, themes, b"\x1b[F\r", again=b"\x1b[H\r", extra_env={"STATUSBAR_STATE": str(state)})
     assert b"To use this theme" not in data, data
     print("picker: discovery, selection, cancellation, resize, validation, restoration")

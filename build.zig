@@ -11,7 +11,7 @@ const layer_imports = [_]struct { Layer, []const Layer }{
     .{ .platform, &.{} },
     .{ .terminal, &.{.shared} },
     .{ .render, &.{.shared} },
-    .{ .session, &.{ .platform, .terminal } },
+    .{ .session, &.{ .shared, .platform, .terminal } },
     .{ .model, &.{ .shared, .platform, .render, .session } },
     .{ .proxy, &.{ .shared, .platform, .terminal, .render, .session, .model } },
     .{ .cli, &.{ .shared, .platform, .terminal, .session, .model, .proxy } },

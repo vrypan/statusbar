@@ -140,6 +140,18 @@ pub const Lines = struct {
         return line.id;
     }
 
+    /// Appends an unnamed pushed line showing `text` with `status`, owned by
+    /// no producer. Text beyond the value limit is dropped and line breaks
+    /// become spaces.
+    pub fn pushNote(self: *Lines, text: []const u8, status: Status) !u64 {
+        const id = try self.push(null, null);
+        var value: [types.max_value]u8 = undefined;
+        const kept = text[0..@min(text.len, value.len)];
+        @memcpy(value[0..kept.len], kept);
+        _ = self.apply(self.items.items.len - 1, .{ .value = .{ .replace = types.normalizeValue(value[0..kept.len]) }, .status = status });
+        return id;
+    }
+
     /// Removes a pushed line. Its ID is never reused.
     pub fn remove(self: *Lines, index: usize) Line {
         std.debug.assert(index >= self.configured);
@@ -293,6 +305,17 @@ test "reconciliation keeps names, reorders and reports removals without mutation
     defer without.deinit();
     try std.testing.expectEqual(@as(usize, 1), without.items.items.len);
     try std.testing.expect(std.mem.indexOfScalar(u64, removed.items, 4) != null);
+}
+
+test "notes are unowned pushed lines with a normalized value" {
+    var lines = Lines.init(std.testing.allocator);
+    defer lines.deinit();
+    try lines.configure(&.{"a"});
+    const id = try lines.pushNote("bad config\nat line 2", .failed);
+    const note = lines.items.items[lines.findId(id).?];
+    try std.testing.expectEqualStrings("bad config at line 2", note.override().?);
+    try std.testing.expectEqual(Status.failed, note.status);
+    try std.testing.expect(note.producer() == null and note.explicitName() == null);
 }
 
 test "pushed lines are bounded and producers retire independently of status" {

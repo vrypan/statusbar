@@ -311,10 +311,7 @@ pub const Source = struct {
         const entry = self.line(index);
         const t = self.template(index);
         var w: std.Io.Writer = .fixed(&self.buffer);
-        var meta: Meta = .{ .keep = switch (self.keep(entry)) {
-            .left => .left,
-            .right => .right,
-        }, .identity = entry.id, .epoch = entry.epoch };
+        var meta: Meta = .{ .keep = self.keep(entry), .identity = entry.id, .epoch = entry.epoch };
         var pattern: []const u8 = "";
         for (t.parts) |part| switch (part) {
             .text => |text| writeTemplateText(&w, text),

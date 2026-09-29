@@ -26,7 +26,7 @@ pub fn replaceConfig(self: *Proxy, text: []const u8, now_ms: i64, diag: *config.
         if (self.fifos.findLine(id)) |index| if (!self.fifos.items.items[index].ownedPath()) return error.FifoPathReplaced;
     }
 
-    var pending_state = try self.session_state.prepare(candidate.cfg.lineCount(), text);
+    var pending_state = try self.session_state.prepare(text);
     defer pending_state.deinit(self.io);
     const old_layout = self.layout;
     const total_lines = candidate.pending_lines.?.items.items.len;
