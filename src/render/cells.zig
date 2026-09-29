@@ -101,9 +101,8 @@ pub const Row = struct {
         try self.cells.resize(gpa, cols);
         @memset(self.cells.items, .{ .style = style });
         self.data.clearRetainingCapacity();
-        // Fills repeat cell references rather than duplicating text. Longer
-        // lines reserve their own bound before placing cells.
-        try self.data.ensureTotalCapacity(gpa, 16 * 1024);
+        // Callers reserve their byte bound before placing cells. Fills repeat
+        // cell references rather than duplicating their text.
     }
     pub fn reserveData(self: *Row, gpa: std.mem.Allocator, bytes: usize) !void {
         try self.data.ensureTotalCapacity(gpa, bytes);
@@ -207,6 +206,7 @@ test "region metadata targets whole wide glyphs without visual differences" {
     var b: Row = .{};
     defer b.deinit(gpa);
     try a.reset(gpa, 3, .{});
+    try a.reserveData(gpa, "界x".len);
     a.put(0, .{ .bytes = "界", .columns = 2, .style = .{}, .link = .{}, .region = 3 }, .prefix);
     a.put(2, .{ .bytes = "x", .columns = 1, .style = .{}, .link = .{} }, .prefix);
     try b.reserveCopy(gpa, a);
@@ -239,6 +239,8 @@ test "wide targets and semantic comparisons do not depend on arena offsets" {
     defer b.deinit(gpa);
     try a.reset(gpa, 3, .{});
     try b.reset(gpa, 3, .{});
+    try a.reserveData(gpa, "界".len);
+    try b.reserveData(gpa, "unused界".len);
     _ = b.keep("unused");
     const glyph: text.Glyph = .{ .bytes = "界", .columns = 2, .style = .{}, .link = .{} };
     a.put(0, glyph, .prefix);

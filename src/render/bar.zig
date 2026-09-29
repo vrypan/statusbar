@@ -351,6 +351,25 @@ test "long markup lines beyond the old slot buffers render" {
     try std.testing.expectEqual(cells.Owner.fill, r.rows[0].base.cells.items[400].owner);
 }
 
+test "short rows keep byte storage proportional to content" {
+    const gpa = std.testing.allocator;
+    var content = try Content.init(gpa, 4);
+    defer content.deinit();
+    for (0..4) |n| _ = try content.setLine(n, "short");
+    var renderer = try Renderer.init(gpa);
+    defer renderer.deinit();
+    try renderer.resize(4, 80);
+    try renderer.prepare(&content, &.{}, true);
+    _ = try content.setLine(0, "small");
+    try renderer.prepare(&content, &.{}, false);
+    for (renderer.rows) |row| {
+        try std.testing.expect(row.base.data.capacity < 4096);
+        for (row.semantic) |part| try std.testing.expect(part.data.capacity < 4096);
+    }
+    try std.testing.expect(renderer.staging.data.capacity < 4096);
+    for (renderer.semantic_staging) |part| try std.testing.expect(part.data.capacity < 4096);
+}
+
 test "every allocation failure during initialization preparation and resize is cleaned" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, allocationScenario, .{});
 }

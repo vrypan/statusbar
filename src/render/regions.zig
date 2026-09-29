@@ -80,7 +80,9 @@ pub fn regionEqual(a: [2]cells.Row, b: [2]cells.Row, id: u4, window: Window) boo
 
 fn testRow(gpa: std.mem.Allocator, text: []const u8, regions: []const ?u4) !cells.Row {
     var row: cells.Row = .{};
+    errdefer row.deinit(gpa);
     try row.reset(gpa, text.len, .{});
+    try row.reserveData(gpa, text.len);
     for (text, regions, 0..) |byte, region, col| row.put(col, .{ .bytes = &.{byte}, .columns = 1, .style = .{}, .link = .{}, .region = region }, .prefix);
     return row;
 }
