@@ -247,7 +247,7 @@ pub const Cache = struct {
 
     /// Retain one resolved pair for the next preparation generation. Unknown
     /// terminal colors deliberately remain on the allocation-free fallback.
-    pub fn prepare(self: *Cache, base: styled.Style, palette: *const color.Palette, pulses: u8) ?u32 {
+    pub fn prepare(self: *Cache, gpa: std.mem.Allocator, base: styled.Style, palette: *const color.Palette, pulses: u8) !?u32 {
         const fg = palette.resolve(base.fg, true) orelse return null;
         const bg = palette.resolve(base.bg, false) orelse return null;
         const text = if (base.reverse) bg else fg;
@@ -255,6 +255,7 @@ pub const Cache = struct {
         for (self.preparing.items, 0..) |entry, index| {
             if (entry.pulses == pulses and std.meta.eql(entry.text, text) and std.meta.eql(entry.back, back)) return @intCast(index);
         }
+        try self.reserve(gpa, self.preparing.items.len + 1);
         if (find(self.entries.items, text, back, pulses)) |entry| {
             self.preparing.appendAssumeCapacity(entry);
             return @intCast(self.preparing.items.len - 1);
@@ -268,6 +269,10 @@ pub const Cache = struct {
     pub fn finishPreparation(self: *Cache) void {
         std.mem.swap(std.ArrayList(Entry), &self.entries, &self.preparing);
         self.preparing.clearRetainingCapacity();
+    }
+
+    pub fn storageBytes(self: *const Cache) usize {
+        return (self.entries.capacity + self.preparing.capacity) * @sizeOf(Entry);
     }
 
     pub fn apply(self: *Cache, base: styled.Style, palette: *const color.Palette, step: usize, pulses: u8) styled.Style {
@@ -311,6 +316,25 @@ fn fallback(base: styled.Style) styled.Style {
     return result;
 }
 
+test "cache capacity follows distinct resolved pairs" {
+    const palette: color.Palette = .{ .foreground = .{ 190, 180, 210 }, .background = .{ 10, 10, 10 } };
+    var cache: Cache = .{};
+    defer cache.deinit(std.testing.allocator);
+    cache.beginPreparation();
+    for (0..200) |_| try std.testing.expectEqual(@as(?u32, 0), try cache.prepare(std.testing.allocator, .{}, &palette, 1));
+    cache.finishPreparation();
+    try std.testing.expectEqual(@as(usize, 1), cache.entries.items.len);
+    try std.testing.expect(cache.entries.capacity < 16);
+    try std.testing.expect(cache.preparing.capacity < 16);
+
+    var unknown: Cache = .{};
+    defer unknown.deinit(std.testing.allocator);
+    unknown.beginPreparation();
+    try std.testing.expectEqual(@as(?u32, null), try unknown.prepare(std.testing.allocator, .{}, &.{}, 1));
+    unknown.finishPreparation();
+    try std.testing.expectEqual(@as(usize, 0), unknown.storageBytes());
+}
+
 test "sample cache shares colors without sharing attributes or animation steps" {
     var palette: color.Palette = .{ .foreground = .{ 190, 180, 210 }, .background = .{ 10, 10, 10 } };
     var cache: Cache = .{};
@@ -319,8 +343,8 @@ test "sample cache shares colors without sharing attributes or animation steps" 
     const base: styled.Style = .{};
     const reversed: styled.Style = .{ .fg = .{ .rgb = palette.background.? }, .bg = .{ .rgb = palette.foreground.? }, .reverse = true, .bold = true };
     cache.beginPreparation();
-    const index = cache.prepare(base, &palette, 2);
-    try std.testing.expectEqual(index, cache.prepare(reversed, &palette, 2));
+    const index = try cache.prepare(std.testing.allocator, base, &palette, 2);
+    try std.testing.expectEqual(index, try cache.prepare(std.testing.allocator, reversed, &palette, 2));
     cache.finishPreparation();
     for (0..100) |_| {
         try std.testing.expectEqualDeep(cache.apply(base, &palette, 7, 2), cache.sample(index, base, 7, 2));
@@ -332,7 +356,7 @@ test "sample cache shares colors without sharing attributes or animation steps" 
     }
     palette.foreground = .{ 100, 200, 180 };
     cache.beginPreparation();
-    const changed = cache.prepare(base, &palette, 1);
+    const changed = try cache.prepare(std.testing.allocator, base, &palette, 1);
     cache.finishPreparation();
     try std.testing.expectEqualDeep(cache.apply(base, &palette, 7, 1), cache.sample(changed, base, 7, 1));
 }
@@ -343,7 +367,7 @@ test "range cache reuses resolved colors and invalidates colors or pulses" {
     defer cache.deinit(std.testing.allocator);
     try cache.reserve(std.testing.allocator, 4);
     cache.beginPreparation();
-    _ = cache.prepare(.{}, &palette, 2);
+    _ = try cache.prepare(std.testing.allocator, .{}, &palette, 2);
     cache.finishPreparation();
     _ = cache.apply(.{}, &palette, 1, 2);
     try std.testing.expectEqual(@as(usize, 1), cache.metrics.preparations);
@@ -354,13 +378,13 @@ test "range cache reuses resolved colors and invalidates colors or pulses" {
     try std.testing.expectEqual(@as(usize, 0), cache.metrics.preparations);
     palette.foreground = .{ 200, 190, 190 };
     cache.beginPreparation();
-    _ = cache.prepare(.{}, &palette, 2);
+    _ = try cache.prepare(std.testing.allocator, .{}, &palette, 2);
     cache.finishPreparation();
     _ = cache.apply(.{}, &palette, 3, 2);
     palette.background = .{ 20, 10, 10 };
     cache.beginPreparation();
-    _ = cache.prepare(.{}, &palette, 2);
-    _ = cache.prepare(.{}, &palette, 1);
+    _ = try cache.prepare(std.testing.allocator, .{}, &palette, 2);
+    _ = try cache.prepare(std.testing.allocator, .{}, &palette, 1);
     cache.finishPreparation();
     _ = cache.apply(.{}, &palette, 4, 2);
     _ = cache.apply(.{}, &palette, 5, 1);
@@ -402,7 +426,7 @@ test "gray uses full foreground range and single pulses have no brightness rever
     defer cache.deinit(std.testing.allocator);
     try cache.reserve(std.testing.allocator, pairs.len);
     cache.beginPreparation();
-    for (pairs) |pair| _ = cache.prepare(.{ .fg = .{ .rgb = pair.text }, .bg = .{ .rgb = pair.back } }, &palette, 1);
+    for (pairs) |pair| _ = try cache.prepare(std.testing.allocator, .{ .fg = .{ .rgb = pair.text }, .bg = .{ .rgb = pair.back } }, &palette, 1);
     cache.finishPreparation();
     for (pairs, 0..) |pair, i| {
         const base: styled.Style = .{ .fg = .{ .rgb = pair.text }, .bg = .{ .rgb = pair.back } };

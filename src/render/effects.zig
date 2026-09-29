@@ -23,15 +23,10 @@ pub fn pulsePreparationStale(self: *const Renderer) bool {
 
 pub fn preparePulseRanges(self: *Renderer) !void {
     if (relative_highlight.measuring) self.pulse_preparation_generations += 1;
-    var count: usize = 0;
-    for (self.rows) |row| for (row.base.cells.items) |cell| {
-        if (cell.kind == .lead and cell.region != null) count += 1;
-    };
-    try self.pulse_cache.reserve(self.budget.allocator(), count);
     self.pulse_cache.beginPreparation();
     for (self.rows) |*row| for (row.base.cells.items, 0..) |*cell, col| {
         if (cell.kind == .lead and cell.region != null) {
-            cell.highlight_range = self.pulse_cache.prepare(cell.style, &self.palette, self.highlight.pulses);
+            cell.highlight_range = try self.pulse_cache.prepare(self.budget.allocator(), cell.style, &self.palette, self.highlight.pulses);
             if (cell.width == 2) row.base.cells.items[col + 1].highlight_range = cell.highlight_range;
         } else cell.highlight_range = null;
     };

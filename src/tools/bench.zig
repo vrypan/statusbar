@@ -116,7 +116,7 @@ fn adaptiveBench(io: std.Io, out: *std.Io.Writer, colors: usize, regions: usize,
     try assertRestored(&renderer, renderer.highlight.duration());
     const allocs = counted.allocations;
     const allocated = counted.allocated_bytes;
-    try out.print("adaptive {s} setup pairs={d} regions={d} chars={d} cols={d}: warmup_allocs={d} warmup_bytes={d}\n", .{ if (regions > 0) "regions" else "colors", distinct, visible_regions, region_chars, renderer.cols, allocs - before_warmup_allocs, allocated - before_warmup_bytes });
+    try out.print("adaptive {s} setup pairs={d} regions={d} chars={d} cols={d}: warmup_allocs={d} warmup_bytes={d} cache_bytes={d}\n", .{ if (regions > 0) "regions" else "colors", distinct, visible_regions, region_chars, renderer.cols, allocs - before_warmup_allocs, allocated - before_warmup_bytes, renderer.pulse_cache.storageBytes() });
     const parsed = renderer.parsed_rows;
     inline for (.{ "cold", "warm" }) |mode| {
         renderer.pulse_cache.metrics = .{};
@@ -315,6 +315,11 @@ fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
 
     renderer.palette.foreground = .{ 230, 210, 175 };
     renderer.palette.background = .{ 30, 25, 20 };
+    // The first resolved palette preparation grows the pair cache. Frames
+    // after preparation must remain allocation-free.
+    try renderer.prepareHighlightRanges();
+    const adaptive_allocs = counted.allocations;
+    const adaptive_allocated = counted.allocated_bytes;
     const adaptive_start = std.Io.Clock.now(.awake, io).toNanoseconds();
     var adaptive_bytes: usize = 0;
     const pulses = 1000;
@@ -335,7 +340,7 @@ fn regionBench(io: std.Io, out: *std.Io.Writer) !void {
         if (renderer.parsed_rows != parsed) return error.UnexpectedParsing;
         if (!renderer.rows[0].base.visuallyEqual(renderer.rows[0].desired)) return error.AdaptiveRestoreRegression;
     }
-    if (counted.allocations != allocs or counted.allocated_bytes != allocated) return error.RendererRegression;
+    if (counted.allocations != adaptive_allocs or counted.allocated_bytes != adaptive_allocated) return error.RendererRegression;
     const adaptive_elapsed = std.Io.Clock.now(.awake, io).toNanoseconds() - adaptive_start;
     try out.print("render adaptive: {d} ns/frame, {d} bytes/frame, allocs=0 bytes=0 ({d} complete effects)\n", .{ @divTrunc(adaptive_elapsed, pulses * frames), adaptive_bytes / (pulses * frames), pulses });
 }
@@ -393,8 +398,11 @@ pub fn main(init: std.process.Init) !u8 {
         try stdout.print("  {s:<7} {d:>8.0} MB/s  (sink {d})\n", .{ @tagName(kind), mb_per_s, sink.total });
     }
     try renderBench(init.io, stdout);
+    try stdout.flush();
     try unrelatedRowBench(init.io, stdout);
+    try stdout.flush();
     try regionBench(init.io, stdout);
+    try stdout.flush();
     for ([_]usize{ 1, 16, 17, 64 }) |colors| try adaptiveBench(init.io, stdout, colors, 0, 1);
     for ([_]usize{ 1, 8, 16 }) |regions| try adaptiveBench(init.io, stdout, 1, regions, 1);
     for ([_]usize{ 64, 200 }) |chars| try adaptiveBench(init.io, stdout, 1, 1, chars);
