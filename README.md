@@ -21,30 +21,36 @@ zig build -Doptimize=ReleaseSafe
 # Binaries: zig-out/bin/statusbar and zig-out/bin/statusbar-theme
 ```
 
-## Quick start
-
-> [!NOTE]
-> **If you want an AI agent to help set up statusbar** and make a personal theme,
-> give it [AGENT_SETUP.md](AGENT_SETUP.md).
->
-> Use a prompt like:
-> ```
-> Read @AGENT_SETUP.md and follow it to help me set up my installed statusbar and create a custom theme.
-> ```
->
-> `AGENT_SETUP.md` is at the root of a release
-> tarball or at `$(brew --prefix statusbar)/share/statusbar/AGENT_SETUP.md`
-> after a Homebrew install.
-
-If you built from source, use `./zig-out/bin/statusbar` and
-`./zig-out/bin/statusbar-theme` in place of the bare command names below.
+Then start statusbar:
 
 ```sh
 statusbar
 ```
 
-This starts your usual shell with a status bar. Run the commands below in
-that shell; exit it to return to your original session.
+This starts your usual shell with a status bar.
+
+Exit it to return to your original session.
+
+> [!WARNING]
+> **v0.5.0 breaks compatibility with older versions.**
+>
+> You can use the AI method bellow to have an AI agent migrate your old
+> configuration, or visit [docs/migration.md](docs/migration.md) for
+> manual instructions.
+
+## Configure using an AI agent
+
+**If you want an AI agent to help set up statusbar** and make a personal theme,
+give it [AGENT_SETUP.md](AGENT_SETUP.md).
+
+Use a prompt like:
+```
+Read @AGENT_SETUP.md and follow it to help me set up my installed statusbar and create a custom theme.
+```
+
+`AGENT_SETUP.md` is at the root of a release
+tarball or at `$(brew --prefix statusbar)/share/statusbar/AGENT_SETUP.md`
+after a Homebrew install.
 
 ## Choose a theme
 
