@@ -217,10 +217,15 @@ pub const Event = struct { offset: usize, style: Style, link: Link, region: ?u4 
 /// Where a parse begins: a later part of a line continues the style, link
 /// and tracking region that the part before it ended with.
 pub const Start = struct { style: Style, link: Link = .{}, region: ?u4 = null };
+const inline_plain_capacity = 4096;
+const max_boundaries = 32;
+// Every accepted escape consumes at least three input bytes. Include the
+// initial event and all possible tracking boundaries.
+const inline_event_capacity = inline_plain_capacity / 3 + 1 + max_boundaries;
 pub const Scratch = struct {
-    plain: [4096]u8 = undefined,
+    plain: [inline_plain_capacity]u8 = undefined,
     len: usize = 0,
-    events: [4097]Event = undefined,
+    events: [inline_event_capacity]Event = undefined,
     count: usize = 0,
     extra_plain: []u8 = &.{},
     extra_events: []Event = &.{},
@@ -229,7 +234,7 @@ pub const Scratch = struct {
         if (size <= self.plain.len) return;
         if (self.extra_plain.len < size) self.extra_plain = try gpa.realloc(self.extra_plain, size);
         // An accepted escape occupies at least three input bytes.
-        const count = try std.math.add(usize, size / 3, 33);
+        const count = try std.math.add(usize, size / 3 + 1, max_boundaries);
         if (self.extra_events.len < count) self.extra_events = try gpa.realloc(self.extra_events, count);
     }
     pub fn deinit(self: *Scratch, gpa: std.mem.Allocator) void {
@@ -258,7 +263,7 @@ pub const Scratch = struct {
         const plain = self.plainBytes();
         const events = self.eventItems();
         if (input.len > plain.len) return error.TextTooLong;
-        if (boundaries.len > 32 or input.len / 3 + 1 + boundaries.len > events.len) return error.TextTooLong;
+        if (boundaries.len > max_boundaries or input.len / 3 + 1 + boundaries.len > events.len) return error.TextTooLong;
         self.len = 0;
         self.count = 1;
         var style = start.style;
@@ -369,12 +374,16 @@ test "tracking boundaries share grapheme ownership and preserve style and links"
     const last = it.next().?;
     try std.testing.expectEqual(@as(?u4, null), last.region);
     try std.testing.expectEqual(Color{ .indexed = 1 }, last.style.fg);
-    // Event storage remains sufficient after a long-rule reservation.
-    try scratch.reserve(gpa, 5000);
-    var boundaries: [32]Boundary = undefined;
+    // The worst inline input needs every event slot without growing scratch.
+    var boundaries: [max_boundaries]Boundary = undefined;
     for (&boundaries, 0..) |*b, n| b.* = .{ .offset = n, .region = if (n % 2 == 0) @intCast(n / 2) else null };
     try scratch.parseTracked("\x1b[m" ** 1365, .{}, &boundaries);
-    try std.testing.expectEqual(@as(usize, 1398), scratch.count);
+    try std.testing.expectEqual(@as(usize, inline_event_capacity), scratch.count);
+    try std.testing.expectEqual(@as(usize, 0), scratch.extra_events.len);
+    try scratch.parseTracked("\x1b[m" ** 1365 ++ "x", .{}, &boundaries);
+    try std.testing.expectEqual(@as(usize, inline_event_capacity), scratch.count);
+    try std.testing.expectEqual(@as(usize, 0), scratch.extra_events.len);
+    try scratch.reserve(gpa, 5000);
     try scratch.parseTracked("a\x1b]8;id=x;https://example.test\x07界", .{}, &.{.{ .offset = 5, .region = 2 }});
     it = scratch.iterator();
     _ = it.next();
