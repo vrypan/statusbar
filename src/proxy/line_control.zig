@@ -22,7 +22,7 @@ fn reject(reason: []const u8) protocol.Reply {
 pub fn controlRequest(self: *Proxy, request: protocol.Request, owner: []const u8, now_ms: i64) protocol.Reply {
     return switch (request) {
         .set => |set| setLine(self, set.target, .{ .value = set.value, .status = set.status }, now_ms),
-        .push => |push| pushLine(self, push.name, push.fifo, owner, now_ms),
+        .push => |push| pushLine(self, push.name, push.mode, push.status, owner, now_ms),
         .update => |update| streamUpdate(self, update.id, update.value, owner, now_ms),
         .finish => |finish| finishStream(self, finish.id, finish.status, owner, now_ms),
         .pop => |target| popLine(self, target, now_ms),
@@ -82,22 +82,23 @@ fn valueColumns(self: *const Proxy, index: usize) usize {
     return @max(1, cols -| fixed);
 }
 
-fn pushLine(self: *Proxy, name: ?[]const u8, fifo: bool, owner: []const u8, now_ms: i64) protocol.Reply {
+fn pushLine(self: *Proxy, name: ?[]const u8, mode: protocol.PushMode, status: ?line_types.Status, owner: []const u8, now_ms: i64) protocol.Reply {
     if (name) |value| if (self.lines.nameTaken(value)) return reject("name is already used by another line");
     if (self.lines.items.items.len >= config.max_lines) return reject("line limit reached");
-    const id = self.lines.push(name, if (fifo) null else owner) catch |err| return reject(switch (err) {
+    const id = self.lines.push(name, if (mode == .stream) owner else null) catch |err| return reject(switch (err) {
         error.LineLimit => "line limit reached",
         error.NameTaken => "name is already used by another line",
         else => "invalid line",
     });
     const index = self.lines.items.items.len - 1;
+    _ = self.lines.apply(index, .{ .status = status });
     self.resizeForLines(now_ms) catch {
         _ = self.lines.remove(index);
         self.lines.next_id = id;
         self.recoverRows();
         return reject("cannot resize bar");
     };
-    if (!fifo) return .{ .created = .{ .id = id, .columns = valueColumns(self, index) } };
+    if (mode != .fifo) return .{ .created = .{ .id = id, .columns = valueColumns(self, index) } };
     const path = self.bindFifo(index) catch |err| {
         _ = self.lines.remove(index);
         self.resizeForLines(now_ms) catch self.recoverRows();

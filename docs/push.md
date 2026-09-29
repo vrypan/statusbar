@@ -1,5 +1,13 @@
 # Add and remove temporary lines
 
+`statusbar push build` creates an empty line and prints its name immediately
+when stdin is a terminal. Update it later with `statusbar set`:
+
+```sh
+statusbar push build --status normal
+statusbar set build "Compiling…" --status running
+```
+
 Use `statusbar push` when a command needs its own line. For a quick example,
 send it a line of text:
 
@@ -59,7 +67,17 @@ that wrote to it. Output wider than the space left is clipped.
 
 ## Status
 
-Pushed lines start with status `running`. When input ends, a pipe or file
+Pushed lines start with status `running`, or the status supplied with
+`--status STATE`: `normal`, `running`, `done`, `success`, or `failed`. This
+works for empty lines, stdin, commands, and FIFOs. Empty lines and FIFOs keep
+that status until you change it. For example:
+
+```sh
+statusbar push build --status normal -- make
+statusbar push progress --fifo --status running
+```
+
+`--status` controls only the initial status. When input ends, a pipe or file
 sets `done`; a command sets `success` for exit status 0 and `failed`
 otherwise, including termination by a signal. Give each status its own look
 in `[push]`:

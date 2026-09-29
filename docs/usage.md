@@ -19,9 +19,9 @@ Run `statusbar --help` for the command list, or
 statusbar [run] [options] [-- COMMAND...]
 statusbar set NAME [TEXT...] [--status STATE]
 statusbar set NAME --reset [--status STATE]
-statusbar push [NAME]
-statusbar push [NAME] -- COMMAND [ARG...]
-statusbar push [NAME] --fifo
+statusbar push [NAME] [--status STATE]
+statusbar push [NAME] [--status STATE] -- COMMAND [ARG...]
+statusbar push [NAME] [--status STATE] --fifo
 statusbar pop [NAME | --all]
 statusbar bind [-u | --unbind] NAME
 statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]
@@ -77,6 +77,10 @@ Values display literally; ANSI colors and OSC 8 links in them work.
 nothing and succeeds. See [changing a line](set.md) for details and hooks.
 
 ## `push` and `pop`
+
+`statusbar push [NAME]` with terminal stdin creates an empty line, prints
+its name (or numeric ID), and returns. Use `set` to update it. In every mode,
+`--status STATE` sets the initial status; the default is `running`.
 
 `command | statusbar push [NAME]` appends a line and streams the latest line
 of input into its value. When input ends, it sets the status to `done`, prints

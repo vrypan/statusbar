@@ -1,5 +1,4 @@
-//! `statusbar push [NAME]`: stream a pipe or command into a new line, or
-//! create a line with a FIFO.
+//! `statusbar push [NAME]`: create a line, optionally with a stream or FIFO.
 const std = @import("std");
 const Io = std.Io;
 const zecli = @import("zecli");
@@ -16,15 +15,19 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         break :name args[0];
     } else null;
     const fifo = command.enabled("fifo");
+    const status: ?types.Status = if (command.getValue([]const u8, "status")) |value|
+        types.Status.parse(value) orelse return common.usageError(stderr, command, "STATE must be normal, running, done, success or failed")
+    else
+        null;
     const child_argv = command.passthrough() orelse &.{};
     if (fifo and child_argv.len > 0) return common.usageError(stderr, command, "choose --fifo or a command after --");
-    if (!fifo and child_argv.len == 0 and (Io.File.stdin().isTty(io) catch false)) return common.usageError(stderr, command, "push input must be a pipe, file, or command after --");
+    const mode: @import("session").line_protocol.PushMode = if (fifo) .fifo else if (child_argv.len > 0 or !(Io.File.stdin().isTty(io) catch false)) .stream else .empty;
     if (@import("platform").environment.get("STATUSBAR_SESSION_ID") == null) return common.usageError(stderr, command, "push requires a running statusbar session");
     var session: common.Session = undefined;
     if (!try session.open(io, stderr)) return 1;
     defer session.close();
 
-    const created = try session.request(stderr, .{ .push = .{ .name = name, .fifo = fifo } }) orelse return 1;
+    const created = try session.request(stderr, .{ .push = .{ .name = name, .mode = mode, .status = status } }) orelse return 1;
     if (fifo) {
         if (created != .path) return common.rejected(stderr, created, "the session rejected push");
         try stdout.print("{s}\n", .{created.path});
@@ -33,6 +36,11 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     }
     if (created != .created) return common.rejected(stderr, created, "the session rejected push");
     const id = created.created.id;
+    if (mode == .empty) {
+        if (name) |value| try stdout.print("{s}\n", .{value}) else try stdout.print("{d}\n", .{id});
+        try stdout.flush();
+        return 0;
+    }
     const command_columns = created.created.columns;
 
     var child_pipe: ?sys.Fd = null;
@@ -70,7 +78,7 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     };
     // Stdin ends as done; a command succeeds only with exit status 0.
     var exit_code: u8 = 0;
-    var status: types.Status = .done;
+    var final_status: types.Status = .done;
     if (child) |*process| {
         const term = try process.wait(io);
         exit_code = switch (term) {
@@ -78,9 +86,9 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
             .signal => |signal| 128 +| @as(u8, @intCast(@intFromEnum(signal))),
             else => 1,
         };
-        status = if (term == .exited and term.exited == 0) .success else .failed;
+        final_status = if (term == .exited and term.exited == 0) .success else .failed;
     }
-    const finished = try session.request(stderr, .{ .finish = .{ .id = id, .status = status } }) orelse return 1;
+    const finished = try session.request(stderr, .{ .finish = .{ .id = id, .status = final_status } }) orelse return 1;
     if (finished != .ok) return common.rejected(stderr, finished, "the session rejected the final status");
     if (name) |value| try stdout.print("{s}\n", .{value}) else try stdout.print("{d}\n", .{id});
     try stdout.flush();

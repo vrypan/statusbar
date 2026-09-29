@@ -3,7 +3,7 @@
 //!
 //!     statusbar [run] [options] [-- COMMAND...]
 //!     statusbar set NAME [TEXT...] [--status STATE] | set NAME --reset [--status STATE]
-//!     statusbar push [NAME] [--fifo | -- COMMAND...]
+//!     statusbar push [NAME] [--status STATE] [--fifo | -- COMMAND...]
 //!     statusbar pop [NAME | --all]
 //!     statusbar bind [-u] NAME
 //!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]
@@ -103,12 +103,18 @@ const commands = [_]zecli.CommandSpec{
     },
     .{
         .name = "push",
-        .description = "Add a line and stream text into it",
-        .usage = "statusbar push [NAME] [--fifo | -- COMMAND [ARG...]]",
-        .flags = &.{.{ .name = "fifo", .description = "Create the line with a FIFO and print its path" }},
+        .description = "Add a line, optionally streaming text into it",
+        .usage = "statusbar push [NAME] [--status STATE] [--fifo | -- COMMAND [ARG...]]",
+        .flags = &.{
+            .{ .name = "fifo", .description = "Create the line with a FIFO and print its path" },
+            .{ .name = "status", .value = .string, .value_name = "STATE", .description = "Set the initial status (default: running)", .choices = &status_names },
+        },
         .arguments = &.{.{ .name = "NAME", .description = "Name for the new line; omit to use its numeric ID" }},
         .extra_help =
         \\Adds a line below the configured ones, using the [push] templates.
+        \\With terminal stdin and no command or FIFO, creates an empty line,
+        \\prints its name (or numeric ID), and returns. Update it with set.
+        \\--status sets the initial status in every mode (default: running).
         \\Read stdin from a pipe or file, or run a command after --. Each new
         \\line of input replaces the value; the last one stays visible after
         \\input ends. A command receives COLUMNS set to the space available

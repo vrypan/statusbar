@@ -1,7 +1,7 @@
 //! Wire format shared by line-control clients and the session handler.
 //!
 //!     1|TOKEN|S|TARGET|VALUE|STATUS    set: VALUE is -, R (reset) or V:BASE64
-//!     1|TOKEN|C|NAME|MODE              push: NAME may be empty, MODE stream|fifo
+//!     1|TOKEN|C|NAME|MODE[|STATUS]     push: MODE stream|fifo|empty
 //!     1|TOKEN|U|ID|BASE64              stream update (unacknowledged)
 //!     1|TOKEN|F|ID|STATUS              finish a stream
 //!     1|TOKEN|P[|TARGET]               pop the target or the latest pushed line
@@ -18,10 +18,11 @@ const Target = types.Target;
 const ValueOp = types.ValueOp;
 
 pub const max_packet = 1536;
+pub const PushMode = enum { stream, fifo, empty };
 
 pub const Request = union(enum) {
     set: struct { target: Target, value: ValueOp = .unchanged, status: ?Status = null },
-    push: struct { name: ?[]const u8 = null, fifo: bool = false },
+    push: struct { name: ?[]const u8 = null, mode: PushMode = .stream, status: ?Status = null },
     update: struct { id: u64, value: []const u8 },
     finish: struct { id: u64, status: Status },
     pop: ?Target,
@@ -74,12 +75,8 @@ pub const Envelope = struct {
             } },
             'C' => .{ .push = .{
                 .name = try parseName(try self.field()),
-                .fifo = mode: {
-                    const mode = try self.field();
-                    if (std.mem.eql(u8, mode, "fifo")) break :mode true;
-                    if (std.mem.eql(u8, mode, "stream")) break :mode false;
-                    return error.InvalidPacket;
-                },
+                .mode = std.meta.stringToEnum(PushMode, try self.field()) orelse return error.InvalidPacket,
+                .status = if (self.fields.next()) |status| try parseOptionalStatus(status) else null,
             } },
             'U' => .{ .update = .{ .id = try parseId(try self.field()), .value = try decodeValue(try self.field(), buffer) } },
             'F' => .{ .finish = .{ .id = try parseId(try self.field()), .status = Status.parse(try self.field()) orelse return error.InvalidPacket } },
@@ -161,7 +158,10 @@ pub fn encode(buffer: []u8, token: []const u8, request: Request) ![]const u8 {
             }
             try writer.print("|{s}", .{if (set.status) |status| @tagName(status) else "-"});
         },
-        .push => |push| try writer.print("C|{s}|{s}", .{ push.name orelse "", if (push.fifo) "fifo" else "stream" }),
+        .push => |push| {
+            try writer.print("C|{s}|{t}", .{ push.name orelse "", push.mode });
+            if (push.status) |status| try writer.print("|{t}", .{status});
+        },
         .update => |update| {
             try writer.print("U|{d}|", .{update.id});
             try writeBase64(&writer, update.value);
@@ -222,7 +222,10 @@ test "requests round-trip omitted, empty and reset values with optional status" 
         .{ .request = .{ .set = .{ .target = .{ .name = "build" }, .value = .reset } }, .wire = "1|t|S|build|R|-" },
         .{ .request = .{ .set = .{ .target = .{ .name = "build" }, .value = .reset, .status = .normal } }, .wire = "1|t|S|build|R|normal" },
         .{ .request = .{ .push = .{} }, .wire = "1|t|C||stream" },
-        .{ .request = .{ .push = .{ .name = "job", .fifo = true } }, .wire = "1|t|C|job|fifo" },
+        .{ .request = .{ .push = .{ .name = "job", .mode = .fifo } }, .wire = "1|t|C|job|fifo" },
+        .{ .request = .{ .push = .{ .name = "job", .mode = .empty, .status = .normal } }, .wire = "1|t|C|job|empty|normal" },
+        .{ .request = .{ .push = .{ .mode = .fifo, .status = .failed } }, .wire = "1|t|C||fifo|failed" },
+        .{ .request = .{ .push = .{ .status = .success } }, .wire = "1|t|C||stream|success" },
         .{ .request = .{ .update = .{ .id = 7, .value = "text" } }, .wire = "1|t|U|7|dGV4dA==" },
         .{ .request = .{ .finish = .{ .id = 7, .status = .failed } }, .wire = "1|t|F|7|failed" },
         .{ .request = .{ .pop = .{ .id = 7 } }, .wire = "1|t|P|7" },
@@ -247,12 +250,15 @@ test "requests round-trip omitted, empty and reset values with optional status" 
 test "hostile and truncated packets are rejected" {
     var decoded: [types.max_value]u8 = undefined;
     for ([_][]const u8{
-        "1|t|S",             "1|t|S|build",        "1|t|S|build|-",             "1|t|S|build|x|-",
-        "1|t|S|build|V:!|-", "1|t|S|build|-|fail", "1|t|S|a.b|-|-",             "1|t|S|0|-|-",
-        "1|t|S|build|-|-|x", "1|t|C",              "1|t|C|5|stream",            "1|t|C|job|pipe",
-        "1|t|U|0|",          "1|t|U|job|eA==",     "1|t|U|1",                   "1|t|F|1",
-        "1|t|F|1|fail",      "1|t|P|",             "1|t|P|a/b",                 "1|t|A|1",
-        "1|t|B",             "1|t|X|..",           "1|t|U|1|" ++ "eHh4" ** 342,
+        "1|t|C|job|empty|bad", "1|t|C|job|fifo|normal|extra", "1|t|C|job|stream|",
+        "1|t|S",               "1|t|S|build",                 "1|t|S|build|-",
+        "1|t|S|build|x|-",     "1|t|S|build|V:!|-",           "1|t|S|build|-|fail",
+        "1|t|S|a.b|-|-",       "1|t|S|0|-|-",                 "1|t|S|build|-|-|x",
+        "1|t|C",               "1|t|C|5|stream",              "1|t|C|job|pipe",
+        "1|t|U|0|",            "1|t|U|job|eA==",              "1|t|U|1",
+        "1|t|F|1",             "1|t|F|1|fail",                "1|t|P|",
+        "1|t|P|a/b",           "1|t|A|1",                     "1|t|B",
+        "1|t|X|..",            "1|t|U|1|" ++ "eHh4" ** 342,
     }) |wire| {
         var envelope = try Envelope.parse(wire);
         try std.testing.expectError(error.InvalidPacket, envelope.decode(&decoded));

@@ -1580,6 +1580,56 @@ failed = "COMMAND_FAILED #(value)"
     print('push completion statuses, exit codes, signals, transitions, and reload passed')
 
 
+def check_push_initial_status(binary):
+    child = CHILD_PRELUDE + r'''
+assert os.isatty(0)
+assert run('push', 'bare') == 'bare'
+settle()
+run('pop', 'bare')
+assert run('push', 'manual', '--status', 'normal') == 'manual'
+settle()
+run('set', 'manual', 'UPDATED', '--status', 'success'); settle()
+run('pop', 'manual')
+unnamed = run('push', '--status', 'done')
+assert unnamed.isdecimal(), unnamed
+run('pop', unnamed)
+run('push', 'invalid', '--status', 'bad', code=2)
+path = run('push', 'fifo', '--fifo', '--status', 'failed')
+assert stat.S_ISFIFO(os.stat(path).st_mode)
+with open(path, 'w') as output:
+    output.write('FIFO_VALUE\n')
+settle()
+run('pop', 'fifo')
+p = subprocess.Popen([b, 'push', 'pipe', '--status', 'failed'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+p.stdin.write(b'PIPE_VALUE\n'); p.stdin.flush(); time.sleep(1)
+p.stdin.close()
+assert p.wait(timeout=4) == 0
+settle(); run('pop', 'pipe')
+with tempfile.TemporaryFile() as source:
+    source.write(b'FILE_VALUE\n'); source.seek(0)
+    subprocess.run([b, 'push', 'file', '--status', 'failed'], stdin=source, capture_output=True, check=True)
+settle(); run('pop', 'file')
+run('push', 'command', '--status', 'failed', '--', sys.executable, '-c',
+    'import os,time; assert os.environ["COLUMNS"] == "73"; print("COMMAND_VALUE", flush=True); time.sleep(.3)')
+settle(); run('pop', 'command')
+print('INITIAL_STATUS_OK', flush=True)
+'''
+    config = '''[line.base]
+text = configured
+[push]
+text = "#(name):#(status):#(value)"
+failed = "FAILED #(value)"
+'''
+    code, data = run_session(binary, config, child)
+    assert code == 0 and b'INITIAL_STATUS_OK' in data, data[-4000:]
+    text = plain(data)
+    for expected in (b'bare:running:', b'manual:normal:', b'manual:success:UPDATED', b'FAILED FIFO_VALUE',
+                     b'FAILED PIPE_VALUE', b'pipe:done:PIPE_VALUE', b'file:done:FILE_VALUE',
+                     b'FAILED COMMAND_VALUE', b'command:success:COMMAND_VALUE'):
+        assert expected in text, (expected, text[-4000:])
+    print('bare push and initial statuses for terminal, pipe, file, FIFO, and command passed')
+
+
 def check_push_spinner(binary):
     child = r'''
 import os, subprocess, sys, time
@@ -1770,6 +1820,7 @@ def main():
     check_fifo(binary)
     check_fifo_signal_cleanup(binary)
     check_push_completion(binary)
+    check_push_initial_status(binary)
     check_push_spinner(binary)
     check_reload_lines(binary)
     config = """\
