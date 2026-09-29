@@ -3,6 +3,7 @@
 
 pub const command_outputs = @import("command_outputs.zig");
 pub const config = @import("config.zig");
+pub const config_sections = @import("config_sections.zig");
 pub const config_statements = @import("config_statements.zig");
 pub const datetime = @import("datetime.zig");
 pub const display = @import("display.zig");
@@ -17,6 +18,7 @@ pub const terminal_properties = @import("terminal_properties.zig");
 test {
     _ = command_outputs;
     _ = config;
+    _ = config_sections;
     _ = config_statements;
     _ = datetime;
     _ = display;
