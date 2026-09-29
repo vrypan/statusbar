@@ -14,6 +14,17 @@ pub const Exec = struct {
     shell_argv: [:null]?[*:0]const u8,
 
     pub fn init(gpa: std.mem.Allocator, words: []const []const u8, environment: *const std.process.Environ.Map) !Exec {
+        return initPrepared(gpa, words, environment.get("PATH"), environment, null);
+    }
+
+    /// Borrow a stable environment block owned by the caller. The caller must
+    /// keep it alive until this Exec has been destroyed and all children exit.
+    pub fn initBorrowed(gpa: std.mem.Allocator, words: []const []const u8, block: std.process.Environ.PosixBlock) !Exec {
+        const environment: std.process.Environ = .{ .block = block };
+        return initPrepared(gpa, words, environment.getPosix("PATH"), null, block);
+    }
+
+    fn initPrepared(gpa: std.mem.Allocator, words: []const []const u8, path: ?[]const u8, owned: ?*const std.process.Environ.Map, borrowed: ?std.process.Environ.PosixBlock) !Exec {
         if (words.len == 0) return error.MissingChildCommand;
         for (words) |word| {
             if (std.mem.indexOfScalar(u8, word, 0) != null) return error.InvalidArgument;
@@ -29,7 +40,7 @@ pub const Exec = struct {
         if (std.mem.indexOfScalar(u8, words[0], '/') != null or words[0].len == 0) {
             try paths.append(allocator, try allocator.dupeZ(u8, words[0]));
         } else {
-            var dirs = std.mem.splitScalar(u8, environment.get("PATH") orelse default_path, ':');
+            var dirs = std.mem.splitScalar(u8, path orelse default_path, ':');
             while (dirs.next()) |dir| {
                 // Empty PATH components mean the current directory.
                 try paths.append(allocator, if (dir.len == 0)
@@ -43,7 +54,7 @@ pub const Exec = struct {
         shell_argv[0] = "/bin/sh";
         shell_argv[1] = null;
         @memcpy(shell_argv[2..], argv[1..]);
-        const block = try environment.createPosixBlock(allocator, .{});
+        const block = if (owned) |environment| try environment.createPosixBlock(allocator, .{}) else borrowed.?;
         const candidates = try paths.toOwnedSlice(allocator);
         return .{
             .arena = arena,

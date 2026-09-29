@@ -25,26 +25,30 @@ pub const CommandOutputs = struct {
     io: std.Io,
     gpa: std.mem.Allocator,
     commands: []status.Command,
+    environment: ?status.CommandEnvironment = null,
     outputs: [config.max_commands][max_output_line]u8 = undefined,
     lens: [config.max_commands]usize = @splat(0),
     seen: [config.max_commands]bool = @splat(false),
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io, cfg: *const config.Config, cols: u16) !CommandOutputs {
         const specs = cfg.commandList();
+        var environment: ?status.CommandEnvironment = if (specs.len > 0) try .init(gpa, cols) else null;
+        errdefer if (environment) |*owner| owner.deinit();
         const commands = try gpa.alloc(status.Command, specs.len);
         errdefer gpa.free(commands);
         var started: usize = 0;
         errdefer for (commands[0..started]) |*command| command.deinit(io);
         for (specs, 0..) |spec, n| {
-            commands[n] = try status.Command.init(gpa, io, spec.run, cfg.commandInterval(n), cols);
+            commands[n] = try status.Command.initBorrowed(gpa, io, spec.run, cfg.commandInterval(n), environment.?.block);
             started += 1;
         }
-        return .{ .io = io, .gpa = gpa, .commands = commands };
+        return .{ .io = io, .gpa = gpa, .commands = commands, .environment = environment };
     }
 
     pub fn deinit(self: *CommandOutputs) void {
         for (self.commands) |*command| command.deinit(self.io);
         self.gpa.free(self.commands);
+        if (self.environment) |*owner| owner.deinit();
     }
 
     /// The first line of command `n`'s latest output, normalized.
@@ -64,7 +68,7 @@ pub const CommandOutputs = struct {
     }
 
     pub fn setColumns(self: *CommandOutputs, cols: u16) void {
-        for (self.commands) |*command| command.setColumns(cols) catch {};
+        if (self.environment) |*owner| owner.setColumns(cols);
     }
 
     /// Runs every command now. Commands with a result run as scheduled

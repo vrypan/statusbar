@@ -114,18 +114,6 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     var fifos = try FifoRegistry.init(io, gpa, session_state.path());
     defer fifos.deinit();
 
-    var child_environment = try sys.environMap().clone(gpa);
-    defer child_environment.deinit();
-    _ = child_environment.swapRemove("STATUSBAR_LINES");
-    // The FIFO directory variable was renamed; never pass an outer session's.
-    _ = child_environment.swapRemove("STATUSBAR_SLOTS");
-    try child_environment.put("STATUSBAR_STATE", session_state.path());
-    try child_environment.put("STATUSBAR_SESSION_ID", &session_token);
-    try child_environment.put("STATUSBAR_FIFOS", fifos.directoryPath());
-    const default_argv = [_][]const u8{sys.env("SHELL") orelse "/bin/sh"};
-    var executable = try sys.Exec.init(gpa, if (opts.argv.len == 0) &default_argv else opts.argv, &child_environment);
-    defer executable.deinit();
-
     const raw = try tty.enterRaw(stdin_fd);
     panic_restore = raw;
     defer {
@@ -155,9 +143,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     try proxy.reserveRows(outer_ws.row);
     proxy.output.osc7_handler = .{ .context = &proxy.terminal, .callback = receiveOsc7 };
 
-    const pid = system.fork();
-    if (pid < 0) return error.ForkFailed;
-    if (pid == 0) childExec(pty, &executable);
+    const pid = try forkSessionChild(gpa, pty, opts.argv, session_state.path(), &session_token, fifos.directoryPath());
     if (opts.log) |log| log.write("session started: pid={d}, rows={d}", .{ pid, opts.cfg.lineCount() });
     sys.close(io, pty.slave);
     slave_open = false;
@@ -176,6 +162,24 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, opts: Options) !u8 {
     const code = (proxy.child_status orelse sys.waitFor(pid)).code;
     if (opts.log) |log| log.write("session ended: exit={d}", .{code});
     return code;
+}
+
+fn forkSessionChild(gpa: std.mem.Allocator, pty: sys.Pty, argv: []const []const u8, state_path: []const u8, token: *const [config_protocol.token_len]u8, fifo_path: []const u8) !posix.pid_t {
+    var child_environment = try sys.environMap().clone(gpa);
+    defer child_environment.deinit();
+    _ = child_environment.swapRemove("STATUSBAR_LINES");
+    // The FIFO directory variable was renamed; never pass an outer session's.
+    _ = child_environment.swapRemove("STATUSBAR_SLOTS");
+    try child_environment.put("STATUSBAR_STATE", state_path);
+    try child_environment.put("STATUSBAR_SESSION_ID", token);
+    try child_environment.put("STATUSBAR_FIFOS", fifo_path);
+    const default_argv = [_][]const u8{sys.env("SHELL") orelse "/bin/sh"};
+    var executable = try sys.Exec.init(gpa, if (argv.len == 0) &default_argv else argv, &child_environment);
+    defer executable.deinit();
+    const pid = system.fork();
+    if (pid < 0) return error.ForkFailed;
+    if (pid == 0) childExec(pty, &executable);
+    return pid;
 }
 
 fn receiveOsc7(context: *anyopaque, uri: []const u8) void {

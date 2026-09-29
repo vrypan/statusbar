@@ -15,10 +15,56 @@ const display = @import("display.zig");
 const max_output = 8192;
 const min_deadline_ms = 5000;
 
+/// One generation's inherited environment. The fixed five-digit slot lets
+/// geometry updates change the exported value without rebuilding Execs.
+pub const CommandEnvironment = struct {
+    arena: std.heap.ArenaAllocator,
+    block: std.process.Environ.PosixBlock,
+    columns: []u8,
+
+    pub fn init(gpa: std.mem.Allocator, cols: u16) !CommandEnvironment {
+        return initFromMap(gpa, sys.environMap(), cols);
+    }
+
+    pub fn initFromMap(gpa: std.mem.Allocator, source: *const std.process.Environ.Map, cols: u16) !CommandEnvironment {
+        var map = try source.clone(gpa);
+        defer map.deinit();
+        _ = map.swapRemove("STATUSBAR_LINES");
+        try map.put("STATUSBAR_COLUMNS", "65535");
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        errdefer arena.deinit();
+        const block = try map.createPosixBlock(arena.allocator(), .{});
+        const prefix = "STATUSBAR_COLUMNS=";
+        for (block.slice) |entry| {
+            const text = std.mem.span(entry orelse continue);
+            if (!std.mem.startsWith(u8, text, prefix)) continue;
+            var result: CommandEnvironment = .{
+                .arena = arena,
+                .block = block,
+                .columns = @constCast(text[prefix.len..]),
+            };
+            result.setColumns(cols);
+            return result;
+        }
+        unreachable;
+    }
+
+    pub fn setColumns(self: *CommandEnvironment, cols: u16) void {
+        var buf: [5]u8 = undefined;
+        const digits = std.fmt.bufPrint(&buf, "{d}", .{cols}) catch unreachable;
+        @memcpy(self.columns[0..digits.len], digits);
+        if (digits.len < self.columns.len) self.columns[digits.len] = 0;
+    }
+
+    pub fn deinit(self: *CommandEnvironment) void {
+        self.arena.deinit();
+    }
+};
+
 pub const Command = struct {
     gpa: std.mem.Allocator,
     shell_command: []const u8,
-    environment: std.process.Environ.Map,
+    environment: ?std.process.Environ.Map = null,
     exec: ?sys.Exec = null,
     interval_ms: i64,
     devnull: sys.Fd,
@@ -44,25 +90,33 @@ pub const Command = struct {
             .interval_ms = interval_ms,
             .devnull = devnull,
         };
-        errdefer self.environment.deinit();
-        _ = self.environment.swapRemove("STATUSBAR_LINES");
+        errdefer self.environment.?.deinit();
+        _ = self.environment.?.swapRemove("STATUSBAR_LINES");
         try self.setColumns(cols);
         return self;
+    }
+
+    pub fn initBorrowed(gpa: std.mem.Allocator, io: std.Io, shell_command: []const u8, interval_ms: i64, block: std.process.Environ.PosixBlock) !Command {
+        const devnull = posix.openatZ(posix.AT.FDCWD, "/dev/null", .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0) catch return error.Syscall;
+        errdefer sys.close(io, devnull);
+        const exec = try sys.Exec.initBorrowed(gpa, &.{ "/bin/sh", "-c", shell_command }, block);
+        return .{ .gpa = gpa, .shell_command = shell_command, .exec = exec, .interval_ms = interval_ms, .devnull = devnull };
     }
 
     pub fn deinit(self: *Command, io: std.Io) void {
         self.stop(io);
         if (self.pid) |pid| _ = sys.waitFor(pid);
         if (self.exec) |*exec| exec.deinit();
-        self.environment.deinit();
+        if (self.environment) |*environment| environment.deinit();
         sys.close(io, self.devnull);
     }
 
     /// The command sees the bar's width as STATUSBAR_COLUMNS.
     pub fn setColumns(self: *Command, cols: u16) !void {
         var buf: [8]u8 = undefined;
-        try self.environment.put("STATUSBAR_COLUMNS", try std.fmt.bufPrint(&buf, "{d}", .{cols}));
-        const exec = try sys.Exec.init(self.gpa, &.{ "/bin/sh", "-c", self.shell_command }, &self.environment);
+        const environment = if (self.environment) |*owned| owned else return;
+        try environment.put("STATUSBAR_COLUMNS", try std.fmt.bufPrint(&buf, "{d}", .{cols}));
+        const exec = try sys.Exec.init(self.gpa, &.{ "/bin/sh", "-c", self.shell_command }, environment);
         if (self.exec) |*old| old.deinit();
         self.exec = exec;
     }
@@ -207,6 +261,81 @@ fn awaitOutput(command: *Command, io: std.Io) !Command.Result {
         sys.sleepMs(io, 5);
     }
     return error.TestExpectedOutput;
+}
+
+test "commands share one large environment and width updates allocate nothing" {
+    var counted = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const gpa = counted.allocator();
+    var source = std.process.Environ.Map.init(gpa);
+    defer source.deinit();
+    const payload = try gpa.alloc(u8, 64 * 1024);
+    defer gpa.free(payload);
+    @memset(payload, 'x');
+    try source.put("LARGE_VALUE", payload);
+    try source.put("STATUSBAR_LINES", "outer");
+    var owner = try CommandEnvironment.initFromMap(gpa, &source, 80);
+    defer owner.deinit();
+    const environment: std.process.Environ = .{ .block = owner.block };
+    try std.testing.expect(environment.getPosix("STATUSBAR_LINES") == null);
+    try std.testing.expectEqualStrings(payload, environment.getPosix("LARGE_VALUE").?);
+
+    var commands: [16]Command = undefined;
+    var initialized: usize = 0;
+    defer for (commands[0..initialized]) |*command| command.deinit(std.testing.io);
+    commands[0] = try Command.initBorrowed(gpa, std.testing.io, "printf %s \"$STATUSBAR_COLUMNS\"", 100, owner.block);
+    initialized = 1;
+    try std.testing.expect(commands[0].environment == null);
+    try std.testing.expectEqual(@intFromPtr(owner.block.slice.ptr), @intFromPtr(commands[0].exec.?.environment.slice.ptr));
+    const after_first = counted.allocated_bytes;
+    while (initialized < commands.len) {
+        commands[initialized] = try Command.initBorrowed(gpa, std.testing.io, "printf %s \"$STATUSBAR_COLUMNS\"", 100, owner.block);
+        initialized += 1;
+    }
+    try std.testing.expect(counted.allocated_bytes - after_first < 4 * payload.len);
+    const before_width = counted.allocations;
+    const before_bytes = counted.allocated_bytes;
+    for ([_]u16{ 100, 9, 65535, 80 }) |cols| {
+        owner.setColumns(cols);
+        var buf: [5]u8 = undefined;
+        try std.testing.expectEqualStrings(try std.fmt.bufPrint(&buf, "{d}", .{cols}), environment.getPosix("STATUSBAR_COLUMNS").?);
+    }
+    try std.testing.expectEqual(before_width, counted.allocations);
+    try std.testing.expectEqual(before_bytes, counted.allocated_bytes);
+    owner.setColumns(9);
+    commands[0].tick(std.testing.io, 0);
+    try std.testing.expectEqualStrings("9", (try awaitOutput(&commands[0], std.testing.io)).bytes);
+}
+
+test "command environment generations own independent blocks" {
+    var source = std.process.Environ.Map.init(std.testing.allocator);
+    defer source.deinit();
+    try source.put("PATH", "");
+    try source.put("EMPTY", "");
+    try source.put("VALUE", "spaces = literal $value");
+    var first = try CommandEnvironment.initFromMap(std.testing.allocator, &source, 80);
+    defer first.deinit();
+    var second = try CommandEnvironment.initFromMap(std.testing.allocator, &source, 100);
+    defer second.deinit();
+    try std.testing.expect(@intFromPtr(first.block.slice.ptr) != @intFromPtr(second.block.slice.ptr));
+    first.setColumns(9);
+    const a: std.process.Environ = .{ .block = first.block };
+    const b: std.process.Environ = .{ .block = second.block };
+    try std.testing.expectEqualStrings("9", a.getPosix("STATUSBAR_COLUMNS").?);
+    try std.testing.expectEqualStrings("100", b.getPosix("STATUSBAR_COLUMNS").?);
+    try std.testing.expectEqualStrings("", a.getPosix("EMPTY").?);
+    try std.testing.expectEqualStrings("spaces = literal $value", b.getPosix("VALUE").?);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, checkCommandEnvironment, .{});
+}
+
+fn checkCommandEnvironment(gpa: std.mem.Allocator) !void {
+    var source = std.process.Environ.Map.init(gpa);
+    defer source.deinit();
+    try source.put("PATH", ":/bin");
+    var owner = try CommandEnvironment.initFromMap(gpa, &source, 80);
+    defer owner.deinit();
+    var command = try Command.initBorrowed(gpa, std.testing.io, "printf done", 100, owner.block);
+    defer command.deinit(std.testing.io);
+    try std.testing.expectEqualStrings(":/bin", (std.process.Environ{ .block = command.exec.?.environment }).getPosix("PATH").?);
 }
 
 test "command output exits and schedules the next refresh" {
