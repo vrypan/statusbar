@@ -1,11 +1,6 @@
-//! Tracked-region effects: detecting which regions changed, and sampling
-//! their pulse into the desired frame on its own schedule.
-//! Tracked-region effects: detecting which regions changed, and sampling
-//! their pulse into the desired frame on its own schedule.
-//!
-//! A region belongs to one line and may cross its fill. Changes count only
-//! within the part of the region the new layout shows, so text moving or
-//! changing beyond the visible width does not pulse.
+//! Tracked-region effects: preparing adaptive pulse ranges, and sampling
+//! each changed region's pulse into the desired frame on its own schedule.
+//! Which regions changed is decided in `regions.zig`.
 
 const std = @import("std");
 const cells = @import("cells.zig");
@@ -16,97 +11,11 @@ const Content = content_mod.Content;
 const Look = content_mod.Look;
 const Meta = content_mod.Meta;
 const Renderer = @import("bar.zig").Renderer;
-const Visible = @import("line_layout.zig").Visible;
 const max_regions = content_mod.max_regions;
-
-pub fn hasTrack(meta: Meta, id: u4) bool {
-    for (meta.items()) |span| if (span.id == id) return true;
-    return false;
-}
-
-/// Region columns, counted across prefix then suffix, that the layout shows.
-pub const Window = struct { lo: usize, hi: usize };
-
-pub fn regionWindow(parts: [2]cells.Row, visible: Visible, id: u4) ?Window {
-    var rel: usize = 0;
-    var lo: usize = std.math.maxInt(usize);
-    var hi: usize = 0;
-    for (parts, visible) |part, shown| for (part.cells.items, 0..) |cell, col| {
-        if (cell.kind != .lead or cell.region != id) continue;
-        if (col >= shown.start and col + cell.width <= shown.end) {
-            lo = @min(lo, rel);
-            hi = @max(hi, rel + cell.width);
-        }
-        rel += cell.width;
-    };
-    return if (hi > lo) .{ .lo = lo, .hi = hi } else null;
-}
-
-const RegionCells = struct {
-    parts: *const [2]cells.Row,
-    id: u4,
-    window: Window,
-    part: usize = 0,
-    index: usize = 0,
-    rel: usize = 0,
-
-    const Item = struct { cell: cells.Cell, data: []const u8, rel: usize };
-
-    fn next(self: *RegionCells) ?Item {
-        while (self.part < 2) {
-            const row = &self.parts[self.part];
-            if (self.index >= row.cells.items.len) {
-                self.part += 1;
-                self.index = 0;
-                continue;
-            }
-            const cell = row.cells.items[self.index];
-            self.index += 1;
-            if (cell.kind != .lead or cell.region != self.id) continue;
-            const rel = self.rel;
-            self.rel += cell.width;
-            if (rel < self.window.lo or rel + cell.width > self.window.hi) continue;
-            return .{ .cell = cell, .data = row.data.items, .rel = rel };
-        }
-        return null;
-    }
-};
-
-pub fn regionEqual(a: [2]cells.Row, b: [2]cells.Row, id: u4, window: Window) bool {
-    var x_cells: RegionCells = .{ .parts = &a, .id = id, .window = window };
-    var y_cells: RegionCells = .{ .parts = &b, .id = id, .window = window };
-    while (true) {
-        const x = x_cells.next();
-        const y = y_cells.next();
-        if (x == null or y == null) return x == null and y == null;
-        const p = x.?;
-        const q = y.?;
-        if (p.rel != q.rel or p.cell.width != q.cell.width or !cells.Style.eql(p.cell.style, q.cell.style) or
-            !std.mem.eql(u8, p.cell.glyph.get(p.data), q.cell.glyph.get(q.data)) or
-            !std.mem.eql(u8, p.cell.params.get(p.data), q.cell.params.get(q.data)) or
-            !std.mem.eql(u8, p.cell.uri.get(p.data), q.cell.uri.get(q.data))) return false;
-    }
-}
-
-/// Line 0 of `content` as `text`, tracked as region 0.
-pub fn setTestTracked(content: *Content, text: []const u8) !void {
-    var meta: Meta = .{};
-    meta.spans[0] = .{ .id = 0, .start = 0, .end = @intCast(text.len) };
-    meta.len = 1;
-    _ = try content.set(0, text, "", meta);
-}
-
-/// `P{a}/{b}S` with regions 0 and 1, then a fill and `right` as region 2.
-pub fn setTestPair(content: *Content, n: usize, a: []const u8, b: []const u8, right: []const u8) !void {
-    var buf: [1024]u8 = undefined;
-    const raw = try std.fmt.bufPrint(&buf, "P{s}/{s}S{s}", .{ a, b, right });
-    var meta: Meta = .{ .split = @intCast(raw.len - right.len) };
-    meta.spans[0] = .{ .id = 0, .start = 1, .end = @intCast(1 + a.len) };
-    meta.spans[1] = .{ .id = 1, .start = @intCast(2 + a.len), .end = @intCast(2 + a.len + b.len) };
-    meta.spans[2] = .{ .id = 2, .start = @intCast(raw.len - right.len), .end = @intCast(raw.len) };
-    meta.len = 3;
-    _ = try content.set(n, raw, " ", meta);
-}
+const test_content = @import("test_content.zig");
+const setTestPair = test_content.setTestPair;
+const setTestTracked = test_content.setTestTracked;
+const trackedMeta = test_content.trackedMeta;
 
 pub fn pulsePreparationStale(self: *const Renderer) bool {
     return self.pulse_ranges_dirty or self.prepared_palette_revision != self.palette.revision or self.prepared_pulses != self.highlight.pulses;
@@ -217,13 +126,6 @@ pub fn advanceHighlights(self: *Renderer, now_ms: i64) !bool {
 /// Samples all current temporary appearances into the desired frame.
 pub fn compose(self: *Renderer, now_ms: i64) !bool {
     return try self.advanceHighlights(now_ms);
-}
-
-fn trackedMeta(id: u4, start: u32, end: u32) Meta {
-    var meta: Meta = .{};
-    meta.spans[0] = .{ .id = id, .start = start, .end = end };
-    meta.len = 1;
-    return meta;
 }
 
 test "untracked row updates preserve pulse generations and active effects" {

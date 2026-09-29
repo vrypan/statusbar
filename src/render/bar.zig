@@ -17,7 +17,8 @@ const relative_highlight = @import("relative_highlight.zig");
 const color = @import("shared").color;
 const effects = @import("effects.zig");
 const line_layout = @import("line_layout.zig");
-const setTestPair = effects.setTestPair;
+const regions = @import("regions.zig");
+const setTestPair = @import("test_content.zig").setTestPair;
 
 const cells = @import("cells.zig");
 const Content = @import("content.zig").Content;
@@ -162,9 +163,9 @@ pub const Renderer = struct {
             if (!invalidate and !baseline) {
                 for (0..max_regions) |id| {
                     const ordinal: u4 = @intCast(id);
-                    if (!effects.hasTrack(row.meta, ordinal) or !effects.hasTrack(meta, ordinal)) continue;
-                    const window = effects.regionWindow(self.semantic_staging, self.staging_visible, ordinal) orelse continue;
-                    row.region_changed[id] = !effects.regionEqual(row.semantic, self.semantic_staging, ordinal, window);
+                    if (!regions.hasTrack(row.meta, ordinal) or !regions.hasTrack(meta, ordinal)) continue;
+                    const window = regions.regionWindow(self.semantic_staging, self.staging_visible, ordinal) orelse continue;
+                    row.region_changed[id] = !regions.regionEqual(row.semantic, self.semantic_staging, ordinal, window);
                 }
             }
             for (0..self.cols) |col| {
