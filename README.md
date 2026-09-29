@@ -6,13 +6,15 @@ full-screen programs, and scrollback continue to work.
 
 ![screenshot](demo/screenshot.png)
 
-## Install
+## Quick start
 
-With Homebrew:
+Install with Homebrew:
 
 ```sh
 brew install vrypan/tap/statusbar
 ```
+
+Or download the latest [release](releases/).
 
 Or build from source with Zig 0.16 on macOS or Linux:
 
@@ -40,15 +42,14 @@ Exit it to return to your original session.
 
 ## Configure using an AI agent
 
-**If you want an AI agent to help set up statusbar** and make a personal theme,
-give it [AGENT_SETUP.md](AGENT_SETUP.md).
+You can use an AI agent to configure statusbar and make a personal theme.
 
 Use a prompt like:
 ```
 Read @AGENT_SETUP.md and follow it to help me set up my installed statusbar and create a custom theme.
 ```
 
-`AGENT_SETUP.md` is at the root of a release
+[AGENT_SETUP.md](AGENT_SETUP.md) is at the root of a release
 tarball or at `$(brew --prefix statusbar)/share/statusbar/AGENT_SETUP.md`
 after a Homebrew install.
 
@@ -103,7 +104,7 @@ config with `left`, `right` and `rule`? See the
 [migration guide](docs/migration.md).
 
 Inside a statusbar session, scripts can change a line with
-`statusbar set build "Ready" --status success`. For live output,
+`statusbar set prompt "Ready" --status success`. For live output,
 `statusbar push build -- make` adds a temporary line; `statusbar pop build`
 removes it. You can also move Starship's prompt details into a statusbar line.
 
