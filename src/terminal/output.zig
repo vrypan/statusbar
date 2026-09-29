@@ -19,16 +19,14 @@
 
 const std = @import("std");
 const config_protocol = @import("config_protocol.zig");
+const osc_capture = @import("osc_capture.zig");
 
 const max_seq = 64;
 const max_params = 16;
 
 const esc = 0x1b;
 
-pub const Osc7Handler = struct {
-    context: *anyopaque,
-    callback: *const fn (*anyopaque, []const u8) void,
-};
+pub const Osc7Handler = osc_capture.Osc7Handler;
 
 pub const Output = struct {
     /// Bar rows below the child. With none, nothing is rewritten.
@@ -56,14 +54,9 @@ pub const Output = struct {
     /// in pixels, which `Input` must compare against the child's pixel height.
     sgr_pixels: bool = false,
 
-    osc_len: usize = 0,
-    osc_probe: [config_protocol.namespace.len]u8 = undefined,
-    osc7_payload: [4096]u8 = undefined,
-    osc7_len: usize = 0,
-    osc7_overflow: bool = false,
-    config_payload: [config_protocol.max_osc - config_protocol.namespace.len]u8 = undefined,
-    config_len: usize = 0,
-    config_overflow: bool = false,
+    probe: osc_capture.Probe = .{},
+    osc7: osc_capture.Osc7Payload = .{},
+    config: osc_capture.ConfigPayload = .{},
     config_ready: bool = false,
 
     state: State = .ground,
@@ -143,7 +136,7 @@ pub const Output = struct {
                         },
                         ']' => {
                             self.state = .osc_prefix;
-                            self.osc_len = 0;
+                            self.probe.reset();
                         },
                         'P', '_', '^', 'X' => {
                             sink.write(&.{ esc, b });
@@ -265,30 +258,26 @@ pub const Output = struct {
                     }
                 },
                 .osc_prefix => {
-                    if (self.osc_len == 0 and b == '7') {
-                        i += 1;
-                        run = i;
+                    i += 1;
+                    run = i;
+                    if (self.probe.len == 0 and b == '7') {
                         self.state = .osc7_prefix;
-                    } else {
-                        self.osc_probe[self.osc_len] = b;
-                        i += 1;
-                        run = i;
-                        self.osc_len += 1;
-                        const probe = self.osc_probe[0..self.osc_len];
-                        if (std.mem.eql(u8, probe, config_protocol.namespace)) {
+                    } else switch (self.probe.push(b)) {
+                        .partial => {},
+                        .config => {
                             self.state = .config;
-                            self.config_len = 0;
-                            self.config_overflow = false;
-                        } else if (!std.mem.startsWith(u8, config_protocol.namespace, probe)) {
+                            self.config.reset();
+                        },
+                        .other => {
                             // Reprocess the mismatching byte as string content:
                             // it may terminate or interrupt this OSC.
                             sink.write("\x1b]");
-                            sink.write(probe[0 .. probe.len - 1]);
+                            sink.write(self.probe.heldBeforeLast());
                             i -= 1;
                             run = i;
                             self.state = .string;
                             self.string_is_osc = true;
-                        }
+                        },
                     }
                 },
                 .osc7_prefix => {
@@ -296,8 +285,7 @@ pub const Output = struct {
                         i += 1;
                         run = i;
                         sink.write("\x1b]7;");
-                        self.osc7_len = 0;
-                        self.osc7_overflow = false;
+                        self.osc7.reset();
                         self.state = .osc7;
                     } else {
                         sink.write("\x1b]7");
@@ -325,12 +313,7 @@ pub const Output = struct {
                         self.state = .ground;
                     },
                     else => {
-                        if (self.osc7_len < self.osc7_payload.len) {
-                            self.osc7_payload[self.osc7_len] = b;
-                            self.osc7_len += 1;
-                        } else {
-                            self.osc7_overflow = true;
-                        }
+                        self.osc7.append(b);
                         i += 1;
                     },
                 },
@@ -353,12 +336,7 @@ pub const Output = struct {
                         0x07 => self.state = .ground,
                         esc => self.state = .config_esc,
                         0x18, 0x1a => self.state = .ground,
-                        else => if (self.config_len < self.config_payload.len) {
-                            self.config_payload[self.config_len] = b;
-                            self.config_len += 1;
-                        } else {
-                            self.config_overflow = true;
-                        },
+                        else => self.config.append(b),
                     }
                 },
                 .config_esc => {
@@ -366,7 +344,7 @@ pub const Output = struct {
                         i += 1;
                         run = i;
                         self.state = .ground;
-                        self.config_ready = !self.config_overflow;
+                        self.config_ready = !self.config.overflow;
                         self.utf8_pending = self.pendingAfter(bytes[0..i]);
                         return i;
                     } else {
@@ -383,12 +361,12 @@ pub const Output = struct {
     pub fn takeConfig(self: *Output) ?[]const u8 {
         if (!self.config_ready) return null;
         self.config_ready = false;
-        return self.config_payload[0..self.config_len];
+        return self.config.complete();
     }
 
     fn finishOsc7(self: *Output) void {
-        if (self.osc7_overflow) return;
-        if (self.osc7_handler) |handler| handler.callback(handler.context, self.osc7_payload[0..self.osc7_len]);
+        const handler = self.osc7_handler orelse return;
+        if (self.osc7.complete()) |payload| handler.receive(payload);
     }
 
     /// Carries an incomplete scalar over read boundaries. Only the leading
