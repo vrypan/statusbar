@@ -4,6 +4,19 @@ Changes are grouped by version, newest first. Each section summarizes changes
 since the previous version. Within each release, changes are listed in the
 order they were added.
 
+## v0.5.1
+
+- Update VHS demos for named lines and keep example values visible before
+  shell prompt hooks overwrite them
+- Prevent background `push` jobs from suspending on terminal access: skip
+  terminal result output and replace inherited terminal stdin with `/dev/null`
+- Expand configured `default` templates at `#(value)` until a value is set,
+  support `default .=`, and restore the live fallback with `--reset`;
+  escape literal `#` in defaults with `##`
+- Use styled user/host/load fallbacks in the built-in config and Gruvbox,
+  Pastel Powerline, Pure, and Tokyo Night themes; reset value styles before
+  the fill and right-side content
+
 ## v0.5.0
 
 - Add on-demand named FIFOs for configured slots and pushed rows
@@ -21,7 +34,7 @@ order they were added.
   inline shell commands; `%` is literal outside `#(datetime:...)`; remove
   `#(tag)`, `#(id)`, `#(stream)`, `#(exit_code)` and `#(signal)` in favor of
   `#(name)`, `#(value)` and `#(status)`
-- Display explicit values and command output literally, keeping ANSI colors
+- Display values, defaults and command output literally, keeping ANSI colors
   and OSC 8 links
 - Replace `set SLOT` with `set NAME [TEXT...] [--status STATE] [--reset]`,
   sent over the authenticated control socket; drop the OSC slot variables
@@ -38,8 +51,6 @@ order they were added.
 - Start the shell with the built-in config and a warning line when the
   startup config is missing, unreadable or invalid
 - Add `#(env:NAME)` to show an environment variable in templates
-- Expand configured `default` templates at `#(value)` until a value is set;
-  `--reset` restores the live fallback
 
 ## v0.4.3
 
