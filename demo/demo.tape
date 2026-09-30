@@ -1,14 +1,18 @@
-Output demo/demo-1.gif
+# Capture frames for encoding with ffmpeg, as in tests/demo.tape.
+Output demo/demo-frames/
 
 Require statusbar
 
 Set Shell "zsh"
-Set Width 1200
-Set Height 700
-Set FontSize 20
+Set Theme { "background": "#000000" }
+Set Width 2400
+Set Height 1400
+Set FontSize 40
 Set Framerate 60
-Set TypingSpeed 50ms
+Set TypingSpeed 20ms
 Set CursorBlink false
+
+
 
 # Start in ~/Devel/statusbar
 Hide
@@ -20,7 +24,7 @@ Show
 Sleep 1300ms
 
 # Start statusbar
-Type "statusbar -c samples/default.config"
+Type "statusbar -c samples/default.statusbar"
 Sleep 300ms
 Enter
 Sleep 1900ms
@@ -42,6 +46,12 @@ Sleep 300ms
 Enter
 Sleep 1500ms
 
+# Clean up — dirty marker disappears
+Type "rm test"
+Sleep 300ms
+Enter
+Sleep 2200ms
+
 # Move to tj — statusbar follows cwd/git state
 Type "cd ../tj"
 Sleep 300ms
@@ -54,25 +64,19 @@ Sleep 300ms
 Enter
 Sleep 2100ms
 
-# Clean up — dirty marker disappears
-Type "rm test"
+# Set the prompt line's value
+Type `statusbar set prompt 'Hello world!'`
 Sleep 300ms
 Enter
 Sleep 2200ms
 
-# Override the right side
-Type `statusbar set 4 'Hello world!'`
+Type `statusbar set prompt "$(printf '\e[1;32mHello, green world!')"`
 Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type `statusbar set 4 '#[fg=green,bold]Hello, green world!'`
-Sleep 300ms
-Enter
-Sleep 2200ms
-
-# Restore the configured right side
-Type `statusbar set 4 ""`
+# Restore the configured default
+Type `statusbar set prompt --reset`
 Sleep 300ms
 Enter
 Sleep 2600ms
@@ -82,7 +86,7 @@ Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/gruvbox.config"
+Type "statusbar -c samples/themes/gruvbox.statusbar -- zsh -f"
 Sleep 300ms
 Enter
 Sleep 2200ms
@@ -92,7 +96,7 @@ Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/pastel-powerline.config"
+Type "statusbar -c samples/themes/pastel-powerline.statusbar -- zsh -f"
 Sleep 300ms
 Enter
 Sleep 2200ms
@@ -102,7 +106,7 @@ Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/pure.config"
+Type "statusbar -c samples/themes/pure.statusbar -- zsh -f"
 Sleep 300ms
 Enter
 Sleep 2200ms
@@ -112,7 +116,7 @@ Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/tokyo-night.config"
+Type "statusbar -c samples/themes/tokyo-night.statusbar -- zsh -f"
 Sleep 300ms
 Enter
 Sleep 2200ms
@@ -122,7 +126,7 @@ Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/multi-line.config"
+Type "statusbar -c samples/themes/multi-line.statusbar -- zsh -f"
 Sleep 300ms
 Enter
 Sleep 2200ms

@@ -21,24 +21,24 @@ Enter
 Show
 Sleep 1300ms
 
-Type "statusbar -c samples/themes/gruvbox.config -- zsh"
+Type "statusbar -c samples/themes/gruvbox.statusbar -- zsh -f"
 Sleep 300ms
 Enter
 Sleep 1000ms
 
-# Start three overlapping tasks. The failure takes 30 seconds; the benchmark
+# Start three overlapping tasks. The failure takes 20 seconds; the benchmark
 # usually takes about 18 seconds. Curl stays active through the final pop.
-Type `statusbar push -t "failure test" -- sh -c 'sleep 20; exit 7' &`
+Type `statusbar push failure-test -- sh -c 'sleep 20; exit 7' &`
 Sleep 300ms
 Enter
 Sleep 1200ms
 
-Type `statusbar push -t 100mb.dat -- curl --progress-bar --limit-rate 10M -o /dev/null https://proof.ovh.net/files/100Mb.dat 2>&1 &`
+Type `statusbar push download -- curl --progress-bar --limit-rate 5M -o /dev/null https://proof.ovh.net/files/100Mb.dat &`
 Sleep 300ms
 Enter
 Sleep 500ms
 
-Type "statusbar push -t bench -- zig build bench --color off --summary line &"
+Type "statusbar push bench -- zig build bench --color off --summary line &"
 Sleep 300ms
 Enter
 Sleep 1800ms
