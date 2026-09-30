@@ -64,19 +64,19 @@ Sleep 300ms
 Enter
 Sleep 2100ms
 
-# Set the prompt line's value
-Type `statusbar set prompt 'Hello world!'`
+# Hold each value before the shell prompt hook overwrites it.
+Type `statusbar set prompt 'Hello world!'; sleep 2`
 Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type `statusbar set prompt "$(printf '\e[1;32mHello, green world!')"`
+Type `statusbar set prompt "$(printf '\e[1;32mHello, green world!')"; sleep 2`
 Sleep 300ms
 Enter
 Sleep 2200ms
 
 # Restore the configured default
-Type `statusbar set prompt --reset`
+Type `statusbar set prompt --reset; sleep 2`
 Sleep 300ms
 Enter
 Sleep 2600ms
@@ -126,7 +126,7 @@ Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/multi-line.statusbar -- zsh -f"
+Type "statusbar -c samples/themes/multi-line.statusbar"
 Sleep 300ms
 Enter
 Sleep 2200ms
