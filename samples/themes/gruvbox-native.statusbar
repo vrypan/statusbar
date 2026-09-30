@@ -20,13 +20,14 @@ failure = colour1
 [line.rule]
 text = "#[fg=yellow]#(fill:━)"
 
-# Starship's prompt details (the line's value) come first.
+# Show user/host/load until Starship or `set prompt` supplies a value.
 [line.prompt]
-text = "#[fg=text,bg=base]#(value)"
-text .= "#[fg=orange]#[fg=segment_text,bg=orange,bold] #(command:user) #[fg=orange,bg=yellow,nobold]#[fg=badge_text,bg=yellow,bold] #(command:host) "
-text .= "#[fg=yellow,bg=aqua,nobold]#[fg=badge_text,bg=aqua] load #(command:load) #[fg=aqua,bg=base,nobold]#[default,fg=text,bg=base]"
-text .= "#(fill: )"
-text .= "#[fg=aqua]#[fg=badge_text,bg=aqua] #(command:weather) #[fg=aqua,bg=yellow,nobold]#[fg=badge_text,bg=yellow,bold] #(datetime:%H:%M:%S) #[fg=yellow,bg=base,nobold]#[default,fg=text,bg=base]"
+default = "#[fg=segment_text,bg=orange,bold] #(command:user) #[fg=badge_text,bg=yellow] #(command:host) "
+default .= "#[fg=badge_text,bg=aqua,nobold] load #(command:load) "
+text = "#[default,fg=text,bg=base]#(value)"
+# Reset value styles before filling the gap and drawing the right side.
+text .= "#[default,fg=text,bg=base]#(fill: )"
+text .= "#[fg=badge_text,bg=aqua] #(command:weather) #[fg=badge_text,bg=yellow,bold] #(datetime:%H:%M:%S) #[default,fg=text,bg=base]"
 
 # Lines created by `statusbar push`.
 [push]

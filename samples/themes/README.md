@@ -111,8 +111,11 @@ statusbar config < ./samples/themes/tokyo-night-native.statusbar
 ```
 
 If your shell enables statusbar's Starship integration, Starship's details
-become the value of each theme's `prompt` line, shown before its own content,
-in Starship's colors. For an isolated preview using Zsh without startup files:
+become the value of each theme's `prompt` line, in Starship's colors.
+In Pure, Tokyo Night, Gruvbox, and Pastel Powerline, that value replaces the
+user/host/load fallback; weather and the clock remain on the right.
+The fill resets to the theme's base colors after the value.
+For an isolated preview using Zsh without startup files:
 
 ```sh
 ./zig-out/bin/statusbar --config "$PWD/samples/themes/tokyo-night-native.statusbar" -- /bin/zsh -f
