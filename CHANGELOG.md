@@ -4,7 +4,7 @@ Changes are grouped by version, newest first. Each section summarizes changes
 since the previous version. Within each release, changes are listed in the
 order they were added.
 
-## Unreleased
+## v0.5.0
 
 - Add on-demand named FIFOs for configured slots and pushed rows
 - Add `#(datetime:FORMAT)` and terminal size properties to templates
