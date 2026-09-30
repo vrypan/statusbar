@@ -28,7 +28,7 @@ pulses = 2
 # Lines appear in the order their [line.NAME] sections are declared.
 # A line's text is a template:
 #
-#   #(value)            the line's value: `default`, or `statusbar set NAME TEXT`
+#   #(value)            the explicit value, or the expanded `default` template
 #   #(name) #(status)   its name and status (normal, running, done, ...)
 #   #(fill:─)           repeat ─ across the free width; text after it is
 #                       right-aligned. Without a fill, text is left-aligned.
@@ -50,10 +50,13 @@ text = "#[fg=rule]#(fill:─)"
 # line's value, on the left. Commands here run in statusbar's working
 # directory, not your shell's, so they can't follow `cd`; update the bar from
 # your shell instead: `statusbar set prompt TEXT`.
+# Until a value is set, show user/host/load. `set prompt --reset` restores it.
 [line.prompt]
-text = " #(value)#(fill: )"
-text .= "#[fg=dim]#(command:user)@#[default]#[fg=accent,bold]#(command:host)#[default]"
-text .= " #[fg=dim]· load#[default] #[track]#(command:load)#[notrack]"
+default = "#[fg=dim]#(command:user)@#[default]#[fg=accent,bold]#(command:host)#[default]"
+default .= " #[fg=dim]· load#[default] #[track]#(command:load)#[notrack]"
+text = "#[default] #(value)"
+# Reset value styles before filling the gap and drawing the date and clock.
+text .= "#[default]#(fill: )"
 text .= "  #(datetime:%a %d %b)  #[bold]#(datetime:%H:%M:%S)#[default] "
 
 # Temporary lines created by `statusbar push`. They keep the right side
