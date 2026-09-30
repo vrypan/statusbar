@@ -30,15 +30,19 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     const created = try session.request(stderr, .{ .push = .{ .name = name, .mode = mode, .status = status } }) orelse return 1;
     if (fifo) {
         if (created != .path) return common.rejected(stderr, created, "the session rejected push");
-        try stdout.print("{s}\n", .{created.path});
-        try stdout.flush();
+        if (!sys.isBackgroundTty(io, 1)) {
+            try stdout.print("{s}\n", .{created.path});
+            try stdout.flush();
+        }
         return 0;
     }
     if (created != .created) return common.rejected(stderr, created, "the session rejected push");
     const id = created.created.id;
     if (mode == .empty) {
-        if (name) |value| try stdout.print("{s}\n", .{value}) else try stdout.print("{d}\n", .{id});
-        try stdout.flush();
+        if (!sys.isBackgroundTty(io, 1)) {
+            if (name) |value| try stdout.print("{s}\n", .{value}) else try stdout.print("{d}\n", .{id});
+            try stdout.flush();
+        }
         return 0;
     }
     const command_columns = created.created.columns;
@@ -56,6 +60,9 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         child = std.process.spawn(io, .{
             .argv = child_argv,
             .environ_map = &child_env,
+            // Background commands cannot use terminal stdin safely (ffmpeg,
+            // for example, changes its terminal settings for keyboard input).
+            .stdin = if (sys.isBackgroundTty(io, 0)) .ignore else .inherit,
             .stdout = .{ .file = output_file },
             .stderr = .{ .file = output_file },
         }) catch |err| {
@@ -90,7 +97,9 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     }
     const finished = try session.request(stderr, .{ .finish = .{ .id = id, .status = final_status } }) orelse return 1;
     if (finished != .ok) return common.rejected(stderr, finished, "the session rejected the final status");
-    if (name) |value| try stdout.print("{s}\n", .{value}) else try stdout.print("{d}\n", .{id});
-    try stdout.flush();
+    if (!sys.isBackgroundTty(io, 1)) {
+        if (name) |value| try stdout.print("{s}\n", .{value}) else try stdout.print("{d}\n", .{id});
+        try stdout.flush();
+    }
     return exit_code;
 }

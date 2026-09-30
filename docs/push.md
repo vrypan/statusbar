@@ -17,6 +17,9 @@ printf 'Build complete\n' | statusbar push build
 
 The line appears below your configured lines. `push` prints its name when
 input ends; the line stays visible until you remove it with `statusbar pop`.
+It skips the terminal print when running in the background, so the shell does
+not suspend the job on terminals with `tostop` enabled. Redirected stdout
+still receives the name.
 To watch a log, keep the pipeline running in the background:
 
 ```sh
@@ -61,6 +64,11 @@ terminal does not change the running command's `COLUMNS`. `push` prints the
 name at the end and exits with the command's status (128 + the signal number
 if it was killed). Specify an output file for commands whose stdout contains
 data you want to save.
+
+A background command receives `/dev/null` for stdin when it would otherwise
+inherit the terminal. This lets programs such as ffmpeg run without trying to
+read or change the shell's terminal. Piped or redirected input is preserved,
+and foreground commands keep their terminal input.
 
 When reading a pipe, `push` cannot change the width reported to the command
 that wrote to it. Output wider than the space left is clipped.

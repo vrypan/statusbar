@@ -120,10 +120,13 @@ const commands = [_]zecli.CommandSpec{
         \\line of input replaces the value; the last one stays visible after
         \\input ends. A command receives COLUMNS set to the space available
         \\for its output; both stdout and stderr are streamed into the line.
+        \\Background commands receive /dev/null instead of terminal stdin;
+        \\piped or redirected input is preserved.
         \\
         \\At the end of input, push prints the line's name (its numeric ID when
         \\unnamed) and sets its status: done for stdin, success or failed from
-        \\the command's result. Command mode exits with the command's status.
+        \\the command's result. It stays quiet when run in the background with
+        \\stdout on the terminal. Command mode exits with the command's status.
         \\With --fifo, push prints the FIFO path at once; writes to it update
         \\the value, and closing it keeps the value and status.
         \\Use `statusbar pop NAME` to remove the line.

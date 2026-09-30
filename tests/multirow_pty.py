@@ -1427,6 +1427,52 @@ def check_background_job_exit(binary):
     print("a background job holding the pty does not keep the session open")
 
 
+def check_background_push_tty_output(binary):
+    zsh = shutil.which("zsh")
+    if not zsh:
+        return
+    config = os.path.abspath("samples/spinner.statusbar")
+    pid, master = spawn([binary, "-c", config, "--", zsh, "-f", "-i"])
+    data = b""
+    try:
+        os.write(master, b"stty -echo tostop\n")
+        time.sleep(0.2)
+        cmd = shlex.quote(os.path.abspath(binary)) + " push background -- sh -c 'sleep 0.1; printf finished' & wait; print -r -- __PUSH_DONE__:$?\n"
+        os.write(master, cmd.encode())
+        data = read_until(master, data, b"__PUSH_DONE__:0", timeout=5)
+        assert b"suspended (tty output)" not in data, data[-1000:]
+        # Programs such as ffmpeg change terminal settings through stdin even
+        # when stdout/stderr are pipes. That also raises SIGTTOU in a background
+        # process group, independently of TOSTOP.
+        probe = (
+            "import os, termios; "
+            "tty = os.isatty(0); "
+            "termios.tcsetattr(0, termios.TCSANOW, termios.tcgetattr(0)) if tty else None; "
+            "assert not tty; assert os.read(0, 1) == b''; print('stdin detached')"
+        )
+        cmd = "stty -tostop; " + shlex.join([
+            os.path.abspath(binary), "push", "terminal-input", "--", sys.executable, "-c", probe,
+        ]) + " & wait $!; print -r -- __INPUT_DONE__:$?\n"
+        os.write(master, cmd.encode())
+        data = read_until(master, data, b"__INPUT_DONE__:0", timeout=5)
+        assert b"suspended" not in data, data[-1000:]
+        cmd = "printf payload | " + shlex.join([
+            os.path.abspath(binary), "push", "piped-input", "--", sys.executable, "-c",
+            "import sys; assert sys.stdin.read() == 'payload'; print('pipe preserved')",
+        ]) + " & wait $!; print -r -- __PIPE_DONE__:$?\n"
+        os.write(master, cmd.encode())
+        data = read_until(master, data, b"__PIPE_DONE__:0", timeout=5)
+        cmd = shlex.join([
+            os.path.abspath(binary), "push", "foreground-input", "--", sys.executable, "-c",
+            "import os; assert os.isatty(0); print('terminal preserved')",
+        ]) + "; print -r -- __FOREGROUND_DONE__:$?\n"
+        os.write(master, cmd.encode())
+        data = read_until(master, data, b"__FOREGROUND_DONE__:0", timeout=5)
+    finally:
+        stop(pid, master)
+    print("background push avoids terminal output and gives its command non-terminal stdin")
+
+
 def check_hidden_push_without_paint(binary):
     config = ('[line.a]\ntext = A\n[line.b]\ntext = B\n'
               '[line.c]\ntext = C\n[push]\ntext = "#(value)"\n')
@@ -2008,6 +2054,7 @@ def main():
     check_osc_config(binary)
     check_theme_growth(binary)
     check_background_job_exit(binary)
+    check_background_push_tty_output(binary)
     check_hidden_push_without_paint(binary)
     check_push_pop(binary)
     check_fifo(binary)

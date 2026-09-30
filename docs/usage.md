@@ -85,7 +85,8 @@ its name (or numeric ID), and returns. Use `set` to update it. In every mode,
 `command | statusbar push [NAME]` appends a line and streams the latest line
 of input into its value. When input ends, it sets the status to `done`, prints
 the line's name (its numeric ID when unnamed) and leaves the final result
-displayed. `statusbar push [NAME] -- command` starts the command with
+displayed. Background pushes skip that print when stdout is the terminal.
+`statusbar push [NAME] -- command` starts the command with
 `COLUMNS` set to the width available for the value, streams its stdout and
 stderr, sets `success` or `failed` from its result, and returns its exit
 status. `statusbar push [NAME] --fifo` creates the line with a FIFO and prints

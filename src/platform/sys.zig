@@ -29,6 +29,7 @@ extern "c" fn ptsname(fd: c_int) ?[*:0]const u8;
 // Zig 0.16's std.posix.tcgetpgrp uses the Linux syscall signature and
 // has no macOS backend, so it cannot replace this libc call there.
 extern "c" fn tcgetpgrp(fd: c_int) posix.pid_t;
+extern "c" fn getpgrp() posix.pid_t;
 
 /// std.posix.T only carries the terminal ioctl numbers on some targets, so the
 /// ones statusbar needs are spelled out here.
@@ -100,6 +101,14 @@ pub fn setControllingTty(fd: Fd) Error!void {
 /// an unexpected error and dumps a stack trace for it in debug builds.
 pub fn isTty(io: std.Io, fd: Fd) bool {
     return (std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } }).isTty(io) catch false;
+}
+
+/// Terminal reads and changes to terminal settings can suspend background
+/// jobs, as can writes when TOSTOP is enabled. Pipes and files are unaffected.
+pub fn isBackgroundTty(io: std.Io, fd: Fd) bool {
+    if (!isTty(io, fd)) return false;
+    const foreground = tcgetpgrp(fd);
+    return foreground >= 0 and foreground != getpgrp();
 }
 
 /// Opens keyboard input after a config pipe has been consumed. Darwin's
