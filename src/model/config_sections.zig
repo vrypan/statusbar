@@ -31,7 +31,8 @@ pub const RawVariants = struct {
 
 pub const RawLine = struct {
     name: []const u8,
-    default: ?[]const u8 = null,
+    default: ?RawTemplate = null,
+    default_len: usize = 0,
     keep: ?Keep = null,
     variants: RawVariants = .{},
 };
@@ -159,19 +160,23 @@ fn parseSection(config: *Config, arena: std.mem.Allocator, raw_lines: *std.Array
 fn templateKey(raw: *RawVariants, arena: std.mem.Allocator, assignment: statements.Assignment, diag: *Diagnostic) (Error || std.mem.Allocator.Error)!bool {
     for (template_keys, &raw.keys) |name, *entry| {
         if (!std.mem.eql(u8, assignment.key, name)) continue;
-        switch (assignment.operator) {
-            .assign => {
-                if (entry.* != null) return fail(diag, "this template is already assigned; use KEY .= to append");
-                entry.* = .{};
-            },
-            .append => if (entry.* == null) {
-                return fail(diag, "KEY .= needs an earlier KEY = in this section; it cannot extend an inherited template");
-            },
-        }
-        try entry.*.?.fragments.append(arena, .{ .value = assignment.value, .line = assignment.line });
+        try appendTemplate(entry, arena, assignment, diag);
         return true;
     }
     return false;
+}
+
+fn appendTemplate(entry: *?RawTemplate, arena: std.mem.Allocator, assignment: statements.Assignment, diag: *Diagnostic) (Error || std.mem.Allocator.Error)!void {
+    switch (assignment.operator) {
+        .assign => {
+            if (entry.* != null) return fail(diag, "this template is already assigned; use KEY .= to append");
+            entry.* = .{};
+        },
+        .append => if (entry.* == null) {
+            return fail(diag, "KEY .= needs an earlier KEY = in this section; it cannot extend an inherited template");
+        },
+    }
+    try entry.*.?.fragments.append(arena, .{ .value = assignment.value, .line = assignment.line });
 }
 
 fn commonKey(key: []const u8, diag: *Diagnostic) Error!void {
@@ -183,14 +188,16 @@ fn commonKey(key: []const u8, diag: *Diagnostic) Error!void {
 
 fn lineKey(arena: std.mem.Allocator, raw: *RawLine, assignment: statements.Assignment, diag: *Diagnostic) (Error || std.mem.Allocator.Error)!void {
     if (try templateKey(&raw.variants, arena, assignment, diag)) return;
-    if (assignment.operator == .append) return fail(diag, "only text, running, done, success and failed accept .=");
+    if (std.mem.eql(u8, assignment.key, "default")) {
+        if (raw.default_len + assignment.value.len > line_types.max_value) return fail(diag, "default must be at most 1024 bytes");
+        try appendTemplate(&raw.default, arena, assignment, diag);
+        raw.default_len += assignment.value.len;
+        return;
+    }
+    if (assignment.operator == .append) return fail(diag, "only text, running, done, success, failed and default accept .= in a line section");
     const eql = std.mem.eql;
     const key = assignment.key;
-    if (eql(u8, key, "default")) {
-        if (raw.default != null) return fail(diag, "default is already assigned in this section");
-        if (assignment.value.len > line_types.max_value) return fail(diag, "default must be at most 1024 bytes");
-        raw.default = assignment.value;
-    } else if (eql(u8, key, "keep")) {
+    if (eql(u8, key, "keep")) {
         if (raw.keep != null) return fail(diag, "keep is already assigned in this section");
         raw.keep = try parseKeep(assignment.value, diag);
     } else if (eql(u8, key, "spinner") or eql(u8, key, "spinner_interval")) {

@@ -2029,12 +2029,67 @@ mark('RECOVERED_OK')
     print("startup recovery: invalid, missing and legacy configs start the shell with a warning; reload clears it")
 
 
+def check_default_templates(binary):
+    config = '''[line.prompt]
+default = "#[fg=red]#(command:user)@"
+default .= "#(command:host)#[default]"
+text = "PROMPT[#(value)]"
+[command.user]
+run = printf alice
+[command.host]
+run = printf machine
+'''
+    child = CHILD_PRELUDE + r'''
+mark('DEFAULT_START')
+run('set', 'prompt', '#(command:user) #[bold]')
+mark('DEFAULT_LITERAL')
+run('set', 'prompt', '--reset')
+mark('DEFAULT_RESET')
+fifo = run('bind', 'prompt')
+with open(fifo, 'w') as f: f.write('#[bold]FIFO\n')
+mark('DEFAULT_FIFO')
+run('set', 'prompt', '')
+mark('DEFAULT_EMPTY')
+layout = '[line.prompt]\ndefault = "NEW #(name) #(status)"\ntext = "PROMPT[#(value)]"\n'
+run('config', input=layout.encode())
+mark('DEFAULT_RELOADED_EMPTY')
+run('set', 'prompt', '--reset', '--status', 'success')
+mark('DEFAULT_RELOADED_RESET')
+run('config', input=layout.replace('NEW ', 'LATEST ').encode())
+mark('DEFAULT_RELOADED_LIVE')
+run('set', 'prompt', 'kept')
+run('config', input=layout.encode())
+mark('DEFAULT_RELOADED_OVERRIDE')
+run('set', 'prompt', '--reset')
+mark('DEFAULT_OK')
+'''
+    code, data = run_session(binary, config, child)
+    assert code == 0 and b'DEFAULT_OK' in data, data[-3000:]
+    text = plain(data)
+    assert b'PROMPT[alice@machine]' in text[:text.index(b'DEFAULT_START')], text
+    for start, end, expected in (
+        (b'DEFAULT_START', b'DEFAULT_LITERAL', b'PROMPT[#(command:user) #[bold]]'),
+        (b'DEFAULT_LITERAL', b'DEFAULT_RESET', b'PROMPT[alice@machine]'),
+        (b'DEFAULT_RESET', b'DEFAULT_FIFO', b'PROMPT[#[bold]FIFO]'),
+        (b'DEFAULT_FIFO', b'DEFAULT_EMPTY', b'PROMPT[]'),
+        (b'DEFAULT_EMPTY', b'DEFAULT_RELOADED_EMPTY', b'PROMPT[]'),
+        (b'DEFAULT_RELOADED_EMPTY', b'DEFAULT_RELOADED_RESET', b'PROMPT[NEW prompt success]'),
+        (b'DEFAULT_RELOADED_RESET', b'DEFAULT_RELOADED_LIVE', b'PROMPT[LATEST prompt success]'),
+        (b'DEFAULT_RELOADED_LIVE', b'DEFAULT_RELOADED_OVERRIDE', b'PROMPT[kept]'),
+        (b'DEFAULT_RELOADED_OVERRIDE', b'DEFAULT_OK', b'PROMPT[NEW prompt success]'),
+    ):
+        segment = between(text, start, end)
+        assert expected in segment, (expected, segment)
+    print('default templates expand, reset, reload, and preserve literal set/FIFO values')
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: multirow_pty.py STATUSBAR")
     binary = os.path.abspath(sys.argv[1])
     check_config_file(binary)
     check_set(binary)
+    check_default_templates(binary)
     check_init_invocation(binary)
     check_stdin_config(binary)
     check_startup_recovery(binary)

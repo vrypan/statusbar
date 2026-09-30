@@ -132,7 +132,8 @@ The config is a small INI-like language:
 - `[SECTION]` starts a section. `KEY = VALUE` assigns a key.
 - `KEY .= FRAGMENT` appends to a template key assigned earlier in the same
   section. Fragments join exactly, without adding spaces or newlines; only
-  `text`, `running`, `done`, `success` and `failed` accept `.=`. Assigning
+  `text`, `running`, `done`, `success`, `failed` and configured-line `default`
+  accept `.=`. Assigning
   the same key twice with `=` is an error.
 - Wrap a value in double quotes to keep leading or trailing spaces. A quoted
   value may continue over several lines until a line ending in `"`.
@@ -176,16 +177,38 @@ statusbar assigns. Each name may be declared once.
 | `done`    | template while its status is `done`                                |
 | `success` | template while its status is `success`; falls back to `done`       |
 | `failed`  | template while its status is `failed`; falls back to `done`        |
-| `default` | initial value, restored by `statusbar set NAME --reset`; empty if omitted |
+| `default` | fallback template expanded at `#(value)` until a value is set; restored by `--reset` |
 | `keep`    | `left` (default) or `right`: which end survives when space runs out |
 
 ### Values and statuses
 
-Every line has a value and a status. The value starts as `default` and changes
-with [`statusbar set`](set.md) or a [FIFO](bind.md). `#(value)` shows it. A
-value is always displayed as written: its `#(...)` and `#[...]` text is never
-interpreted, while ANSI colors and OSC 8 hyperlinks in it still work. The
-default is a value too, so it is literal text.
+Every line has a value and a status. Values supplied with
+[`statusbar set`](set.md) or a [FIFO](bind.md) display literally at `#(value)`:
+their `#(...)` and `#[...]` text is never interpreted, while ANSI colors and
+OSC 8 hyperlinks still work.
+
+Until a value is set, `#(value)` expands the line's `default` template, or
+shows nothing if `default` is omitted. The fallback can include styles,
+commands, dates, environment variables, and terminal properties. For example,
+using the configured `dim` and `accent` colors and `user` and `host` commands:
+
+```ini
+[line.prompt]
+default = "#[fg=dim]#(command:user)@#[default]#[fg=accent,bold]#(command:host)#[default]"
+text = "#(value)#(fill: )"
+```
+
+`statusbar set prompt "Hello"` replaces the fallback with `Hello`.
+An explicit empty value (`statusbar set prompt ""`) also replaces it;
+`statusbar set prompt --reset` restores the live fallback. A status template
+that contains `#(value)` uses the same fallback.
+
+`default` cannot refer to `#(value)` itself. Escape a literal `#` with `##`,
+as in `##(value)` or `##[bold]`. Use `default .= "..."` to append to an earlier
+`default =` in the same section. The combined source is limited to 1024 bytes.
+Styles carry through the insertion point, so use `#[default]` to reset them
+where needed. The expanded line must still have at most one fill and 16
+non-nested tracking regions; these limits include every insertion of `default`.
 
 The status is `normal`, `running`, `done`, `success` or `failed`. Configured
 lines start `normal`; `statusbar set NAME --status STATE` changes it, and any
@@ -329,9 +352,9 @@ style attributes or given names. A region may span expressions and the fill.
 `#[default]` resets styling without ending tracking; write `##[track]` to
 display the opening marker literally.
 
-Markers come only from templates. Values, defaults and command output cannot
-define regions. A whole grapheme belongs to the region containing its first
-code point, even if a marker falls inside a combining sequence.
+Markers come only from templates, including `default`. Explicit values and
+command output cannot define regions. A whole grapheme belongs to the region
+containing its first code point, even if a marker falls inside a combining sequence.
 
 All commands used by a template must produce a first result before its regions
 can highlight. Partial results appear silently; an empty first result also

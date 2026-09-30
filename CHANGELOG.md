@@ -21,7 +21,7 @@ order they were added.
   inline shell commands; `%` is literal outside `#(datetime:...)`; remove
   `#(tag)`, `#(id)`, `#(stream)`, `#(exit_code)` and `#(signal)` in favor of
   `#(name)`, `#(value)` and `#(status)`
-- Display values, defaults and command output literally, keeping ANSI colors
+- Display explicit values and command output literally, keeping ANSI colors
   and OSC 8 links
 - Replace `set SLOT` with `set NAME [TEXT...] [--status STATE] [--reset]`,
   sent over the authenticated control socket; drop the OSC slot variables
@@ -38,6 +38,8 @@ order they were added.
 - Start the shell with the built-in config and a warning line when the
   startup config is missing, unreadable or invalid
 - Add `#(env:NAME)` to show an environment variable in templates
+- Expand configured `default` templates at `#(value)` until a value is set;
+  `--reset` restores the live fallback
 
 ## v0.4.3
 

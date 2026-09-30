@@ -45,6 +45,8 @@ value, are kept as padding. Values are limited to 1024 bytes.
 A value displays as written. `#(value)` in it shows `#(value)`, and
 `#[fg=red]` shows `#[fg=red]`: values cannot run expressions or define styles
 and tracking. ANSI SGR colors and OSC 8 hyperlinks in a value are kept.
+The configured `default` is a template: `--reset` restores its expansion,
+including live commands and dates. Setting an empty value suppresses it.
 `statusbar set build -` displays a literal dash; use `--` before text that
 starts with a dash. To show the latest line of a command's output as it
 arrives, use [`statusbar push`](push.md) or a [FIFO](bind.md).

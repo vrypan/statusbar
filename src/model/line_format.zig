@@ -1,6 +1,6 @@
 //! Evaluating one line's template into markup for the renderer.
 //!
-//! Template text and style directives stay markup; values, defaults, command
+//! Template text and style directives stay markup; values, command
 //! output, dates, environment values and names are escaped so their `#(...)`
 //! and `#[...]` text displays literally, while ANSI colors and OSC 8 links
 //! pass through. A fill records where it divides the line; tracking markers
@@ -19,7 +19,7 @@ const environment = @import("platform").environment;
 /// Everything a template may show besides its own text.
 pub const Inputs = struct {
     line: *const Line,
-    /// The line's override, or its default.
+    /// The line's literal override; defaults are expanded at compilation.
     value: []const u8,
     keep: content.Keep,
     time: *const datetime.Time,

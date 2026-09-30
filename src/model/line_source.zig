@@ -85,7 +85,7 @@ pub const Source = struct {
 
     fn variants(self: *const Source, entry: *const Line) *const config.Variants {
         return switch (entry.kind) {
-            .configured => &self.cfg.lines[entry.config_index].variants,
+            .configured => if (entry.overridden) &self.cfg.lines[entry.config_index].variants else &self.cfg.lines[entry.config_index].default_variants,
             .pushed => &self.cfg.push.variants,
         };
     }
@@ -99,15 +99,6 @@ pub const Source = struct {
         return switch (entry.kind) {
             .configured => self.cfg.lines[entry.config_index].keep,
             .pushed => self.cfg.push.keep,
-        };
-    }
-
-    /// The value a line shows: its override, else its default.
-    fn value(self: *const Source, entry: *const Line) []const u8 {
-        if (entry.override()) |override| return override;
-        return switch (entry.kind) {
-            .configured => self.cfg.lines[entry.config_index].default,
-            .pushed => "",
         };
     }
 
@@ -256,7 +247,7 @@ pub const Source = struct {
             const entry = self.line(index);
             const formatted = line_format.format(&self.buffer, self.template(index), .{
                 .line = entry,
-                .value = self.value(entry),
+                .value = entry.override() orelse "",
                 .keep = self.keep(entry),
                 .time = &time,
                 .terminal = self.terminal,
@@ -333,7 +324,7 @@ const Fixture = struct {
 
 test "templates escape data and keep directives" {
     var f: Fixture = undefined;
-    try f.init(std.testing.allocator, "[line.a]\ndefault = \"#(value) #[bold]\"\ntext = \"#[fg=red]##[x] # #(value)\"\n");
+    try f.init(std.testing.allocator, "[line.a]\ndefault = \"##(value) ##[bold]\"\ntext = \"#[fg=red]##[x] # #(value)\"\n");
     defer f.deinit();
     _ = f.source.rebuild();
     try std.testing.expectEqualStrings("#[fg=red]##[x] ## ##(value) ##[bold]", f.source.content.line(0));
@@ -428,6 +419,70 @@ test "reset restores the default and empty overrides stay distinct" {
     f.set(0, .{ .value = .reset });
     _ = f.source.rebuild();
     try std.testing.expectEqualStrings("Ready", f.source.content.line(0));
+}
+
+test "expanded defaults update dependencies, preserve literal overrides and reset" {
+    var f: Fixture = undefined;
+    try f.init(std.testing.allocator,
+        \\[line.prompt]
+        \\default = "#[fg=red]#(command:user)@#(command:host)#[default] #(terminal:cols)"
+        \\text = "[#(value)]#(fill: )tail"
+        \\done = "done #(value)"
+        \\failed = "hidden"
+        \\[command.user]
+        \\run = true
+        \\[command.host]
+        \\run = true
+        \\
+    );
+    defer f.deinit();
+    _ = f.source.commands.keep(0, "alice");
+    _ = f.source.commands.keep(1, "host");
+    f.source.setTerminalSize(.{ .cols = 80 });
+    try std.testing.expectEqualStrings("[#[fg=red]alice@host#[default] 80]tail", f.source.content.line(0));
+    try std.testing.expectEqual(@as(u16, 3), f.source.states.items[0].commands);
+    _ = f.source.commands.keep(1, "other");
+    f.source.dirtyCommands(2);
+    _ = f.source.rebuild();
+    try std.testing.expectEqualStrings("[#[fg=red]alice@other#[default] 80]tail", f.source.content.line(0));
+    f.set(0, .{ .value = .{ .replace = "#(command:host) #[bold]" } });
+    _ = f.source.rebuild();
+    try std.testing.expectEqualStrings("[##(command:host) ##[bold]]tail", f.source.content.line(0));
+    try std.testing.expectEqual(@as(u16, 0), f.source.states.items[0].commands);
+    try std.testing.expect(!f.source.states.items[0].terminal);
+    f.set(0, .{ .value = .{ .replace = "" } });
+    _ = f.source.rebuild();
+    try std.testing.expectEqualStrings("[]tail", f.source.content.line(0));
+    f.set(0, .{ .value = .reset, .status = .done });
+    f.source.setTerminalSize(.{ .cols = 90 });
+    try std.testing.expectEqualStrings("done #[fg=red]alice@other#[default] 90", f.source.content.line(0));
+    f.set(0, .{ .status = .failed });
+    _ = f.source.rebuild();
+    try std.testing.expectEqualStrings("hidden", f.source.content.line(0));
+    try std.testing.expectEqual(@as(u16, 0), f.source.states.items[0].commands);
+}
+
+test "default clock and tracking activate only while shown" {
+    var f: Fixture = undefined;
+    try f.init(std.testing.allocator,
+        \\[line.a]
+        \\default = "#[track]#(datetime:%S)#[notrack]"
+        \\text = "#[track]label#[notrack]#(value)#(value)"
+        \\failed = hidden
+        \\
+    );
+    defer f.deinit();
+    _ = f.source.rebuild();
+    try std.testing.expect(f.source.clock_next_ms != null);
+    const meta = f.source.content.lines[0].meta;
+    try std.testing.expectEqual(@as(usize, 3), meta.len);
+    for (0..3) |i| try std.testing.expectEqual(i, meta.spans[i].id);
+    f.set(0, .{ .value = .{ .replace = "" } });
+    try std.testing.expect(f.source.clock_next_ms == null);
+    f.set(0, .{ .value = .reset });
+    try std.testing.expect(f.source.clock_next_ms != null);
+    f.set(0, .{ .status = .failed });
+    try std.testing.expect(f.source.clock_next_ms == null);
 }
 
 test "the spinner animates only visible running lines" {

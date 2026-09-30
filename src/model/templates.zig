@@ -57,7 +57,48 @@ pub const Template = struct {
     spinner: bool = false,
 };
 
-pub const Kind = enum { configured, push };
+pub const Kind = enum { configured, push, default_value };
+
+/// Substitute the fallback at every value position, then validate the combined
+/// layout and assign tracking IDs in display order. The override variant stays
+/// separate, so unused defaults add no clock or command dependencies.
+pub fn expandDefault(allocator: std.mem.Allocator, template: Template, fallback: Template, diag: *Diagnostic) (statements.Error || std.mem.Allocator.Error)!Template {
+    var parts: std.ArrayList(Part) = .empty;
+    errdefer parts.deinit(allocator);
+    var result = template;
+    result.fill = null;
+    result.regions = 0;
+    for (template.parts) |part| {
+        if (part == .value) {
+            try parts.appendSlice(allocator, fallback.parts);
+            result.commands |= fallback.commands;
+            result.clock = result.clock or fallback.clock;
+            result.terminal = result.terminal or fallback.terminal;
+            result.spinner = result.spinner or fallback.spinner;
+        } else try parts.append(allocator, part);
+    }
+    var open: ?u4 = null;
+    for (parts.items, 0..) |*part, i| switch (part.*) {
+        .fill => {
+            if (result.fill != null) return fail(diag, "default expansion would produce more than one #(fill:...)");
+            result.fill = i;
+        },
+        .track_start => {
+            if (open != null) return fail(diag, "default expansion would nest tracking regions");
+            if (result.regions == max_regions) return fail(diag, "default expansion exceeds 16 tracking regions");
+            open = @intCast(result.regions);
+            part.* = .{ .track_start = open.? };
+            result.regions += 1;
+        },
+        .track_end => {
+            part.* = .{ .track_end = open.? };
+            open = null;
+        },
+        else => {},
+    };
+    result.parts = try parts.toOwnedSlice(allocator);
+    return result;
+}
 
 /// Resolves `#(command:NAME)` to a command index.
 pub const Commands = struct {
@@ -154,7 +195,10 @@ pub fn compile(
 
 fn expression(body: []const u8, commands: Commands, kind: Kind, diag: *Diagnostic) statements.Error!Part {
     const eql = std.mem.eql;
-    if (eql(u8, body, "value")) return .value;
+    if (eql(u8, body, "value")) {
+        if (kind == .default_value) return fail(diag, "default cannot refer to #(value); use ##(value) for literal text");
+        return .value;
+    }
     if (eql(u8, body, "name")) return .name;
     if (eql(u8, body, "status")) return .status;
     if (eql(u8, body, "spinner")) {

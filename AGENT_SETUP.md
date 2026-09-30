@@ -114,6 +114,11 @@ Keep these rules in mind:
   `success`, `failed`) replace `text` while a line has that status. Quote
   values to retain edge spaces; `text .= "..."` appends. Put comments on their
   own lines, not after values.
+- **Defaults:** `default` is a template expanded at `#(value)` until a value
+  is explicitly set. It supports styles and named commands, but cannot refer
+  to `#(value)` itself. `set NAME ""` suppresses it; `set NAME --reset`
+  restores it. `default .= "..."` appends to an earlier `default =`.
+  Values from `set`, FIFOs, and command output remain literal.
 - **Commands:** They run with `/bin/sh -c` in statusbar's starting directory,
   with the inherited environment, not the interactive shell's aliases or
   functions. Only their first output line is displayed; stderr is discarded.

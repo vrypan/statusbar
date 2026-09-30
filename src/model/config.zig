@@ -80,9 +80,10 @@ pub const Variants = struct {
 
 pub const LineSpec = struct {
     name: []const u8,
-    /// The initial and reset value. It is data, never a template.
+    /// Source of the fallback template used until a value is explicitly set.
     default: []const u8 = "",
     variants: Variants = .{},
+    default_variants: Variants = .{},
     keep: Keep = .left,
 };
 
@@ -182,10 +183,21 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
     for (reader.lines.items, specs) |*raw, *spec| {
         spec.* = .{
             .name = raw.name,
-            .default = raw.default orelse "",
             .keep = raw.keep orelse .left,
             .variants = try compileVariants(arena, &raw.variants, default_line_text, commands, .configured, diag),
         };
+        const fallback = if (raw.default) |source|
+            try compileFragments(arena, source.fragments.items, commands, .default_value, &spec.default, diag)
+        else
+            Template{};
+        diag.line = if (raw.default) |source| source.fragments.items[0].line else 0;
+        inline for (std.meta.fields(Variants)) |field| {
+            if (comptime field.type == Template) {
+                @field(spec.default_variants, field.name) = try templates.expandDefault(arena, @field(spec.variants, field.name), fallback, diag);
+            } else if (@field(spec.variants, field.name)) |variant| {
+                @field(spec.default_variants, field.name) = try templates.expandDefault(arena, variant, fallback, diag);
+            }
+        }
     }
     config.lines = specs;
     config.push.keep = reader.push.keep orelse .right;
@@ -198,7 +210,7 @@ fn compileVariants(arena: std.mem.Allocator, raw: *const sections.RawVariants, f
     var compiled: [sections.template_keys.len]?Template = @splat(null);
     for (raw.keys, &compiled) |source, *result| {
         const value = source orelse continue;
-        result.* = try compileFragments(arena, value.fragments.items, commands, kind, diag);
+        result.* = try compileFragments(arena, value.fragments.items, commands, kind, null, diag);
     }
     if (compiled[0] == null) compiled[0] = try templates.compile(arena, fallback, .{ .items = &.{} }, commands, kind, diag);
     return .{ .text = compiled[0].?, .running = compiled[1], .done = compiled[2], .success = compiled[3], .failed = compiled[4] };
@@ -206,7 +218,7 @@ fn compileVariants(arena: std.mem.Allocator, raw: *const sections.RawVariants, f
 
 /// Joins fragments exactly and compiles them once. A single fragment keeps
 /// borrowing the source text.
-fn compileFragments(arena: std.mem.Allocator, fragments: []const sections.Fragment, commands: templates.Commands, kind: templates.Kind, diag: *Diagnostic) (Error || std.mem.Allocator.Error)!Template {
+fn compileFragments(arena: std.mem.Allocator, fragments: []const sections.Fragment, commands: templates.Commands, kind: templates.Kind, source: ?*[]const u8, diag: *Diagnostic) (Error || std.mem.Allocator.Error)!Template {
     const origins = try arena.alloc(statements.Origins.Origin, fragments.len);
     var total: usize = 0;
     for (fragments, origins) |fragment, *origin| {
@@ -222,6 +234,7 @@ fn compileFragments(arena: std.mem.Allocator, fragments: []const sections.Fragme
         }
         break :joined buffer;
     };
+    if (source) |out| out.* = joined;
     return templates.compile(arena, joined, .{ .items = origins }, commands, kind, diag);
 }
 
@@ -407,20 +420,54 @@ test "spinner settings live in push and highlight pulses are bounded" {
     }
 }
 
-test "defaults are bounded data" {
+test "defaults compile as bounded templates" {
     var diag: Diagnostic = .{};
-    var cfg = try parse(std.testing.allocator, "[line.a]\ndefault = \"#(value) #[bold]\"\n", &diag);
+    var cfg = try parse(std.testing.allocator, "[line.a]\ndefault = \"##(value) #[bold]\"\n", &diag);
     defer cfg.deinit();
-    try std.testing.expectEqualStrings("#(value) #[bold]", cfg.lines[0].default);
+    try std.testing.expectEqualStrings("##(value) #[bold]", cfg.lines[0].default);
     const long = "[line.a]\ndefault = " ++ "x" ** 1025 ++ "\n";
     try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, long, &diag));
+}
+
+test "default fragments append exactly and retain diagnostic origins" {
+    var diag: Diagnostic = .{};
+    var cfg = try parse(std.testing.allocator, "[line.a]\ndefault = \"#[bold]hello \"\ndefault .= #(na\ndefault .= me)#[default]\n", &diag);
+    defer cfg.deinit();
+    try std.testing.expectEqualStrings("#[bold]hello #(name)#[default]", cfg.lines[0].default);
+    try std.testing.expect(cfg.lines[0].default_variants.text.parts[2] == .name);
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.a]\ndefault = ok\ndefault .= #(missing)\n", &diag));
+    try std.testing.expectEqual(@as(usize, 3), diag.line);
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.a]\ndefault = ok\ndefault .= #(\ndefault .= value)\n", &diag));
+    try std.testing.expectEqual(@as(usize, 3), diag.line);
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.a]\ndefault = " ++ "x" ** 1024 ++ "\ndefault .= x\n", &diag));
+    try std.testing.expectEqual(@as(usize, 3), diag.line);
+}
+
+test "default expressions and combined layouts are validated" {
+    var diag: Diagnostic = .{};
+    for ([_][]const u8{ "#(value)", "#(command:missing)", "#(unknown)", "#(spinner)", "#[track]x" }) |value| {
+        var buffer: [256]u8 = undefined;
+        const text = try std.fmt.bufPrint(&buffer, "[line.a]\ndefault = {s}\n", .{value});
+        try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, text, &diag));
+        try std.testing.expectEqual(@as(usize, 2), diag.line);
+    }
+    for ([_][]const u8{
+        "default = #(fill:-)\ntext = #(value)#(fill: )",
+        "default = #(fill:-)\ntext = #(value)#(value)",
+        "default = #[track]x#[notrack]\ntext = #[track]#(value)#[notrack]",
+        "default = #[track]x#[notrack]\ntext = " ++ "#(value)" ** 17,
+    }) |body| {
+        const text = try std.fmt.allocPrint(std.testing.allocator, "[line.a]\n{s}\n", .{body});
+        defer std.testing.allocator.free(text);
+        try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, text, &diag));
+    }
 }
 
 test "parsing cleans up every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
         fn run(allocator: std.mem.Allocator) !void {
             var diag: Diagnostic = .{};
-            var config = try parse(allocator, example, &diag);
+            var config = try parse(allocator, example ++ "\n[line.fallback]\ndefault = #[bold]\ndefault .= #(name)#[default]\n", &diag);
             config.deinit();
         }
     }.run, .{});
