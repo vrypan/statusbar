@@ -4,6 +4,11 @@ Changes are grouped by version, newest first. Each section summarizes changes
 since the previous version. Within each release, changes are listed in the
 order they were added.
 
+## Unreleased
+
+- Add `list [--pushed] [--short] [--json]` to inspect session lines, including hidden
+  lines, with stable IDs, statuses, raw override values and bound FIFO paths
+
 ## v0.5.1
 
 - Update VHS demos for named lines and keep example values visible before

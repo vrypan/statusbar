@@ -27,6 +27,18 @@ pub fn controlRequest(self: *Proxy, request: protocol.Request, owner: []const u8
         .finish => |finish| finishStream(self, finish.id, finish.status, owner, now_ms),
         .pop => |target| popLine(self, target, now_ms),
         .pop_all => popAll(self, now_ms),
+        .list => snapshot: {
+            const path = @import("session").line_snapshot.publish(
+                self.io,
+                self.session_state.path(),
+                &self.session_token,
+                self.lines,
+                self.fifos.items.items,
+                self.layout.bar,
+                &self.control_reply,
+            ) catch break :snapshot reject("cannot create line snapshot");
+            break :snapshot .{ .path = path };
+        },
         .bind => |target| bind: {
             const index = self.lines.find(target) orelse break :bind reject("no such line");
             break :bind .{ .path = self.bindFifo(index) catch |err| break :bind reject(bindError(err)) };

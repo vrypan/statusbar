@@ -51,6 +51,10 @@ pub const State = struct {
     }
 
     pub fn deinit(self: *const State) void {
+        var buffer: [160]u8 = undefined;
+        if (@import("line_snapshot.zig").filePath(&buffer, self.path())) |snapshot| {
+            std.Io.Dir.deleteFileAbsolute(self.io, snapshot) catch {};
+        } else |_| {}
         std.Io.Dir.deleteFileAbsolute(self.io, self.path()) catch {};
     }
 };

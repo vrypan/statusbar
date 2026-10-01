@@ -8,6 +8,7 @@
 //!     1|TOKEN|A                        pop all pushed lines
 //!     1|TOKEN|B|TARGET                 bind a FIFO
 //!     1|TOKEN|X|TARGET                 remove a FIFO binding
+//!     1|TOKEN|L                        publish a line snapshot, reply PATH
 //!
 //! Targets and names use only letters, digits, `_` and `-`, so they travel
 //! as plain text. Every request but an update is acknowledged.
@@ -29,6 +30,7 @@ pub const Request = union(enum) {
     pop_all,
     bind: Target,
     unbind: Target,
+    list,
 };
 
 pub const Reply = union(enum) {
@@ -54,7 +56,7 @@ pub const Envelope = struct {
         if (!std.mem.eql(u8, fields.next() orelse return error.InvalidPacket, "1")) return error.InvalidPacket;
         const token = fields.next() orelse return error.InvalidPacket;
         const code = fields.next() orelse return error.InvalidPacket;
-        if (code.len != 1 or std.mem.indexOfScalar(u8, "SCUFPABX", code[0]) == null) return error.InvalidPacket;
+        if (code.len != 1 or std.mem.indexOfScalar(u8, "SCUFPABXL", code[0]) == null) return error.InvalidPacket;
         return .{ .token = token, .code = code[0], .fields = fields };
     }
 
@@ -84,6 +86,7 @@ pub const Envelope = struct {
             'A' => .pop_all,
             'B' => .{ .bind = try parseTarget(try self.field()) },
             'X' => .{ .unbind = try parseTarget(try self.field()) },
+            'L' => .list,
             else => unreachable,
         };
         if (self.fields.next() != null) return error.InvalidPacket;
@@ -175,6 +178,7 @@ pub fn encode(buffer: []u8, token: []const u8, request: Request) ![]const u8 {
             }
         },
         .pop_all => try writer.writeAll("A"),
+        .list => try writer.writeAll("L"),
         .bind => |target| {
             try writer.writeAll("B|");
             try writeTarget(&writer, target);
@@ -232,6 +236,7 @@ test "requests round-trip omitted, empty and reset values with optional status" 
         .{ .request = .{ .pop = .{ .name = "job" } }, .wire = "1|t|P|job" },
         .{ .request = .{ .pop = null }, .wire = "1|t|P" },
         .{ .request = .pop_all, .wire = "1|t|A" },
+        .{ .request = .list, .wire = "1|t|L" },
         .{ .request = .{ .bind = .{ .id = 5 } }, .wire = "1|t|B|5" },
         .{ .request = .{ .unbind = .{ .name = "build" } }, .wire = "1|t|X|build" },
     };
@@ -258,7 +263,7 @@ test "hostile and truncated packets are rejected" {
         "1|t|U|0|",            "1|t|U|job|eA==",              "1|t|U|1",
         "1|t|F|1",             "1|t|F|1|fail",                "1|t|P|",
         "1|t|P|a/b",           "1|t|A|1",                     "1|t|B",
-        "1|t|X|..",            "1|t|U|1|" ++ "eHh4" ** 342,
+        "1|t|X|..",            "1|t|U|1|" ++ "eHh4" ** 342,   "1|t|L|extra",
     }) |wire| {
         var envelope = try Envelope.parse(wire);
         try std.testing.expectError(error.InvalidPacket, envelope.decode(&decoded));

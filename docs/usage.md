@@ -9,6 +9,7 @@ statusbar set build --status success        # or its status
 statusbar push build -- make                # give a command a temporary line
 statusbar pop                               # remove the newest temporary line
 statusbar pop --all                         # remove all temporary lines
+statusbar list --pushed                     # inspect temporary lines
 statusbar config < another.statusbar        # change the running layout
 ```
 
@@ -23,6 +24,7 @@ statusbar push [NAME] [--status STATE]
 statusbar push [NAME] [--status STATE] -- COMMAND [ARG...]
 statusbar push [NAME] [--status STATE] --fifo
 statusbar pop [NAME | --all]
+statusbar list [--pushed] [--short] [--json]
 statusbar bind [-u | --unbind] NAME
 statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]
 statusbar config [--print [default|startup|current]] [--default] [--path]
@@ -31,6 +33,10 @@ statusbar completion <bash|zsh|fish>
 
 NAME is a line's name, or its numeric ID. A decimal NAME always means an ID,
 never a position in the bar.
+
+Use [`statusbar list`](list.md) to inspect all lines, including hidden ones.
+`--pushed` filters to temporary lines; `--json` returns a versioned snapshot
+for scripts and integrations.
 
 ## `run`
 

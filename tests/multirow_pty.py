@@ -1493,6 +1493,118 @@ mark('HIDDEN_REMOVED')
     print('hidden tail push/pop emit no bar paint or erase')
 
 
+def check_list(binary):
+    child = CHILD_PRELUDE + r"""
+import concurrent.futures, json, socket
+
+def listing(*args):
+    value = json.loads(run('list', '--json', *args))
+    assert set(value) == {'version', 'lines'} and value['version'] == 1, value
+    return value['lines']
+
+initial = listing()
+assert [x['name'] for x in initial] == ['base', 'empty', 'hidden'], initial
+assert [x['visible'] for x in initial] == [True, True, False], initial
+assert all(x['value'] is None and x['fifo'] is None for x in initial), initial
+assert listing('--pushed') == []
+assert listing('--pushed', '--short') == []
+assert run('list', '--pushed', '--short').split() == ['ID', 'NAME', 'STATUS', 'VALUE']
+assert run('list', '--pushed').split() == ['ID', 'NAME', 'KIND', 'STATUS', 'VISIBLE', 'FIFO', 'VALUE']
+run('set', 'empty', '')
+value = '\x1b[31m"\\Καλημέρα\t界'
+run('set', 'hidden', value, '--status', 'failed')
+updated = listing()
+assert updated[1]['value'] == ''
+# set normalizes tabs to spaces; list returns the stored override.
+assert updated[2]['value'] == value.replace('\t', ' '), updated[2]
+assert updated[2]['status'] == 'failed' and not updated[2]['visible']
+short_fields = ('id', 'name', 'status', 'value')
+assert listing('--short') == [{key: x[key] for key in short_fields} for x in updated]
+short_table = run('list', '--short')
+assert short_table.splitlines()[0].split() == ['ID', 'NAME', 'STATUS', 'VALUE']
+assert len(short_table.splitlines()) == 4 and '<default>' in short_table and '\x1b' not in short_table
+assert '\\x1b[31m' in short_table and '""' in short_table
+table = run('list')
+assert '\x1b' not in table and '\\x1b[31m' in table and '<default>' in table
+assert '""' in table and len(table.splitlines()) == 4, table
+run('set', 'empty', '--reset')
+assert listing()[1]['value'] is None
+unnamed = run('push', input=b'unnamed')
+run('push', 'job', input=b'finished')
+pushed = listing('--pushed')
+assert [x['id'] for x in pushed] == [int(unnamed), int(unnamed) + 1], pushed
+assert [x['name'] for x in pushed] == [None, 'job'], pushed
+assert all(x['kind'] == 'pushed' and x['status'] == 'done' and not x['visible'] for x in pushed)
+# Bindings are discovered by stable line ID, including hidden and unnamed lines.
+base_fifo = run('bind', 'base')
+hidden_fifo = run('bind', 'hidden')
+unnamed_fifo = run('bind', unnamed)
+bound = listing()
+assert [x['fifo'] for x in bound] == [base_fifo, None, hidden_fifo, unnamed_fifo, None], bound
+assert base_fifo in run('list') and hidden_fifo in run('list')
+assert listing('--pushed')[0]['fifo'] == unnamed_fifo
+assert listing('--pushed', '--short') == [{key: x[key] for key in short_fields} for x in bound if x['kind'] == 'pushed']
+short_pushed = run('list', '--short', '--pushed').splitlines()
+assert short_pushed[0].split() == ['ID', 'NAME', 'STATUS', 'VALUE']
+assert len(short_pushed) == 3 and all('.fifos/' not in row for row in short_pushed)
+run('bind', '--unbind', unnamed)
+assert listing('--pushed')[0]['fifo'] is None
+# Reordering config lines preserves IDs and pushed rows; visibility follows layout.
+run('config', input=b'[line.hidden]\ndefault = fallback\n[line.base]\n[line.empty]\n')
+settle()
+reordered = listing()
+assert [x['id'] for x in reordered] == [initial[2]['id'], initial[0]['id'], initial[1]['id'], *[x['id'] for x in pushed]], reordered
+assert reordered[0]['visible'] and not reordered[2]['visible']
+assert reordered[0]['value'] == updated[2]['value']
+assert [x['fifo'] for x in reordered[:3]] == [hidden_fifo, base_fifo, None]
+run('bind', '--unbind', 'hidden')
+assert listing()[0]['fifo'] is None
+pushed_fifo = run('push', 'fifo-job', '--fifo')
+assert listing('--pushed')[-1]['fifo'] == pushed_fifo
+assert pushed_fifo in run('list', '--pushed')
+run('pop', 'fifo-job')
+assert all(x['fifo'] != pushed_fifo for x in listing())
+# A snapshot must fit more than a datagram and preserve maximum-length values.
+run('pop', '--all')
+long_value = '界' * 341 + 'x'
+for n in range(24):
+    run('push', 'large-%d' % n, input=long_value.encode())
+large = listing('--pushed')
+assert len(large) == 24 and all(x['value'] == long_value for x in large), large
+# Both filters share the atomic source snapshot and cannot affect other readers.
+with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+    futures = [pool.submit(listing, *(['--pushed'] if n % 2 else [])) for n in range(16)]
+    for n, future in enumerate(futures):
+        entries = future.result()
+        assert len(entries) == (24 if n % 2 else 27), len(entries)
+        assert len({x['id'] for x in entries}) == len(entries)
+snapshot_path = os.environ['STATUSBAR_STATE'] + '.lines'
+assert stat.S_IMODE(os.stat(snapshot_path).st_mode) == 0o600
+# Denied queries must not refresh the snapshot or return any data.
+before = os.stat(snapshot_path).st_mtime_ns
+wrong = os.environ.copy(); wrong['STATUSBAR_SESSION_ID'] = '0' * 32
+run('list', '--json', env=wrong, code=1)
+assert os.stat(snapshot_path).st_mtime_ns == before
+outside = os.environ.copy(); outside.pop('STATUSBAR_SESSION_ID'); outside.pop('STATUSBAR_STATE')
+run('list', '--json', env=outside, code=2)
+stale = os.environ.copy(); stale['STATUSBAR_STATE'] += '-missing'
+run('list', '--json', env=stale, code=1)
+run('list', 'extra', code=2)
+run('list', '--unknown', code=2)
+run('pop', '--all')
+assert listing('--pushed') == []
+print('SNAPSHOT_PATH=' + snapshot_path, flush=True)
+print('LIST_OK', flush=True)
+"""
+    config = '[line.base]\ndefault = fallback\n[line.empty]\n[line.hidden]\n'
+    code, data = run_session(binary, config, child, rows=4, timeout=35)
+    assert code == 0 and b'LIST_OK' in data, (code, data[-6000:])
+    match = re.search(rb'SNAPSHOT_PATH=([^\r\n\x1b]+)', data)
+    assert match is not None, data[-2000:]
+    assert not os.path.exists(match[1].decode()), match[1]
+    print('line listing, JSON, filtering, hidden rows, concurrent snapshots, and cleanup passed')
+
+
 def check_push_pop(binary):
     child = CHILD_PRELUDE + r'''
 from subprocess import PIPE, Popen
@@ -2112,6 +2224,7 @@ def main():
     check_background_push_tty_output(binary)
     check_hidden_push_without_paint(binary)
     check_push_pop(binary)
+    check_list(binary)
     check_fifo(binary)
     check_fifo_signal_cleanup(binary)
     check_push_completion(binary)

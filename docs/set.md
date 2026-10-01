@@ -95,7 +95,7 @@ framework. For Starship, `statusbar init` does this for you; see
 
 ## Protocol
 
-`set`, `push`, `pop` and `bind` send datagrams to a private Unix socket beside
+`set`, `push`, `pop`, `bind` and [`list`](list.md) send datagrams to a private Unix socket beside
 the session's state file (`$STATUSBAR_STATE.sock`). Each request carries the
 session token from `$STATUSBAR_SESSION_ID` and is acknowledged. Values travel
 base64-encoded, and a request states explicitly whether the value is

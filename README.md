@@ -139,7 +139,7 @@ statusbar init fish | source
 
 The [user guide](docs/README.md) covers layouts, live updates, and themes.
 See [configuration](docs/config.md), [changing lines](docs/set.md),
-[temporary lines](docs/push.md), [FIFOs](docs/bind.md), or
+[temporary lines](docs/push.md), [listing lines](docs/list.md), [FIFOs](docs/bind.md), or
 [how statusbar works](docs/internals.md)
 when you need more detail. The guide also covers [shell completions](docs/usage.md#completion).
 

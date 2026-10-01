@@ -5,6 +5,7 @@
 //!     statusbar set NAME [TEXT...] [--status STATE] | set NAME --reset [--status STATE]
 //!     statusbar push [NAME] [--status STATE] [--fifo | -- COMMAND...]
 //!     statusbar pop [NAME | --all]
+//!     statusbar list [--pushed] [--short] [--json]
 //!     statusbar bind [-u] NAME
 //!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]
 //!     statusbar config [--print [default|startup|current] | --default | --path | --check FILE]
@@ -150,6 +151,27 @@ const commands = [_]zecli.CommandSpec{
         \\--all succeeds even when there are no pushed lines.
         ++ "\n",
         .examples = &.{ "statusbar pop", "statusbar pop build", "statusbar pop 7", "statusbar pop --all" },
+    },
+    .{
+        .name = "list",
+        .description = "List the current session's lines",
+        .usage = "statusbar list [--pushed] [--short] [--json]",
+        .flags = &.{
+            .{ .name = "pushed", .description = "Show only pushed lines" },
+            .{ .name = "short", .description = "Show only ID, name, status and value, including in JSON" },
+            .{ .name = "json", .description = "Print a versioned JSON snapshot" },
+        },
+        .extra_help =
+        \\Lists configured and pushed lines in display order, including hidden
+        \\lines. Requires a live statusbar session. --pushed filters the result.
+        \\
+        \\JSON contains version and lines. Each line has id, name (null if
+        \\unnamed), kind, status, visible, fifo (path or null) and value. Value is the raw override,
+        \\not rendered text: null means no override, while "" is explicitly empty.
+        \\The table escapes controls and shows <default> for no override.
+        \\--short keeps only id, name, status and value in either output format.
+        ++ "\n",
+        .examples = &.{ "statusbar list", "statusbar list --short", "statusbar list --pushed --short --json" },
     },
     .{
         .name = "bind",
@@ -337,6 +359,7 @@ test "run is the default command" {
         .{ &.{ "--", "set" }, "run" },
         .{ &.{ "set", "prompt" }, "set" },
         .{ &.{ "bind", "prompt" }, "bind" },
+        .{ &.{ "list", "--pushed", "--json" }, "list" },
         .{ &.{ "run", "-c", "my.statusbar" }, "run" },
         .{ &.{"--help"}, "--help" },
         .{ &.{"-V"}, "-V" },
