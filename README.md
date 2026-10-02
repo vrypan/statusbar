@@ -85,7 +85,7 @@ The picker uses [zooi](https://github.com/vrypan/zooi).
 ## Add modules
 
 The [module library](samples/modules/README.md) provides clock, host, load,
-disk, weather, Hacker News, GitHub notifications, and macOS resource modules.
+disk, weather, Hacker News, GitHub notifications, Codex usage, and macOS resource modules.
 They use your terminal's native colors. Each adds one line and its commands
 to your current theme:
 

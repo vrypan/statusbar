@@ -20,6 +20,7 @@ red. The actual colors follow your terminal theme.
 | [weather](weather.statusbar) | Conditions and temperature | macOS/Linux; `curl`, `tr`, wttr.in access | 5 minutes |
 | [hackernews](hackernews.statusbar) | Top story, linked to its discussion | macOS/Linux; `curl`, `jq`, Hacker News access | 1 minute |
 | [github](github.statusbar) | Unread notifications and latest title, linked to your inbox | macOS/Linux; `gh`, `jq`, GitHub access and login | 1 minute |
+| [codex](codex.statusbar) | 7-day usage meter, reset countdown, credits, available resets, lifetime tokens | macOS/Linux; `codex-usage`, `jq`, running authenticated Codex daemon | 1 minute |
 | [compute](compute.statusbar) | CPU and memory meters | macOS; `top`, `sysctl`, `awk` | 5 seconds |
 | [battery](battery.statusbar) | Battery meter and charging/power state | macOS; `pmset`, `awk` | 30 seconds |
 | [network](network.statusbar) | Download/upload rates and interface | macOS; `route`, `netstat`, `awk` | 5 seconds |
@@ -86,6 +87,14 @@ be replaced by upgrades. Its header lists an example import and requirements.
 - **Disk:** set `volume` to the path you want. An empty value selects the
   macOS data volume when present, otherwise `/`.
 - **Clock:** edit the `#(datetime:...)` formats.
+- **Codex:** put `codex-usage` on `PATH`, or set `CODEX_USAGE_BIN` to its
+  executable path before starting statusbar. The module reads one
+  `codex-usage snapshot --json` per refresh. Values cover the account, including
+  lifetime tokens; they are not limited to the session in the current shell.
+  The weekly meter turns yellow at 75% used and red at 90%. `↻` is the time
+  until the weekly reset; `resets` counts available reset credits separately
+  from spendable credits. Missing values show `—`, unlimited credits show `∞`,
+  and an elapsed reset countdown shows `refreshing` until new quota data arrives.
 - **Refresh:** edit each command's `interval`. Network commands have explicit
   timeouts where supported; CPU and traffic readings take about one second.
 - **Layout:** modules use one row each. To combine features on one row, edit

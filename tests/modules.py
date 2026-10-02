@@ -19,7 +19,7 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\")
 
 # Substitute the providers, not the module commands or their awk/jq parsers.
 MOCK = r'''
-import json, os, pathlib, sys
+import json, os, pathlib, sys, time
 name = pathlib.Path(sys.argv[0]).name
 mode = os.environ.get('MODULE_CASE', '')
 if name == 'uname': print('Linux' if mode == 'linux' else 'Darwin')
@@ -64,6 +64,29 @@ elif name == 'gh':
     if mode == 'offline': sys.exit(1)
     item = {'repository': {'full_name': 'org/repo'}, 'subject': {'title': 'Review\nready'}}
     print(json.dumps([] if mode == 'empty' else [item] * (100 if mode == 'many' else 2)))
+elif name == 'codex-usage':
+    assert sys.argv[1:] == ['snapshot', '--json'], sys.argv
+    if mode == 'offline': sys.exit(1)
+    if mode == 'invalid': print('not json'); sys.exit(0)
+    week = {'usedPercent': 95 if mode == 'exhausted' else 75 if mode == 'warning' else 49,
+            'windowDurationMins': 10080, 'resetsAt': 1 if mode == 'exhausted' else time.time() + 90000}
+    bucket = {'primary': week, 'credits': {'balance': '0'}}
+    if mode == 'secondary':
+        bucket.update(primary={'usedPercent': 10, 'windowDurationMins': 300}, secondary=week)
+    if mode == 'unlimited': bucket['credits'] = {'unlimited': True}
+    if mode == 'available': bucket['credits'] = {'hasCredits': True}
+    state = {'limits': {'rateLimitsByLimitId': {'codex': bucket},
+                        'rateLimitResetCredits': {'availableCount': 3}},
+             'usage': {'summary': {'lifetimeTokens': 7702301849}}}
+    if mode == 'missing': state = {}
+    if mode == 'other-bucket': state['limits'] = {'rateLimits': {'limitId': 'other'}}
+    if mode == 'limits-error': state['limitsError'] = 'unavailable'
+    if mode == 'usage-error': state['usageError'] = 'unavailable'
+    if mode == 'zero':
+        week['usedPercent'] = 0
+        state['limits']['rateLimitResetCredits']['availableCount'] = 0
+        state['usage']['summary']['lifetimeTokens'] = 0
+    print(json.dumps({'version': 1, 'state': state}))
 else: raise AssertionError(name)
 '''
 
@@ -77,7 +100,7 @@ def main():
     binary = str(Path(sys.argv[1]).resolve())
     assert shutil.which('jq'), 'module fixture checks require jq'
     files = sorted(MODULES.glob('*.statusbar'))
-    assert len(files) == 10
+    assert len(files) == 11
     for path in files:
         assert '[line.<module>-' in path.read_text(), path
         command = command_text(path)
@@ -95,9 +118,10 @@ def main():
         provider.write_text(f'#!{sys.executable}\n' + MOCK)
         provider.chmod(0o755)
         for name in ('uname', 'whoami', 'hostname', 'uptime', 'df', 'sysctl', 'top',
-                     'pmset', 'route', 'netstat', 'sleep', 'curl', 'gh'):
+                     'pmset', 'route', 'netstat', 'sleep', 'curl', 'gh', 'codex-usage'):
             (mockdir / name).symlink_to(provider.name)
         env = {**os.environ, 'PATH': f'{mockdir}:' + os.environ.get('PATH', ''),
+               'CODEX_USAGE_BIN': str(mockdir / 'codex-usage'),
                'MODULE_COUNTER': str(Path(directory) / 'counter')}
 
         def run(name, mode=''):
@@ -131,6 +155,29 @@ def main():
         assert run('github')[1] == '2 unread · org/repo: Review ready'
         assert run('github', 'many')[1].startswith('100+ unread')
         assert run('github', 'offline')[1].startswith('unavailable')
+        raw, text = run('codex')
+        assert len(raw.encode()) <= 512, raw
+        assert '\x1b[32m' in raw and '49%' in text and '1d1h' in text, raw
+        assert all(value in text for value in ('credits 0', 'resets 3', 'tokens ∑ 7.7B lifetime')), text
+        assert '49%' in run('codex', 'secondary')[1]
+        assert '\x1b[33m' in run('codex', 'warning')[0]
+        raw, text = run('codex', 'exhausted')
+        assert '\x1b[31m' in raw and '95%' in text and 'refreshing' in text, raw
+        assert 'credits ∞' in run('codex', 'unlimited')[1]
+        assert 'credits available' in run('codex', 'available')[1]
+        text = run('codex', 'zero')[1]
+        assert all(value in text for value in ('0%', 'credits 0', 'resets 0', 'tokens ∑ 0 lifetime')), text
+        for mode in ('missing', 'other-bucket', 'limits-error'):
+            text = run('codex', mode)[1]
+            assert all(value in text for value in ('7d —', '↻ —', 'credits —', 'resets —')), text
+        assert '7.7B' in run('codex', 'limits-error')[1]
+        assert 'tokens ∑ —' in run('codex', 'usage-error')[1]
+        for mode in ('offline', 'invalid'):
+            assert run('codex', mode)[1] == '⚠ usage unavailable'
+        result = subprocess.run(['/bin/sh', '-c', command_text(MODULES / 'codex.statusbar')],
+                                env={**env, 'CODEX_USAGE_BIN': str(mockdir / 'absent')},
+                                capture_output=True, text=True)
+        assert result.stdout == 'install codex-usage', result
         # Missing dependencies give a readable state before any request.
         (mockdir / 'curl').unlink()
         result = subprocess.run(['/bin/sh', '-c', command_text(MODULES / 'weather.statusbar')],
@@ -148,9 +195,9 @@ for path in sorted(library.glob('*.statusbar')):
 deadline = time.monotonic() + 5
 while True:
     lines = json.loads(run('list', '--json'))['lines']
-    if len(lines) == 11 or time.monotonic() >= deadline: break
+    if len(lines) == len(list(library.glob('*.statusbar'))) + 1 or time.monotonic() >= deadline: break
     time.sleep(.05)
-assert len(lines) == 11 and all(line['visible'] for line in lines), lines
+assert len(lines) == len(list(library.glob('*.statusbar'))) + 1 and all(line['visible'] for line in lines), lines
 assert all(line['name'].startswith('custom_') for line in lines[1:]), lines
 run('config', '--add', 'second_clock', input=(library / 'clock.statusbar').read_bytes())
 deadline = time.monotonic() + 5
@@ -168,7 +215,7 @@ mark('MODULE_LIBRARY_OK')
         assert code == 0 and b'MODULE_LIBRARY_OK' in data, data[-5000:]
         visible = terminal.plain(data)
         for expected in (b'alice@laptop', b'0.25  1.50', b'95%', b'12.0/16G', '+24°C'.encode(),
-                         b'A useful headline', b'2 unread', b'KiB/s'):
+                         b'A useful headline', b'2 unread', b'KiB/s', b'7.7B'):
             assert expected in visible, (expected, visible[-5000:])
         print('modules: custom import prefixes, repeated instances and resolved snapshots render correctly')
 

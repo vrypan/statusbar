@@ -1,0 +1,60 @@
+# Module: codex. macOS/Linux; codex-usage, jq, and a running authenticated Codex daemon.
+# Load: statusbar config --add codex < codex.statusbar
+# codex-usage must be on PATH, or set CODEX_USAGE_BIN before starting statusbar.
+# Account usage: 7-day quota, reset countdown, credits, reset credits, lifetime tokens.
+# Quota colors: green below 75%, yellow from 75%, red from 90%.
+
+[line.<module>-usage]
+text = " #[fg=colour5]codex#[default] #(command:<module>-usage)#[default]#(fill: ) "
+
+[command.<module>-usage]
+run = |
+  # One snapshot supplies all fields; ANSI colors use the terminal palette.
+  codex_usage=${CODEX_USAGE_BIN:-codex-usage}
+  command -v "$codex_usage" >/dev/null 2>&1 || { printf 'install codex-usage'; exit; }
+  command -v jq >/dev/null 2>&1 || { printf 'install jq'; exit; }
+  json=$("$codex_usage" snapshot --json 2>/dev/null) || {
+    printf '\033[33m⚠ usage unavailable\033[39m'; exit
+  }
+  printf '%s' "$json" | jq -ejr '
+    def ink($c; $s): "\u001b[" + ($c|tostring) + "m" + ($s|tostring) + "\u001b[39m";
+    def muted($s): ink(90; $s);
+    def compact:
+      if type != "number" then "—"
+      elif . >= 1e12 then ((. / 1e10 | floor) / 100 | tostring) + "T"
+      elif . >= 1e9 then ((. / 1e7 | floor) / 100 | tostring) + "B"
+      elif . >= 1e6 then ((. / 1e4 | floor) / 100 | tostring) + "M"
+      elif . >= 1e3 then ((. / 10 | floor) / 100 | tostring) + "K"
+      else tostring end;
+    def countdown:
+      if type != "number" then "—"
+      elif . <= now then "refreshing"
+      else ((. - now) / 60 | ceil) as $m |
+        if $m >= 1440 then "\($m / 1440 | floor)d\(($m % 1440) / 60 | floor)h"
+        elif $m >= 60 then "\($m / 60 | floor)h\($m % 60)m"
+        else "\($m)m" end
+      end;
+    .state | select(type == "object") |
+    (if (.limitsError // "") == "" then .limits else null end) as $limits |
+    ($limits.rateLimitsByLimitId.codex //
+      ($limits.rateLimits | select(.limitId == "codex" or .limitId == null)) // null) as $bucket |
+    ([$bucket.primary, $bucket.secondary] | map(select(.windowDurationMins == 10080)) | .[0]) as $week |
+    ($week.usedPercent) as $used |
+    (if ($used|type) != "number" then 90 elif $used >= 90 then 31 elif $used >= 75 then 33 else 32 end) as $color |
+    (if ($used|type) == "number" then
+      ([$used, 100] | min | [., 0] | max | . * 8 / 100 | round) as $bars |
+      ink($color; "━" * $bars) + muted("─" * (8 - $bars)) + " " + ink($color; "\($used|round)%")
+     else muted("—") end) as $meter |
+    ($bucket.credits) as $credits |
+    (if $credits == null then "—"
+     elif $credits.unlimited then "∞"
+     elif $credits.balance != null then ($credits.balance | (tonumber? // "—") | tostring)
+     elif $credits.hasCredits then "available"
+     else "0" end) as $balance |
+    (if (.usageError // "") == "" then .usage.summary.lifetimeTokens else null end) as $tokens |
+    muted("7d ") + $meter + muted(" used  ↻ ") + ink(36; ($week.resetsAt | countdown)) +
+    muted(" · credits ") + ink(35; $balance) +
+    muted(" · resets ") + ink(34; ($limits.rateLimitResetCredits.availableCount // "—")) +
+    muted(" · tokens ∑ ") + ink(36; ($tokens | compact)) + muted(" lifetime")
+  ' 2>/dev/null || printf '\033[33m⚠ usage unavailable\033[39m'
+interval = 60
