@@ -6,6 +6,8 @@ order they were added.
 
 ## Unreleased
 
+- Add `config --list [current|startup|default]` to list configured line
+  and command names grouped by module prefix
 - Add `list [--pushed] [--short] [--json]` to inspect session lines, including hidden
   lines, with stable IDs, statuses, raw override values and bound FIFO paths
 - Add `config --add PREFIX` for atomic additions of prefixed lines, commands,

@@ -122,6 +122,9 @@ pub const Config = struct {
     commands_len: usize = 0,
     highlight: Highlight = .{},
 
+    /// List line and command names by prefix, without executing commands.
+    pub const list = @import("config_list.zig").list;
+
     pub fn deinit(self: *Config) void {
         self.arena.deinit();
         self.* = undefined;

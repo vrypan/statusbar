@@ -25,6 +25,7 @@ const config_flag = zecli.FlagSpec{
 
 const config_flags = [_]zecli.FlagSpec{
     .{ .name = "print", .description = "Print a config (current if omitted)" },
+    .{ .name = "list", .description = "List line and command names by prefix (current if omitted)" },
     .{ .name = "default", .description = "Same as --print default" },
     .{ .name = "path", .description = "Print the config path for a new session" },
     .{ .name = "check", .value = .string, .value_name = "FILE", .description = "Validate a config file without starting a session", .completion = .files },
@@ -227,9 +228,9 @@ const commands = [_]zecli.CommandSpec{
     .{
         .name = "config",
         .description = "View configuration or load a new layout",
-        .usage = "statusbar config [--print [default|startup|current] | --default | --path | --check FILE | --add PREFIX]",
+        .usage = "statusbar config [--print [default|startup|current] | --list [default|startup|current] | --default | --path | --check FILE | --add PREFIX]",
         .flags = &config_flags,
-        .arguments = &.{.{ .name = "SOURCE", .description = "Config to show with --print: default, startup, or current", .completion = .{ .values = &.{ "default", "startup", "current" } } }},
+        .arguments = &.{.{ .name = "SOURCE", .description = "Config to show with --print or --list: default, startup, or current", .completion = .{ .values = &.{ "default", "startup", "current" } } }},
         .double_dash = .positionals,
         .extra_help =
         \\To change the running bar, pass a complete config file as input. The
@@ -241,6 +242,9 @@ const commands = [_]zecli.CommandSpec{
         \\
         \\Printing startup or current requires a running session. Both preserve
         \\the config text and exclude values and statuses set at runtime.
+        \\--list parses that snapshot and lists line and command names,
+        \\grouped by the prefix before the first hyphen. It does not
+        \\run commands. Use --list default to inspect the built-in config anywhere.
         \\
         \\--path shows the file a new session would use: $STATUSBAR_CONFIG, then
         \\$XDG_CONFIG_HOME/statusbar/config.statusbar (or
@@ -262,6 +266,8 @@ const commands = [_]zecli.CommandSpec{
         }},
         .examples = &.{
             "statusbar config --print",
+            "statusbar config --list",
+            "statusbar config --list default",
             "statusbar config --add extra < extra.statusbar",
             "statusbar config --print startup > original.statusbar",
             "statusbar config --print current > active.statusbar",
@@ -329,6 +335,7 @@ pub fn printCommandHelp(allocator: std.mem.Allocator, writer: anytype, spec: zec
     help.arguments = &.{};
     var flags = config_flags;
     flags[0].name = "print [default|startup|current]";
+    flags[1].name = "list [default|startup|current]";
     help.flags = &flags;
     try zecli.printCommandHelp(allocator, writer, help);
 }

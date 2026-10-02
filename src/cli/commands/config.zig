@@ -12,12 +12,13 @@ const config = @import("model").config;
 pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer, help_output: anytype) !u8 {
     const args = command.positionals();
     const print = command.enabled("print");
+    const list = command.enabled("list");
     const defaults = command.enabled("default");
     const path = command.enabled("path");
     const check_file = command.getValue([]const u8, "check");
     const add = command.getValue([]const u8, "add");
-    if (@as(u8, @intFromBool(print)) + @as(u8, @intFromBool(defaults)) + @as(u8, @intFromBool(path)) + @as(u8, @intFromBool(check_file != null)) + @as(u8, @intFromBool(add != null)) > 1)
-        return common.usageError(stderr, command, "choose one of --print, --default, --path, --check, or --add");
+    if (@as(u8, @intFromBool(print)) + @as(u8, @intFromBool(list)) + @as(u8, @intFromBool(defaults)) + @as(u8, @intFromBool(path)) + @as(u8, @intFromBool(check_file != null)) + @as(u8, @intFromBool(add != null)) > 1)
+        return common.usageError(stderr, command, "choose one of --print, --list, --default, --path, --check, or --add");
     if (check_file) |file| {
         if (args.len > 0) return common.usageError(stderr, command, "--check takes a file after the flag and no other arguments");
         const text = Io.Dir.cwd().readFileAlloc(io, file, arena, .limited(config.max_config)) catch |err| {
@@ -27,13 +28,13 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         };
         return config_send.validateText(arena, text, file, stderr);
     }
-    if (args.len > 0 and !print) return common.usageError(stderr, command, "a config selection requires --print");
+    if (args.len > 0 and !print and !list) return common.usageError(stderr, command, "a config selection requires --print or --list");
     if (add) |prefix| {
         if (!@import("shared").config_prefix.valid(prefix)) return common.usageError(stderr, command, "--add prefix needs 1-62 letters, digits or underscores");
         if (try Io.File.stdin().isTty(io)) return common.usageError(stderr, command, "--add reads a config fragment from stdin");
         return sendConfig(arena, io, command, stderr, prefix);
     }
-    if (!print and !path and !defaults) {
+    if (!print and !list and !path and !defaults) {
         if (!(try Io.File.stdin().isTty(io))) return sendConfig(arena, io, command, stderr, null);
         try cli.printCommandHelp(arena, help_output, command.spec);
         try stdout.flush();
@@ -61,21 +62,40 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     } else {
         const selection = if (defaults) "default" else if (args.len > 0) args[0] else "current";
         if (std.mem.eql(u8, selection, "default")) {
-            try stdout.writeAll(config_source.default_config);
+            return show(arena, config_source.default_config, list, stdout, stderr);
         } else {
             const state = @import("session").session_state;
             const selected = std.meta.stringToEnum(state.Selection, selection) orelse
-                return common.usageError(stderr, command, "--print expects default, startup, or current");
+                return common.usageError(stderr, command, "--print/--list expects default, startup, or current");
             const env = @import("platform").environment;
-            const state_path = env.get("STATUSBAR_STATE") orelse return common.usageError(stderr, command, "--print startup/current requires a running statusbar session");
-            const token = env.get("STATUSBAR_SESSION_ID") orelse return common.usageError(stderr, command, "--print startup/current requires a running statusbar session");
+            const state_path = env.get("STATUSBAR_STATE") orelse return common.usageError(stderr, command, "--print/--list startup/current requires a running statusbar session");
+            const token = env.get("STATUSBAR_SESSION_ID") orelse return common.usageError(stderr, command, "--print/--list startup/current requires a running statusbar session");
             const text = state.readConfig(arena, io, state_path, token, selected) catch |err| {
                 try stderr.print("statusbar: cannot read session config: {t}\n", .{err});
                 try stderr.flush();
                 return 1;
             };
-            try stdout.writeAll(text);
+            defer arena.free(text);
+            return show(arena, text, list, stdout, stderr);
         }
+    }
+    try stdout.flush();
+    return 0;
+}
+
+fn show(arena: std.mem.Allocator, text: []const u8, list: bool, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
+    if (list) {
+        var diag: config.Diagnostic = .{};
+        var parsed = config.parse(arena, text, &diag) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            try stderr.print("statusbar: config:{d}: {s}\n", .{ diag.line, diag.message });
+            try stderr.flush();
+            return 1;
+        };
+        defer parsed.deinit();
+        try parsed.list(stdout);
+    } else {
+        try stdout.writeAll(text);
     }
     try stdout.flush();
     return 0;

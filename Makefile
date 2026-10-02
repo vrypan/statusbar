@@ -20,6 +20,7 @@ test:
 	$(ZIG) build test
 
 test-integration: build
+	python3 -u tests/config_list.py ./zig-out/bin/statusbar
 	python3 -u tests/multirow_pty.py ./zig-out/bin/statusbar
 	python3 -u tests/theme_picker_pty.py ./zig-out/bin/statusbar-theme ./zig-out/bin/statusbar
 	python3 -u tests/modules.py ./zig-out/bin/statusbar

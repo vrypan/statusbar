@@ -97,6 +97,41 @@ would load; see [usage.md](usage.md#config).
 For generated configs and here-documents, see
 [reading a config from stdin](usage.md#generate-a-config-on-the-fly).
 
+## Inspect the parsed configuration
+
+```sh
+statusbar config --list          # current session config
+statusbar config --list startup  # original session config
+statusbar config --list default  # built-in config; no session needed
+```
+
+`--list` parses the selected config snapshot and calls `Config.list()` on the
+result. It shows only line and command names, grouped by module prefix:
+
+```text
+(no prefix)
+  Lines
+    ornament
+    prompt
+
+codex
+  Lines
+    codex-usage
+  Commands
+    codex-fetch
+```
+
+The prefix is the part before the first hyphen, following the same naming rules
+as `--add PREFIX`. Names without a valid prefix and nonempty suffix go under
+`(no prefix)`. Groups are alphabetical, with unprefixed names first. Within each
+group, lines and commands are separate and keep their declaration order. Full
+names are retained; colors, settings and template details are omitted.
+The report does not execute commands or change the session.
+
+This inspects configuration definitions. Use `statusbar list` for live line
+values, statuses, pushed jobs and FIFO bindings. Use `config --print` to retrieve
+the source text, including comments and original formatting.
+
 ## Replace the running config
 
 Inside a session, you can replace the whole config. From the repository

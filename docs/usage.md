@@ -28,7 +28,7 @@ statusbar pop [NAME | --all]
 statusbar list [--pushed] [--short] [--json]
 statusbar bind [-u | --unbind] NAME
 statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]
-statusbar config [--print [default|startup|current] | --default | --path | --check FILE | --add PREFIX]
+statusbar config [--print [default|startup|current] | --list [default|startup|current] | --default | --path | --check FILE | --add PREFIX]
 statusbar completion <bash|zsh|fish>
 ```
 
@@ -135,7 +135,7 @@ before each prompt. Repeating initialization does not duplicate these hooks.
 
 ## `config`
 
-Choose which configuration to print:
+Choose which configuration to print or inspect:
 
 | Option | Meaning |
 |--------|---------|
@@ -143,19 +143,21 @@ Choose which configuration to print:
 | `--print startup` | Exact config originally loaded by this session |
 | `--print current` | Active config, including live replacements |
 | `--print` | Same as `--print current` |
+| `--list [default\|startup\|current]` | List line and command names by prefix; defaults to current |
 | `--default` | Alias for `--print default` |
 | `--path` | File a new session would load, or `built-in` |
 
-`startup` and `current` require a running session. They preserve the original
-text, including comments, whitespace, and commands, without running those
-commands. Values and statuses set at runtime are excluded. The startup
+`startup` and `current` require a running session. `--print` preserves the original
+text, including comments, whitespace, and commands. `--list` instead shows the
+[parsed structure](config.md#inspect-the-parsed-configuration). Neither runs
+configured commands. Values and statuses set at runtime are excluded. The startup
 snapshot also works for `--config -` and remains unchanged when its source
 file is edited or removed. Nested sessions have separate snapshots.
 
 `--path` uses `$STATUSBAR_CONFIG`, then
 `$XDG_CONFIG_HOME/statusbar/config.statusbar` (or
 `~/.config/statusbar/config.statusbar` when `XDG_CONFIG_HOME` is unset). Use one
-display option at a time; `--path` cannot be combined with `--print` or `--default`.
+display option at a time; `--path` cannot be combined with `--print`, `--list` or `--default`.
 
 With no flags and terminal stdin, shows help. With piped or redirected stdin,
 reads and validates the complete config until EOF, then sends its contents to
