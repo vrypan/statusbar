@@ -82,6 +82,22 @@ The bundled themes include versions with fixed colors and versions that
 follow your terminal's palette. See [sample themes](samples/themes/README.md).
 The picker uses [zooi](https://github.com/vrypan/zooi).
 
+## Add modules
+
+The [module library](samples/modules/README.md) provides clock, host, load,
+disk, weather, Hacker News, GitHub notifications, and macOS resource modules.
+They use your terminal's native colors. Each adds one line and its commands
+to your current theme:
+
+```sh
+# Inside a statusbar session, from the repository directory:
+statusbar config --add disk < samples/modules/disk.statusbar
+```
+
+Builds install the library under `share/statusbar/modules`; release archives
+include a `modules/` directory. The library guide lists requirements,
+customization options, and how to save an assembled layout.
+
 ## Customize your bar
 
 Edit your saved config, or create one from the built-in layout:

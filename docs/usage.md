@@ -11,6 +11,7 @@ statusbar pop                               # remove the newest temporary line
 statusbar pop --all                         # remove all temporary lines
 statusbar list --pushed                     # inspect temporary lines
 statusbar config < another.statusbar        # change the running layout
+statusbar config --add extra < extra.statusbar # add prefixed definitions
 ```
 
 Run `statusbar --help` for the command list, or
@@ -27,7 +28,7 @@ statusbar pop [NAME | --all]
 statusbar list [--pushed] [--short] [--json]
 statusbar bind [-u | --unbind] NAME
 statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]
-statusbar config [--print [default|startup|current]] [--default] [--path]
+statusbar config [--print [default|startup|current] | --default | --path | --check FILE | --add PREFIX]
 statusbar completion <bash|zsh|fish>
 ```
 
@@ -161,11 +162,18 @@ reads and validates the complete config until EOF, then sends its contents to
 the current statusbar session. Empty input is an error. Printing flags ignore
 stdin. Replacement prints nothing on success.
 
+`--add PREFIX` instead reads a fragment of new lines, commands, and colors
+from stdin. Their names must start with `PREFIX-`. It rejects existing names
+and global settings, and preserves existing command processes and schedules.
+Use it separately from the other config options. See
+[adding to the running config](config.md#add-to-the-running-config).
+
 ```sh
 statusbar config --print current > saved.statusbar
 statusbar config --print startup | statusbar config
 cat my.statusbar | statusbar config
 statusbar config < my.statusbar
+statusbar config --add extra < extra.statusbar
 statusbar config --default | statusbar config
 ```
 

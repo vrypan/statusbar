@@ -1,0 +1,19 @@
+# Module: github. macOS/Linux; jq, gh, network, and gh auth login.
+# Displays up to 100 unread notifications; the title opens your inbox.
+# Load: statusbar config --add github < github.statusbar
+
+[line.github-notifications]
+text = " #[fg=colour4]GitHub#[default] #[track]#(command:github-notifications)#[notrack]#(fill: ) "
+
+[command.github-notifications]
+run = |
+  command -v gh >/dev/null 2>&1 || { printf 'install gh'; exit; }
+  command -v jq >/dev/null 2>&1 || { printf 'install jq'; exit; }
+  notifications=$(GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 gh api 'notifications?per_page=100' --cache 60s) || { printf 'unavailable · check gh auth status'; exit; }
+  summary=$(printf '%s' "$notifications" | jq -er '
+    if type != "array" then error("expected notifications")
+    elif length == 0 then "✓ inbox clear"
+    else "\(length)\(if length==100 then "+" else "" end) unread · " +
+      ((.[0] | "\(.repository.full_name): \(.subject.title)") | gsub("[[:cntrl:]]"; " ") | .[0:80]) end') || { printf 'unavailable'; exit; }
+  printf '\033]8;;https://github.com/notifications\033\\%s\033]8;;\033\\' "$summary"
+interval = 60

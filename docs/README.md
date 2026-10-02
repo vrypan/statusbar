@@ -176,6 +176,19 @@ by a Nerd Font. Pure and Tokyo Night use ordinary terminal text and Unicode.
 The themes are a good way to explore backgrounds, colored labels, rules, and
 restrained use of icons; see [their notes](../samples/themes/README.md).
 
+## Add a module
+
+The [module library](../samples/modules/README.md) contains ready-made features
+with native terminal colors. Add one inside a running session:
+
+```sh
+statusbar config --add disk < samples/modules/disk.statusbar
+```
+
+This adds the module's line and commands to the current layout. Existing
+lines and commands keep running. See the library for installation paths,
+platform requirements, and how to customize and save your modules.
+
 ## Load another config
 
 Inside a running statusbar session, send a config to `statusbar config` to

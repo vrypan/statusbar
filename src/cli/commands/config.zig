@@ -1,4 +1,4 @@
-//! `statusbar config`: print a config snapshot or send a replacement.
+//! `statusbar config`: print, check, replace, or add to the config.
 const std = @import("std");
 const Io = std.Io;
 const zecli = @import("zecli");
@@ -8,15 +8,16 @@ const config_source = @import("../config_source.zig");
 const config_send = @import("../config_send.zig");
 const config = @import("model").config;
 
-/// Print a config snapshot or submit a complete replacement from stdin.
+/// Print/check a config or submit a replacement/addition from stdin.
 pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer, help_output: anytype) !u8 {
     const args = command.positionals();
     const print = command.enabled("print");
     const defaults = command.enabled("default");
     const path = command.enabled("path");
     const check_file = command.getValue([]const u8, "check");
-    if (@as(u8, @intFromBool(print)) + @as(u8, @intFromBool(defaults)) + @as(u8, @intFromBool(path)) + @as(u8, @intFromBool(check_file != null)) > 1)
-        return common.usageError(stderr, command, "choose one of --print, --default, --path, or --check");
+    const add = command.getValue([]const u8, "add");
+    if (@as(u8, @intFromBool(print)) + @as(u8, @intFromBool(defaults)) + @as(u8, @intFromBool(path)) + @as(u8, @intFromBool(check_file != null)) + @as(u8, @intFromBool(add != null)) > 1)
+        return common.usageError(stderr, command, "choose one of --print, --default, --path, --check, or --add");
     if (check_file) |file| {
         if (args.len > 0) return common.usageError(stderr, command, "--check takes a file after the flag and no other arguments");
         const text = Io.Dir.cwd().readFileAlloc(io, file, arena, .limited(config.max_config)) catch |err| {
@@ -27,8 +28,13 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         return config_send.validateText(arena, text, file, stderr);
     }
     if (args.len > 0 and !print) return common.usageError(stderr, command, "a config selection requires --print");
+    if (add) |prefix| {
+        if (!@import("shared").config_prefix.valid(prefix)) return common.usageError(stderr, command, "--add prefix needs 1-62 letters, digits or underscores");
+        if (try Io.File.stdin().isTty(io)) return common.usageError(stderr, command, "--add reads a config fragment from stdin");
+        return sendConfig(arena, io, command, stderr, prefix);
+    }
     if (!print and !path and !defaults) {
-        if (!(try Io.File.stdin().isTty(io))) return sendConfig(arena, io, command, stderr);
+        if (!(try Io.File.stdin().isTty(io))) return sendConfig(arena, io, command, stderr, null);
         try cli.printCommandHelp(arena, help_output, command.spec);
         try stdout.flush();
         return 0;
@@ -75,7 +81,7 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     return 0;
 }
 
-fn sendConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
+fn sendConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer, prefix: ?[]const u8) !u8 {
     const protocol = @import("terminal").config_protocol;
     const token = @import("platform").environment.get("STATUSBAR_SESSION_ID") orelse
         return common.usageError(stderr, command, "not inside a compatible statusbar session");
@@ -88,5 +94,6 @@ fn sendConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
         return 1;
     };
     if (text.len == 0) return common.usageError(stderr, command, "stdin contains no config");
+    if (prefix) |name| return config_send.sendAddition(arena, io, token, name, text, stderr);
     return config_send.sendText(arena, io, token, text, "stdin", stderr);
 }

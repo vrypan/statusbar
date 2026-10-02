@@ -2018,6 +2018,95 @@ interval = 86400
     print('push spinner animation, stable command width, completion, and command pacing passed')
 
 
+def check_config_add(binary):
+    child = CHILD_PRELUDE + r'''
+import base64, json
+def current():
+    return run('config', '--print')
+def wait_for(predicate):
+    deadline = time.monotonic() + 4
+    while not predicate():
+        assert time.monotonic() < deadline, 'timed out waiting for addition'
+        time.sleep(.02)
+def frame(prefix, text):
+    body = ('1;' + os.environ['STATUSBAR_SESSION_ID'] + ';' + prefix + ';' + text).encode()
+    return b'\x1b]3110;STATUSBAR;ADD;' + base64.b64encode(body) + b'\x1b\\'
+startup = run('config', '--print', 'startup')
+run('set', 'base', 'kept', '--status', 'success')
+bound = run('bind', 'base')
+run('push', 'job', input=b'pushed\n')
+before = json.loads(run('list', '--json'))
+with tempfile.TemporaryDirectory() as folder:
+    counter = os.path.join(folder, 'counter')
+    # A command that is still running when the next additions arrive.
+    fragment = ('[line.work-summary]\ntext = #(command:work-fetch) #(command:shared)\n'
+                '[command.work-fetch]\nrun = printf x >> ' + counter + '; sleep 1; printf WORK_DONE\ninterval = 60\n'
+                '[colors]\nwork-accent = blue\n')
+    run('config', '--add', 'work', input=fragment.encode())
+    wait_for(lambda: os.path.exists(counter))
+    wait_for(lambda: '[line.work-summary]' in current())
+    snapshot = current()
+    # CLI preflight failures must not change the current config.
+    for bad in ('[line.other]', '[command.other]\nrun = true', '[colors]\nwrong = red',
+                '[line.work-summary]', '[command.work-fetch]\nrun = true',
+                '[colors]\nwork-accent = red', '[line.work-bad]\ntext = #(command:missing)',
+                'interval = 1\n[line.work-bad]', '[push]\ntext = bad', '# empty'):
+        run('config', '--add', 'work', input=bad.encode(), code=2)
+        assert current() == snapshot
+    for args in (('--add', 'bad-prefix'), ('--add', 'work', '--print'), ('--add', 'work', 'unexpected')):
+        run('config', *args, input=b'[line.work-other]', code=2)
+    # Command-only and color-only fragments need no dummy line.
+    run('config', '--add', 'extra', input=b'[command.extra-fetch]\nrun = printf EXTRA\ninterval = 60\n')
+    wait_for(lambda: '[command.extra-fetch]' in current())
+    run('config', '--add', 'extra', input=b'[colors]\nextra-accent = green\n')
+    wait_for(lambda: 'extra-accent = green' in current())
+    # Requests in one write cannot lose each other's additions, including
+    # while the terminal cursor is saved. Include a stale conflicting request.
+    os.write(1, b'\x1b7' + frame('one', '[line.one-row]\ntext = ONE\n') +
+             frame('two', '[line.two-row]\ntext = TWO\n') +
+             frame('work', '[line.work-summary]\ntext = BAD\n') + b'\x1b8')
+    wait_for(lambda: '[line.two-row]' in current())
+    assert '[line.one-row]' in current() and 'text = BAD' not in current()
+    # References to existing commands/colors are allowed; the prefix is
+    # required for definitions only.
+    run('config', '--add', 'three', input=b'[line.three-row]\ntext = #[fg=extra-accent]#(command:extra-fetch)\n')
+    wait_for(lambda: '[line.three-row]' in current())
+    time.sleep(1.1)
+    assert open(counter).read() == 'x', 'an existing command was restarted'
+    # A pushed-name collision is checked by the session and rolls back all
+    # definitions, even when the sender bypasses CLI validation.
+    run('push', 'clash-row', input=b'temporary\n')
+    snapshot = current()
+    os.write(1, frame('clash', '[line.clash-row]\n[command.clash-run]\nrun = true\n'))
+    settle()
+    assert current() == snapshot
+    assert run('config', '--print', 'startup') == startup
+    assert os.path.exists(bound)
+    after = json.loads(run('list', '--json'))
+    assert after['lines'][0] == before['lines'][0], (before, after)
+    assert after['lines'][-2] == before['lines'][-1], (before, after)
+    assert [line['name'] for line in after['lines']] == [
+        'base', 'work-summary', 'one-row', 'two-row', 'three-row', 'job', 'clash-row'], after
+    run('set', '1', 'still-kept')
+    # Accumulated configs can exceed the single-message limit. The parser's
+    # total limit is still enforced without changing the live snapshot.
+    for suffix in ('a', 'b', 'c'):
+        run('config', '--add', 'large', input=('[line.large-' + suffix + ']\n#' + 'x' * 15000).encode())
+        wait_for(lambda: '[line.large-' + suffix + ']' in current())
+    assert len(current()) > 24523
+    snapshot = current()
+    run('config', '--add', 'large', input=('[line.large-tooBig]\n#' + 'x' * 22000).encode(), code=2)
+    assert current() == snapshot
+    mark('CONFIG_ADD_OK')
+'''
+    config = '[line.base]\ntext = "BASE[#(value)|#(status)]"\n[command.shared]\nrun = printf SHARED\ninterval = 0.1\n'
+    code, data = run_session(binary, config, child, timeout=20)
+    assert code == 0 and b'CONFIG_ADD_OK' in data, data[-5000:]
+    visible = plain(data)
+    assert b'WORK_DONE SHARED' in visible and b'BASE[still-kept|success]' in visible, visible[-5000:]
+    print('config --add validates prefixes, merges atomically, keeps running commands and line state')
+
+
 def check_reload_lines(binary):
     child = CHILD_PRELUDE + r'''
 run('set', 'a', 'kept', '--status', 'success')
@@ -2231,6 +2320,7 @@ def main():
     check_push_initial_status(binary)
     check_push_spinner(binary)
     check_reload_lines(binary)
+    check_config_add(binary)
     config = """\
 [line.one]
 text = "one#(fill:-)"

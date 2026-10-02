@@ -1,8 +1,10 @@
-//! OSC 3110 STATUSBAR protocol framing for complete config replacement.
+//! OSC 3110 STATUSBAR protocol framing for config replacement and addition.
 const std = @import("std");
 
 pub const namespace = "3110;STATUSBAR;";
 pub const operation = "CONFIG;";
+pub const add_operation = "ADD;";
+const prefix_names = @import("shared").config_prefix;
 pub const max_osc = 32 * 1024;
 pub const token_len = 32;
 pub const envelope_overhead = 2 + token_len + 1; // "1;" + token + ";"
@@ -23,11 +25,22 @@ pub fn makeToken(io: std.Io) [token_len]u8 {
 }
 
 pub fn encode(allocator: std.mem.Allocator, token: []const u8, text: []const u8) ![]u8 {
+    return encodePayload(allocator, token, operation, text);
+}
+
+pub fn encodeAdd(allocator: std.mem.Allocator, token: []const u8, prefix: []const u8, text: []const u8) ![]u8 {
+    if (!prefix_names.valid(prefix)) return error.InvalidPrefix;
+    const body = try std.fmt.allocPrint(allocator, "{s};{s}", .{ prefix, text });
+    defer allocator.free(body);
+    return encodePayload(allocator, token, add_operation, body);
+}
+
+fn encodePayload(allocator: std.mem.Allocator, token: []const u8, op: []const u8, text: []const u8) ![]u8 {
     if (!validToken(token)) return error.InvalidToken;
     if (text.len > max_config) return error.ConfigTooLarge;
     const decoded_len = envelope_overhead + text.len;
     const encoded_len = std.base64.standard.Encoder.calcSize(decoded_len);
-    const frame_len = 2 + namespace.len + operation.len + encoded_len + 2;
+    const frame_len = 2 + namespace.len + op.len + encoded_len + 2;
     const frame = try allocator.alloc(u8, frame_len);
     errdefer allocator.free(frame);
     var pos: usize = 0;
@@ -35,8 +48,8 @@ pub fn encode(allocator: std.mem.Allocator, token: []const u8, text: []const u8)
     pos += 2;
     @memcpy(frame[pos..][0..namespace.len], namespace);
     pos += namespace.len;
-    @memcpy(frame[pos..][0..operation.len], operation);
-    pos += operation.len;
+    @memcpy(frame[pos..][0..op.len], op);
+    pos += op.len;
     var envelope = try allocator.alloc(u8, decoded_len);
     defer allocator.free(envelope);
     @memcpy(envelope[0..2], "1;");
@@ -51,9 +64,18 @@ pub fn encode(allocator: std.mem.Allocator, token: []const u8, text: []const u8)
 
 /// Decodes the bytes after `3110;STATUSBAR;`. The returned config aliases out.
 pub fn decode(out: []u8, payload: []const u8, expected_token: []const u8) ![]const u8 {
+    const request = try decodeRequest(out, payload, expected_token);
+    if (request.prefix != null) return error.UnknownOperation;
+    return request.text;
+}
+
+pub const Request = struct { prefix: ?[]const u8 = null, text: []const u8 };
+
+pub fn decodeRequest(out: []u8, payload: []const u8, expected_token: []const u8) !Request {
     if (!validToken(expected_token)) return error.InvalidToken;
-    if (!std.mem.startsWith(u8, payload, operation)) return error.UnknownOperation;
-    const encoded = payload[operation.len..];
+    const add = std.mem.startsWith(u8, payload, add_operation);
+    if (!add and !std.mem.startsWith(u8, payload, operation)) return error.UnknownOperation;
+    const encoded = payload[if (add) add_operation.len else operation.len..];
     const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(encoded) catch return error.InvalidEncoding;
     if (decoded_len < envelope_overhead or decoded_len > out.len) return error.InvalidEncoding;
     std.base64.standard.Decoder.decode(out[0..decoded_len], encoded) catch return error.InvalidEncoding;
@@ -64,7 +86,29 @@ pub fn decode(out: []u8, payload: []const u8, expected_token: []const u8) ![]con
     if (!validToken(token) or !std.crypto.timing_safe.eql([token_len]u8, token[0..token_len].*, expected_token[0..token_len].*)) return error.AuthenticationFailed;
     const text = decoded[envelope_overhead..];
     if (text.len > max_config) return error.ConfigTooLarge;
-    return text;
+    if (!add) return .{ .text = text };
+    const separator = std.mem.indexOfScalar(u8, text, ';') orelse return error.InvalidEnvelope;
+    const prefix = text[0..separator];
+    if (!prefix_names.valid(prefix)) return error.InvalidPrefix;
+    return .{ .prefix = prefix, .text = text[separator + 1 ..] };
+}
+
+test "add requests authenticate the prefix and fragment and respect the frame bound" {
+    const token = "0123456789abcdef0123456789abcdef";
+    const text = "[line.weather-summary]\ntext = semi; Καλημέρα\n";
+    const frame = try encodeAdd(std.testing.allocator, token, "weather", text);
+    defer std.testing.allocator.free(frame);
+    var out: [max_config + envelope_overhead]u8 = undefined;
+    const payload = frame[2 + namespace.len .. frame.len - 2];
+    const request = try decodeRequest(&out, payload, token);
+    try std.testing.expectEqualStrings("weather", request.prefix.?);
+    try std.testing.expectEqualStrings(text, request.text);
+    try std.testing.expectError(error.AuthenticationFailed, decodeRequest(&out, payload, "fedcba9876543210fedcba9876543210"));
+    try std.testing.expectError(error.InvalidPrefix, encodeAdd(std.testing.allocator, token, "weather-nested", text));
+    const largest = try encodeAdd(std.testing.allocator, token, "x", "a" ** (max_config - 2));
+    defer std.testing.allocator.free(largest);
+    try std.testing.expect(largest.len - 4 <= max_osc);
+    try std.testing.expectError(error.ConfigTooLarge, encodeAdd(std.testing.allocator, token, "x", "a" ** (max_config - 1)));
 }
 
 test "config protocol round trips arbitrary config bytes" {

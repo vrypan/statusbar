@@ -1,0 +1,14 @@
+# Module: load. macOS/Linux; uptime and awk. Load is not CPU percentage.
+# Load: statusbar config --add load < load.statusbar
+
+[line.load-average]
+text = " #[fg=colour5]load#[default] #[track]#(command:load-average)#[notrack]#(fill: )#[fg=colour8]1 / 5 / 15 min#[default] "
+
+[command.load-average]
+run = |
+  LC_ALL=C uptime | awk -F'load averages?: ' '
+    NF==2 {gsub(/,/, " ", $2); n=split($2,a,/[[:space:]]+/); out=""
+      for(i=1;i<=n;i++)if(a[i] ~ /^[0-9]+([.][0-9]+)?$/){out=out (out=="" ? "" : "  ") a[i]; count++}
+      if(count==3){printf "%s",out; found=1}}
+    END {if(!found)printf "unavailable"}'
+interval = 10

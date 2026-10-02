@@ -51,6 +51,30 @@ pub const CommandOutputs = struct {
         if (self.environment) |*owner| owner.deinit();
     }
 
+    /// An addition keeps old command indices. Copy their visible results
+    /// while preparing the candidate, without changing the live generation.
+    pub fn copyExisting(self: *CommandOutputs, old: *const CommandOutputs) void {
+        std.debug.assert(self.commands.len >= old.commands.len);
+        for (0..old.commands.len) |n| {
+            @memcpy(self.outputs[n][0..old.lens[n]], old.output(n));
+            self.lens[n] = old.lens[n];
+            self.seen[n] = old.seen[n];
+        }
+    }
+
+    /// Called only once the addition can commit. Move the running processes
+    /// and schedules, but keep each generation's own exec and source strings:
+    /// exec borrows that generation's environment block.
+    pub fn adoptExisting(self: *CommandOutputs, old: *CommandOutputs) void {
+        std.debug.assert(self.commands.len >= old.commands.len);
+        for (old.commands, 0..) |*previous, n| {
+            const next = &self.commands[n];
+            std.mem.swap(status.Command, next, previous);
+            std.mem.swap(?@import("platform").sys.Exec, &next.exec, &previous.exec);
+            std.mem.swap([]const u8, &next.shell_command, &previous.shell_command);
+        }
+    }
+
     /// The first line of command `n`'s latest output, normalized.
     pub fn output(self: *const CommandOutputs, n: usize) []const u8 {
         return self.outputs[n][0..self.lens[n]];

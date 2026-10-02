@@ -14,6 +14,45 @@ pub fn sendText(arena: std.mem.Allocator, io: Io, token: []const u8, text: []con
         try stderr.flush();
         return 1;
     };
+    defer arena.free(frame);
+    return sendFrame(io, frame, stderr);
+}
+
+/// Preflight against a snapshot for useful CLI diagnostics. Send only the
+/// fragment: the running session merges again against its latest config.
+pub fn sendAddition(arena: std.mem.Allocator, io: Io, token: []const u8, prefix: []const u8, text: []const u8, stderr: *Io.Writer) !u8 {
+    const state = @import("session").session_state;
+    const path = @import("platform").environment.get("STATUSBAR_STATE") orelse {
+        try stderr.writeAll("statusbar: --add requires a running statusbar session\n");
+        try stderr.flush();
+        return 2;
+    };
+    const current = state.readConfig(arena, io, path, token, .current) catch |err| {
+        try stderr.print("statusbar: cannot read session config: {t}\n", .{err});
+        try stderr.flush();
+        return 1;
+    };
+    defer arena.free(current);
+    var diag: config.Diagnostic = .{};
+    const merged = @import("model").config_add.merge(arena, current, prefix, text, &diag) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        try stderr.print("statusbar: stdin:{d}: {s}\n", .{ diag.line, diag.message });
+        try stderr.flush();
+        return 2;
+    };
+    defer arena.free(merged);
+    const validation = try validateText(arena, merged, "combined config", stderr);
+    if (validation != 0) return validation;
+    const frame = @import("terminal").config_protocol.encodeAdd(arena, token, prefix, text) catch |err| {
+        try stderr.print("statusbar: cannot encode config addition: {t}\n", .{err});
+        try stderr.flush();
+        return 1;
+    };
+    defer arena.free(frame);
+    return sendFrame(io, frame, stderr);
+}
+
+fn sendFrame(io: Io, frame: []const u8, stderr: *Io.Writer) !u8 {
     const tty = Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .write_only }) catch |err| {
         try stderr.print("statusbar: cannot open /dev/tty: {t}\n", .{err});
         try stderr.flush();

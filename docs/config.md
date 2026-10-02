@@ -125,6 +125,54 @@ contents and never needs access to that file. See
 [config replacement details](usage.md#config-replacement-details) for the size
 limit and [the protocol](osc-3110.md) for its terminal sequence.
 
+## Add to the running config
+
+Use `--add PREFIX` to add a module containing new lines, commands, and colors.
+The [module library](../samples/modules/README.md) has ready-made modules with
+native terminal colors. A module is a config fragment, for example:
+
+```sh
+statusbar config --add extra <<'EOF'
+[line.extra-load]
+text = "#[fg=extra-accent]#(command:extra-load)#[default]"
+
+[command.extra-load]
+run = uptime
+interval = 10
+
+[colors]
+extra-accent = #89b4fa
+EOF
+```
+
+Every new line, command, and color name must start with `PREFIX-` and have a
+nonempty suffix. Prefixes use 1–62 letters, digits, or underscores; the hyphen
+separates the prefix from the rest of the name. Names are used as written,
+with no automatic rewriting. You can add more definitions with the same
+prefix later, provided their names are new.
+
+Fragments may refer to existing commands and colors. A fragment may also
+contain only commands or colors. Global settings, `[push]`, and `[highlight]`
+are not accepted by `--add`; use a complete replacement to change them.
+
+The running session merges each addition against its latest config and
+validates the complete result before applying it. Duplicate line, command,
+or color names, pushed-line name conflicts, invalid config, and size-limit
+failures leave the active config unchanged. New configured lines appear
+after existing configured lines and before pushed lines. Existing line IDs,
+values, statuses, FIFO bindings, command processes, schedules, and cached
+output are preserved. Only new commands start immediately.
+
+`config --print current` includes the added source, including its comments.
+The startup snapshot and saved file stay unchanged; save the current config
+explicitly to reuse it in later sessions. Prefixes group related definitions
+without wrapper markup. There is no group-removal command yet.
+
+Like replacement, sending an addition does not wait for an acknowledgement.
+The CLI checks a snapshot first to report errors; the session checks again
+when applying the request. Inspect `config --print current` afterward. See
+[the protocol](osc-3110.md) for limits and concurrent writes.
+
 ## Syntax
 
 The config is a small INI-like language:

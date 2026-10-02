@@ -1,0 +1,15 @@
+# Module: weather. macOS/Linux; curl, tr; network request to wttr.in.
+# The service guesses location from your IP. Set location to e.g. Athens.
+# Load: statusbar config --add weather < weather.statusbar
+
+[line.weather-current]
+text = " #[fg=colour5]#[track]#(command:weather-current)#[notrack]#(fill: ) "
+
+[command.weather-current]
+run = |
+  location=""
+  command -v curl >/dev/null 2>&1 || { printf 'install curl'; exit; }
+  result=$(curl -fsSL --connect-timeout 3 --max-time 8 --get "https://wttr.in/$location" --data-urlencode 'format=%c %t') || { printf 'unavailable'; exit; }
+  [ -n "$result" ] || { printf 'unavailable'; exit; }
+  printf '%s' "$result" | tr '\r\n' '  '
+interval = 300

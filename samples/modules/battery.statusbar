@@ -1,0 +1,32 @@
+# Module: battery. macOS; pmset, awk. Shows AC power on Macs without a battery.
+# Load: statusbar config --add battery < battery.statusbar
+
+[line.battery-status]
+text = " #[fg=colour5]battery#[default] #(command:battery-status)#[default]#(fill: ) "
+
+[command.battery-status]
+run = |
+  [ "$(uname -s)" = Darwin ] || { printf 'macOS only'; exit; }
+  LC_ALL=C pmset -g batt | awk '
+    function bar(p,c, n,i) {
+      if(p<0)p=0; if(p>100)p=100
+      n=int(p/10)
+      printf "\033[%dm",c
+      for(i=0;i<n;i++)printf "━"
+      if(n<10 && p>n*10){printf "╸"; n++}
+      printf "\033[90m"
+      for(i=n;i<10;i++)printf "─"
+      printf "\033[0m"
+    }
+    /AC Power/ {ac=1}
+    /[0-9]+%/ {
+      value=$0; sub(/%.*/,"",value); sub(/^.*[[:space:]]/,"",value)
+      if(value !~ /^[0-9]+$/)next
+      p=value+0; state=ac ? "AC" : "BAT"
+      if(/discharging/)state="↓ BAT"
+      else if(/charging/)state="↑ AC"
+      bar(p,ac ? 32 : p<=15 ? 31 : p<=30 ? 33 : 32)
+      printf " %3d%% \033[90m%s\033[0m",p,state; found=1
+    }
+    END {if(!found)printf "%s",(ac ? "AC" : "?")}'
+interval = 30

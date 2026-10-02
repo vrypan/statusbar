@@ -56,6 +56,15 @@ Locate bundled themes:
 
 ## 2. Draft the theme
 
+The bundled module library provides individual features with native colors.
+Find it beside the themes directory (`share/statusbar/modules` for installed
+builds, or `modules/` in release archives). Read its `README.md` for platforms
+and dependencies. Add selected modules with `statusbar config --add PREFIX`
+or incorporate their prefixed definitions into a draft config. Keep each
+module's command interval and full names. Modules are separate from complete
+themes: add them with `--add`, then save `config --print current` to retain the
+assembled layout. Do not load optional network modules unless requested.
+
 Create a draft in a user-owned directory, for example
 `~/.config/statusbar/themes/my-theme.statusbar`, creating its parent if needed.
 Copy a suitable bundled theme or use `statusbar config --default` as a

@@ -217,9 +217,10 @@ pub const Proxy = struct {
     palette_deadline_ms: ?i64 = null,
     /// An authenticated config request that arrived while the child held a
     /// saved cursor, waiting for the same pause a paint waits for. Only the
-    /// newest one is kept.
-    held_config: [config_protocol.max_config]u8 = undefined,
+    /// newest replacement is kept; additions accumulate against it.
+    held_config: [config.max_config]u8 = undefined,
     held_config_len: ?usize = null,
+    held_config_additive: bool = false,
     /// Set once the child has been reaped, which ends the session even while
     /// background jobs still hold the pty open.
     child_status: ?sys.Wait = null,

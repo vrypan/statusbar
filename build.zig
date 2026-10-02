@@ -19,14 +19,14 @@ const layer_imports = [_]struct { Layer, []const Layer }{
 
 const Layers = std.enums.EnumArray(Layer, *std.Build.Module);
 
-/// Every shipped config, embedded for the model's parser tests. Themes are
-/// discovered from the directory so a new one is always covered.
+/// Every shipped config and module, discovered so new library entries are
+/// automatically covered by the model's parser and composition tests.
 fn shippedConfigs(b: *std.Build) *std.Build.Module {
     const io = b.graph.io;
     const files = b.addWriteFiles();
     var index: std.ArrayList(u8) = .empty;
-    index.appendSlice(b.allocator, "pub const Config = struct { name: []const u8, text: []const u8 };\npub const all = [_]Config{\n") catch @panic("OOM");
-    for ([_][]const u8{ "samples", "samples/themes" }) |directory| {
+    index.appendSlice(b.allocator, "pub const Config = struct { name: []const u8, text: []const u8, prefix: ?[]const u8 = null };\npub const all = [_]Config{\n") catch @panic("OOM");
+    for ([_][]const u8{ "samples", "samples/themes", "samples/modules" }) |directory| {
         var dir = b.build_root.handle.openDir(io, directory, .{ .iterate = true }) catch @panic("cannot open shipped config directory");
         defer dir.close(io);
         var it = dir.iterate();
@@ -35,7 +35,8 @@ fn shippedConfigs(b: *std.Build) *std.Build.Module {
             const path = b.fmt("{s}/{s}", .{ directory, entry.name });
             const copy = b.fmt("{s}", .{path});
             _ = files.addCopyFile(b.path(path), copy);
-            index.print(b.allocator, "    .{{ .name = \"{s}\", .text = @embedFile(\"{s}\") }},\n", .{ path, copy }) catch @panic("OOM");
+            const prefix = if (std.mem.eql(u8, directory, "samples/modules")) b.fmt(", .prefix = \"{s}\"", .{std.fs.path.stem(entry.name)}) else "";
+            index.print(b.allocator, "    .{{ .name = \"{s}\", .text = @embedFile(\"{s}\"){s} }},\n", .{ path, copy, prefix }) catch @panic("OOM");
         }
     }
     index.appendSlice(b.allocator, "};\n") catch @panic("OOM");
@@ -92,6 +93,13 @@ pub fn build(b: *std.Build) void {
         .install_dir = .prefix,
         .install_subdir = themes_dir,
         .include_extensions = &.{".statusbar"},
+    });
+    const modules_dir = b.option([]const u8, "modules-dir", "Module library directory relative to the install prefix") orelse "share/statusbar/modules";
+    b.installDirectory(.{
+        .source_dir = b.path("samples/modules"),
+        .install_dir = .prefix,
+        .install_subdir = modules_dir,
+        .include_extensions = &.{ ".statusbar", ".md" },
     });
     const guide_dir = b.option([]const u8, "guide-dir", "Agent guide directory relative to the install prefix") orelse "share/statusbar";
     b.installFile("AGENT_SETUP.md", b.pathJoin(&.{ guide_dir, "AGENT_SETUP.md" }));

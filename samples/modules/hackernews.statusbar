@@ -1,0 +1,18 @@
+# Module: hackernews. macOS/Linux; curl, jq; network access to Hacker News.
+# The title links to the discussion in terminals supporting OSC 8.
+# Load: statusbar config --add hackernews < hackernews.statusbar
+
+[line.hackernews-top]
+text = " #[fg=colour3]HN#[default] #[track]#(command:hackernews-top)#[notrack]#(fill: ) "
+
+[command.hackernews-top]
+run = |
+  command -v curl >/dev/null 2>&1 || { printf 'install curl'; exit; }
+  command -v jq >/dev/null 2>&1 || { printf 'install jq'; exit; }
+  stories=$(curl -fsSL --connect-timeout 3 --max-time 8 https://hacker-news.firebaseio.com/v0/topstories.json) || { printf 'unavailable'; exit; }
+  id=$(printf '%s' "$stories" | jq -er '.[0] | numbers') || { printf 'unavailable'; exit; }
+  case $id in ''|*[!0-9]*) printf 'unavailable'; exit;; esac
+  item=$(curl -fsSL --connect-timeout 3 --max-time 8 "https://hacker-news.firebaseio.com/v0/item/$id.json") || { printf 'unavailable'; exit; }
+  title=$(printf '%s' "$item" | jq -er '.title | strings | gsub("[[:cntrl:]]"; " ") | .[0:80] | select(length>0)') || { printf 'unavailable'; exit; }
+  printf '\033]8;;https://news.ycombinator.com/item?id=%s\033\\%s\033]8;;\033\\' "$id" "$title"
+interval = 60

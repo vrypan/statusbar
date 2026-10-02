@@ -57,8 +57,8 @@ jobs:
       - name: Check source
         run: make check
 
-      - name: Install integration shells
-        run: sudo apt-get update && sudo apt-get install -y zsh fish
+      - name: Install integration dependencies
+        run: sudo apt-get update && sudo apt-get install -y zsh fish jq
 
       - name: Check native terminal integration
         run: make test-integration

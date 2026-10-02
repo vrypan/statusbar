@@ -22,6 +22,7 @@ test:
 test-integration: build
 	python3 -u tests/multirow_pty.py ./zig-out/bin/statusbar
 	python3 -u tests/theme_picker_pty.py ./zig-out/bin/statusbar-theme ./zig-out/bin/statusbar
+	python3 -u tests/modules.py ./zig-out/bin/statusbar
 
 fmt-check:
 	$(ZIG) fmt --check src build.zig build.zig.zon
@@ -32,7 +33,7 @@ all: $(TARGETS)
 
 $(TARGETS):
 	@echo "==> $@"
-	$(ZIG) build -Dtarget=$@ -Doptimize=$(OPTIMIZE) -Dthemes-dir=themes -Dguide-dir=. --prefix $(DIST)/statusbar-$(VERSION)-$@
+	$(ZIG) build -Dtarget=$@ -Doptimize=$(OPTIMIZE) -Dthemes-dir=themes -Dmodules-dir=modules -Dguide-dir=. --prefix $(DIST)/statusbar-$(VERSION)-$@
 
 package: all
 	@for target in $(TARGETS); do \
@@ -43,6 +44,9 @@ package: all
 		cmp AGENT_SETUP.md "$$dir/AGENT_SETUP.md" || exit 1; \
 		for theme in samples/themes/*.statusbar; do \
 			cmp "$$theme" "$$dir/themes/$${theme##*/}" || exit 1; \
+		done; \
+		for module in samples/modules/*.statusbar samples/modules/README.md; do \
+			cmp "$$module" "$$dir/modules/$${module##*/}" || exit 1; \
 		done; \
 		COPYFILE_DISABLE=1 tar -czf "$(DIST)/$$root.tar.gz" -C "$(DIST)" "$$root" || exit 1; \
 		echo "$(DIST)/$$root.tar.gz"; \

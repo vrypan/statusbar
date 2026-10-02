@@ -1,5 +1,9 @@
 # Theme alternatives
 
+To add individual features to a theme, use the [module library](../modules/README.md).
+Modules extract the host, load, clock, weather, news, notifications, and
+resource displays into reusable files with terminal-native colors.
+
 Each layout has an original version with fixed RGB colors and a `-native`
 version that uses the terminal's palette. Native versions keep the same
 commands, refresh intervals, and lines.

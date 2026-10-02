@@ -8,6 +8,10 @@ order they were added.
 
 - Add `list [--pushed] [--short] [--json]` to inspect session lines, including hidden
   lines, with stable IDs, statuses, raw override values and bound FIFO paths
+- Add `config --add PREFIX` for atomic additions of prefixed lines, commands,
+  and colors, preserving existing line state and running commands
+- Bundle a library of ten modules using terminal-native colors, with setup
+  instructions, platform requirements, and checks for theme composition
 
 ## v0.5.1
 

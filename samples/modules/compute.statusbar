@@ -1,0 +1,41 @@
+# Module: compute. macOS; top, sysctl, awk. CPU samples one second; memory is rounded used RAM.
+# Load: statusbar config --add compute < compute.statusbar
+
+[line.compute-status]
+text = " #(command:compute-status)#[default]#(fill: ) "
+
+[command.compute-status]
+run = |
+  [ "$(uname -s)" = Darwin ] || { printf 'macOS only'; exit; }
+  LC_ALL=C; export LC_ALL
+  total=$(sysctl -n hw.memsize) || { printf 'cpu ?   mem ?'; exit; }
+  top -l 2 -s 1 -n 0 | awk -v total="$total" '
+    function bar(p,c, n,i) {
+      if(p<0)p=0; if(p>100)p=100
+      n=int(p/10)
+      printf "\033[%dm",c
+      for(i=0;i<n;i++)printf "━"
+      if(n<10 && p>n*10){printf "╸"; n++}
+      printf "\033[90m"
+      for(i=n;i<10;i++)printf "─"
+      printf "\033[0m"
+    }
+    /^CPU usage:/ {cpu=$3+$5; samples++}
+    /^PhysMem:/ {
+      unit=$2; value=$2+0
+      if(unit ~ /G$/)used=value*1073741824
+      else if(unit ~ /M$/)used=value*1048576
+      else if(unit ~ /K$/)used=value*1024
+      else if(unit ~ /B$/)used=value
+    }
+    END {
+      printf "\033[35mcpu\033[0m "
+      if(samples>=2){bar(cpu,cpu>=90 ? 31 : cpu>=70 ? 33 : 32); printf " %3.0f%%",cpu}
+      else printf "?"
+      printf "   \033[35mmem\033[0m "
+      if(used>0 && total>0){
+        p=100*used/total; bar(p,p>=90 ? 31 : p>=75 ? 33 : 32)
+        printf " %4.1f/%.0fG",used/1073741824,total/1073741824
+      }else printf "?"
+    }'
+interval = 5

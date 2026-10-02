@@ -1,0 +1,33 @@
+# Module: network. macOS; route, netstat, awk. Samples the default IPv4 interface for one second.
+# Load: statusbar config --add network < network.statusbar
+
+[line.network-status]
+text = " #[fg=colour5]net#[default] #(command:network-status)#[default]#(fill: ) "
+
+[command.network-status]
+run = |
+  [ "$(uname -s)" = Darwin ] || { printf 'macOS only'; exit; }
+  LC_ALL=C; export LC_ALL
+  iface=$(route -n get default 2>/dev/null | awk '/interface:/ {print $2; exit}')
+  [ -n "$iface" ] || { printf '\033[33mno route\033[0m'; exit; }
+  counters() {
+    netstat -ibn -I "$iface" | awk -v iface="$iface" '
+      $1==iface && $3 ~ /^<Link#/ {print $(NF-4),$(NF-1); exit}'
+  }
+  first=$(counters)
+  sleep 1
+  second=$(counters)
+  printf '%s\n%s\n' "$first" "$second" | awk -v iface="$iface" '
+    function rate(n) {
+      if(n>=1048576)return sprintf("%5.1f MiB/s",n/1048576)
+      return sprintf("%5.0f KiB/s",n/1024)
+    }
+    NF==2 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {
+      if(NR==1){rx=$1; tx=$2; valid=1}
+      else if(valid && $1>=rx && $2>=tx){
+        printf "\033[90m↓\033[0m %s \033[90m↑\033[0m %s \033[90m%s\033[0m",rate($1-rx),rate($2-tx),iface
+        found=1
+      }
+    }
+    END {if(!found)printf "? %s",iface}'
+interval = 5

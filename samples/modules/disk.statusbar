@@ -1,0 +1,28 @@
+# Module: disk. macOS/Linux; df and awk. Set volume to monitor another path.
+# Load: statusbar config --add disk < disk.statusbar
+
+[line.disk-usage]
+text = " #[fg=colour5]disk#[default] #(command:disk-usage)#[default]#(fill: ) "
+
+[command.disk-usage]
+run = |
+  volume=""
+  if [ -z "$volume" ]; then
+    if [ -d /System/Volumes/Data ]; then volume=/System/Volumes/Data; else volume=/; fi
+  fi
+  LC_ALL=C df -Pk "$volume" | awk '
+    function bar(p,c, n,i) {
+      if(p<0)p=0; if(p>100)p=100
+      n=int(p/10); printf "\033[%dm",c
+      for(i=0;i<n;i++)printf "━"
+      if(n<10 && p>n*10){printf "╸"; n++}
+      printf "\033[90m"
+      for(i=n;i<10;i++)printf "─"
+      printf "\033[0m"
+    }
+    NR==2 && $5 ~ /^[0-9]+%$/ {
+      p=$5+0; bar(p,p>=90 ? 31 : p>=80 ? 33 : 32)
+      printf " %3d%%",p; found=1
+    }
+    END {if(!found)printf "unavailable"}'
+interval = 60
