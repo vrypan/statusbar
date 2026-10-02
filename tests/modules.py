@@ -102,7 +102,9 @@ def main():
     files = sorted(MODULES.glob('*.statusbar'))
     assert len(files) == 11
     for path in files:
-        assert '[line.<module>.' in path.read_text(), path
+        assert f'[line.{path.stem}.' in path.read_text(), path
+        assert '<module>' not in path.read_text(), path
+        subprocess.run([binary, 'config', '--check', str(path)], check=True, capture_output=True)
         command = command_text(path)
         if command:
             subprocess.run(['/bin/sh', '-n'], input=command, text=True, check=True, capture_output=True)
@@ -190,7 +192,7 @@ def main():
 import json, pathlib
 library = pathlib.Path(sys.argv[2])
 for path in sorted(library.glob('*.statusbar')):
-    run('config', '--add', 'custom_' + path.stem, input=path.read_bytes())
+    run('config', '--add', path.stem, input=path.read_bytes())
     settle()
 deadline = time.monotonic() + 5
 while True:
@@ -198,26 +200,37 @@ while True:
     if len(lines) == len(list(library.glob('*.statusbar'))) + 1 or time.monotonic() >= deadline: break
     time.sleep(.05)
 assert len(lines) == len(list(library.glob('*.statusbar'))) + 1 and all(line['visible'] for line in lines), lines
-assert all(line['name'].startswith('custom_') for line in lines[1:]), lines
-run('config', '--add', 'second_clock', input=(library / 'clock.statusbar').read_bytes())
-deadline = time.monotonic() + 5
-while 'second_clock.time' not in run('config', '--print'):
-    assert time.monotonic() < deadline
-    time.sleep(.05)
+assert {line['name'].split('.')[0] for line in lines[1:]} == {path.stem for path in library.glob('*.statusbar')}, lines
 snapshot = run('config', '--print')
 assert '<module>' not in snapshot, snapshot
-run('config', '--add', 'second_clock', input=(library / 'clock.statusbar').read_bytes(), code=2)
+run('config', '--add', 'clock', input=(library / 'clock.statusbar').read_bytes(), code=2)
+run('config', '--add', 'other', input=(library / 'clock.statusbar').read_bytes(), code=2)
+assert run('config', '--print') == snapshot
 time.sleep(2)
+for line in lines[1:]:
+    name = line['name']
+    mark('OVERRIDE_START_' + name)
+    run('set', name, 'OVERRIDE_' + name)
+    mark('OVERRIDE_SET_' + name)
+    run('set', name, '--reset')
+    mark('OVERRIDE_RESET_' + name)
 mark('MODULE_LIBRARY_OK')
 '''
         code, data = terminal.run_session(binary, '[line.base]\ntext = MODULES\n', child,
                                           str(MODULES), env=env, timeout=20)
         assert code == 0 and b'MODULE_LIBRARY_OK' in data, data[-5000:]
         visible = terminal.plain(data)
+        for path in files:
+            name = re.search(r'^\[line\.(.+)\]$', path.read_text(), re.M)[1]
+            before = ('OVERRIDE_START_' + name).encode()
+            after = ('OVERRIDE_SET_' + name).encode()
+            reset = ('OVERRIDE_RESET_' + name).encode()
+            assert ('OVERRIDE_' + name).encode() in terminal.between(visible, before, after)
+            assert ('OVERRIDE_' + name).encode() not in terminal.between(visible, after, reset)
         for expected in (b'alice@laptop', b'0.25  1.50', b'95%', b'12.0/16G', '+24°C'.encode(),
                          b'A useful headline', b'2 unread', b'KiB/s', b'7.7B'):
             assert expected in visible, (expected, visible[-5000:])
-        print('modules: custom import prefixes, repeated instances and resolved snapshots render correctly')
+        print('modules: static names, duplicate rejection and saved snapshots render correctly')
 
 
 if __name__ == '__main__':

@@ -4,10 +4,11 @@
 # Account usage: 7-day quota, reset countdown, credits, reset credits, lifetime tokens.
 # Quota colors: green below 75%, yellow from 75%, red from 90%.
 
-[line.<module>.usage]
-text = " #[fg=colour5]codex#[default] #(command:<module>.usage)#[default]#(fill: ) "
+[line.codex.usage]
+default = " #[fg=colour5]codex#[default] #(command:codex.usage)#[default]#(fill: ) "
+text = "#(value)"
 
-[command.<module>.usage]
+[command.codex.usage]
 run = |
   # One snapshot supplies all fields; ANSI colors use the terminal palette.
   codex_usage=${CODEX_USAGE_BIN:-codex-usage}

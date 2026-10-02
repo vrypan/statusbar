@@ -2,10 +2,11 @@
 # The title links to the discussion in terminals supporting OSC 8.
 # Load: statusbar config --add hackernews < hackernews.statusbar
 
-[line.<module>.top]
-text = " #[fg=colour3]HN#[default] #[track]#(command:<module>.top)#[notrack]#(fill: ) "
+[line.hackernews.top]
+default = " #[fg=colour3]HN#[default] #[track]#(command:hackernews.top)#[notrack]#(fill: ) "
+text = "#(value)"
 
-[command.<module>.top]
+[command.hackernews.top]
 run = |
   command -v curl >/dev/null 2>&1 || { printf 'install curl'; exit; }
   command -v jq >/dev/null 2>&1 || { printf 'install jq'; exit; }

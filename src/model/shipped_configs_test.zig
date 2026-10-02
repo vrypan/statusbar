@@ -30,13 +30,13 @@ test "every library module composes with every shipped config and other modules"
             var diag: config.Diagnostic = .{};
             // Check independence as well as composition: a module must not
             // accidentally depend on a module earlier in this directory.
-            const standalone = try add.merge(std.testing.allocator, "[line.base]\n", "custom", entry.text, &diag);
+            const standalone = try add.merge(std.testing.allocator, "[line.base]\n", prefix, entry.text, &diag);
             defer std.testing.allocator.free(standalone);
             var isolated = config.parse(std.testing.allocator, standalone, &diag) catch |err| {
                 std.debug.print("{s}:{d}: {s}\n", .{ entry.name, diag.line, diag.message });
                 return err;
             };
-            try std.testing.expect(std.mem.startsWith(u8, isolated.lines[1].name, "custom."));
+            try std.testing.expect(@import("shared").config_prefix.contains(prefix, isolated.lines[1].name));
             isolated.deinit();
             const combined = try add.merge(std.testing.allocator, current, prefix, entry.text, &diag);
             errdefer std.testing.allocator.free(combined);

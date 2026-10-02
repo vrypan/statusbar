@@ -1,10 +1,11 @@
 # Module: host. macOS/Linux; whoami and hostname.
 # Load: statusbar config --add host < host.statusbar
 
-[line.<module>.identity]
-text = " #[fg=colour5]host#[default] #[fg=colour4,bold]#(command:<module>.identity)#[default]#(fill: ) "
+[line.host.identity]
+default = " #[fg=colour5]host#[default] #[fg=colour4,bold]#(command:host.identity)#[default]#(fill: ) "
+text = "#(value)"
 
-[command.<module>.identity]
+[command.host.identity]
 run = |
   user=$(whoami) && host=$(hostname -s) || { printf 'unavailable'; exit; }
   printf '%s@%s' "$user" "$host"

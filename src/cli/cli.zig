@@ -238,7 +238,7 @@ const commands = [_]zecli.CommandSpec{
         \\--add PREFIX adds a fragment instead. New line, command and color names
         \\must start with PREFIX.; existing names and global settings are rejected.
         \\Prefixes use 1-62 letters, digits or underscores (no hyphens).
-        \\Use <module> in a module for the import prefix; <<module>> stays literal.
+        \\Names are defined in the source; --add checks the prefix without renaming.
         \\
         \\Printing startup or current requires a running session. Both preserve
         \\the config text and exclude values and statuses set at runtime.

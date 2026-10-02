@@ -1,8 +1,8 @@
 # Module library
 
 Modules add a small feature to your running statusbar. Each file contains one
-line and its commands, using `<module>` for the prefix you choose when
-importing. Load a module with `statusbar config --add NAME`.
+line and its commands with static names such as `disk.usage`. Load a module
+with `statusbar config --add NAME`, using its existing prefix.
 
 All modules use the terminal's native palette, keep the theme's background,
 and use ordinary Unicode. They need no Nerd Font. Labels use palette magenta
@@ -61,23 +61,30 @@ modules_dir="$(brew --prefix statusbar)/share/statusbar/modules"
 statusbar config --add disk < "$modules_dir/disk.statusbar"
 ```
 
-Choose any valid prefix. For example, load two copies of the clock:
-
-```sh
-statusbar config --add clock < samples/modules/clock.statusbar
-statusbar config --add second < samples/modules/clock.statusbar
-```
-
-The resulting lines are `clock-time` and `second-time`. Each uses the local
-clock; edit a copy to change its format. New lines appear in import order,
-above pushed lines. Importing the same module again with the same prefix
-fails because its definitions already exist. After import, references use
-resolved names, such as `#(command:disk-usage)`.
+Use the module's declared prefix: `--add disk` for `disk.usage`, for example.
+New lines appear in import order, above pushed lines. Importing the same
+module again fails because its definitions already exist. References are
+written explicitly in the file, such as `#(command:disk.usage)`.
+To create another instance, copy the file and change its names and references
+together before importing it under the new prefix.
 
 `config --add` checks and sends the module; the session checks it again before
 applying it. Inspect the bar and `statusbar config --print current` afterward.
 
 ## Customize and save
+
+Each bundled line renders `#(value)`, with its normal display in `default`.
+Override a line temporarily and restore its live display with:
+
+```sh
+statusbar set codex.usage "HELLO"
+statusbar set codex.usage --reset
+```
+
+An explicitly empty value hides the content until reset. FIFO input also
+overrides the display. After editing a module already loaded in a session,
+update its definitions in `config --print current` and reload the complete
+config; `--add` rejects definitions that already exist.
 
 Copy a module into your own directory before editing it; installed copies may
 be replaced by upgrades. Its header lists an example import and requirements.
@@ -129,29 +136,29 @@ limits how many rows can be visible.
 
 ## Write a module
 
-A module is a `.statusbar` template containing `[line.NAME]`, `[command.NAME]`,
-and optionally `[colors]`. Prefix each new name with `<module>.`, and use the
-same placeholder in its references:
+A module is a `.statusbar` fragment containing `[line.NAME]`, `[command.NAME]`,
+and optionally `[colors]`. Choose a static prefix such as `host.`, and use it
+in definitions and references:
 
 ```ini
-[line.<module>.summary]
-text = "#[fg=<module>.accent]#(command:<module>.fetch)#[default]"
+[line.host.summary]
+default = "#[fg=host.accent]#(command:host.fetch)#[default]"
+text = "#(value)"
 
-[command.<module>.fetch]
+[command.host.fetch]
 run = hostname -s
 interval = 3600
 
 [colors]
-<module>.accent = colour4
+host.accent = colour4
 ```
 
-Import with `--add host` to define `host.summary`, `host.fetch`, and
-`host.accent`. Expansion happens once throughout the incoming module, including
-command scripts and comments. `<<module>>` keeps a literal `<module>`.
-Fixed names are also accepted if they match the import prefix. Snapshots from
-`config --print current` contain resolved names and can be saved, checked with
-`--check`, and loaded as complete configs. Raw module templates must be
-imported with `--add` before they can be used as a complete config.
+Import with `--add host`; the source defines `host.summary`, `host.fetch`,
+and `host.accent`. The import checks that prefix and preserves the source as
+written. There are no import-time placeholders. Snapshots from
+`config --print current` can be saved, checked with `--check`, and loaded as
+complete configs. Each bundled module can also be checked directly with
+`statusbar config --check samples/modules/host.statusbar`.
 
 Module prefixes use letters, digits, and underscores. Set command intervals
 explicitly, use `colour0`–`colour15` or terminal color names, and finish styles

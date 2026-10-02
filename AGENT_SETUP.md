@@ -60,8 +60,8 @@ The bundled module library provides individual features with native colors.
 Find it beside the themes directory (`share/statusbar/modules` for installed
 builds, or `modules/` in release archives). Read its `README.md` for platforms
 and dependencies. Add selected modules with `statusbar config --add PREFIX`
-or resolve `<module>` to a chosen prefix when incorporating their definitions
-into a draft config. Keep each module's command interval and resolved names.
+or copy their definitions into a draft config. Modules use static names such
+as `disk.usage`; keep their names, references and command intervals together.
 Modules are separate from complete
 themes: add them with `--add`, then save `config --print current` to retain the
 assembled layout. Do not load optional network modules unless requested.

@@ -6,6 +6,8 @@ order they were added.
 
 ## Unreleased
 
+- Make bundled module displays defaults, so `set` and FIFO values override
+  them and `set --reset` restores their live content
 - Use `module.name` for module lines, commands and colors; update `config --add`,
   prefix grouping and the module library, and support dotted line names in
   `set`, `push` and FIFO bindings
@@ -17,8 +19,8 @@ order they were added.
   and colors, preserving existing line state and running commands
 - Bundle a library of ten modules using terminal-native colors, with setup
   instructions, platform requirements, and checks for theme composition
-- Resolve `<module>` to the prefix supplied to `config --add`, so module
-  files support custom names and multiple instances; `<<module>>` stays literal
+- Use static names in module sources; imports preserve source text without
+  placeholder substitution, and `--add` checks the declared prefix
 
 ## v0.5.1
 

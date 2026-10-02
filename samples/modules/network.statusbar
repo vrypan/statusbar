@@ -1,10 +1,11 @@
 # Module: network. macOS; route, netstat, awk. Samples the default IPv4 interface for one second.
 # Load: statusbar config --add network < network.statusbar
 
-[line.<module>.status]
-text = " #[fg=colour5]net#[default] #(command:<module>.status)#[default]#(fill: ) "
+[line.network.status]
+default = " #[fg=colour5]net#[default] #(command:network.status)#[default]#(fill: ) "
+text = "#(value)"
 
-[command.<module>.status]
+[command.network.status]
 run = |
   [ "$(uname -s)" = Darwin ] || { printf 'macOS only'; exit; }
   LC_ALL=C; export LC_ALL

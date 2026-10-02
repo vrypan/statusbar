@@ -2087,18 +2087,19 @@ with tempfile.TemporaryDirectory() as folder:
     assert after['lines'][-2] == before['lines'][-1], (before, after)
     assert [line['name'] for line in after['lines']] == [
         'base', 'work.summary', 'one.row', 'two.row', 'three.row', 'job', 'clash.row'], after
-    # Import-time expansion resolves names, references, command text, and
-    # colors. Escaped markers stay literal even across later additions.
-    module = ('[line.<module>.row]\ntext = #[fg=<module>.accent]#(command:<module>.fetch)\n'
-              '[command.<module>.fetch]\nrun = printf "%s" "<module> <<module>>"\ninterval = 60\n'
-              '[colors]\n<module>.accent = blue\n')
+    # Static names and references are preserved; marker-like text in
+    # scripts and comments is ordinary source text.
+    module = ('# <module> <<module>>\n[line.alpha.row]\ntext = #[fg=alpha.accent]#(command:alpha.fetch)\n'
+              '[command.alpha.fetch]\nrun = printf "%s" "literal <module> <<module>>"\ninterval = 60\n'
+              '[colors]\nalpha.accent = blue\n')
     run('config', '--add', 'alpha', input=module.encode())
     wait_for(lambda: '[line.alpha.row]' in current())
-    os.write(1, frame('beta', module))
-    wait_for(lambda: '[line.beta.row]' in current())
     snapshot = current()
-    assert 'fg=alpha.accent' in snapshot and 'fg=beta.accent' in snapshot
-    assert '"alpha <module>"' in snapshot and '"beta <module>"' in snapshot
+    assert module.rstrip('\n') in snapshot  # run() strips trailing output whitespace.
+    run('config', '--add', 'beta', input=module.encode(), code=2)
+    os.write(1, frame('beta', module))
+    settle()
+    assert current() == snapshot
     run('config', '--add', 'alpha', input=module.encode(), code=2)
     assert current() == snapshot
     # Dotted names work through the line protocol and as FIFO basenames.
@@ -2119,12 +2120,9 @@ with tempfile.TemporaryDirectory() as folder:
     job_pipe = run('bind', 'tasks.build')
     run('pop', 'tasks.build')
     assert not os.path.exists(job_pipe)
-    # A complete replacement reads the resolved snapshot literally.
+    # A complete replacement reads the saved snapshot literally.
     run('config', input=snapshot.encode())
     settle()
-    assert current() == snapshot
-    too_large = ('[line.<module>.overflow]\n# ' + '<module>' * 1100).encode()
-    run('config', '--add', 'a' * 62, input=too_large, code=2)
     assert current() == snapshot
     run('set', '1', 'still-kept')
     # Accumulated configs can exceed the single-message limit. The parser's
@@ -2143,7 +2141,7 @@ with tempfile.TemporaryDirectory() as folder:
     assert code == 0 and b'CONFIG_ADD_OK' in data, data[-5000:]
     visible = plain(data)
     assert b'WORK_DONE SHARED' in visible and b'BASE[still-kept|success]' in visible, visible[-5000:]
-    assert b'alpha <module>' in visible and b'beta <module>' in visible, visible[-5000:]
+    assert b'literal <module> <<module>>' in visible, visible[-5000:]
     print('config --add validates prefixes, merges atomically, keeps running commands and line state')
 
 

@@ -94,8 +94,8 @@ to your current theme:
 statusbar config --add disk < samples/modules/disk.statusbar
 ```
 
-Module files use `<module>` for the import prefix. Choose another name with
-`--add` to load another instance without editing its definitions.
+Module files define static names such as `disk.usage`. The name passed to
+`--add` must match their prefix; imports preserve the source text.
 
 Builds install the library under `share/statusbar/modules`; release archives
 include a `modules/` directory. The library guide lists requirements,

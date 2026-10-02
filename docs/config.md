@@ -130,8 +130,8 @@ The report does not execute commands or change the session.
 
 Module names use a dot separator: `codex.usage` belongs to `codex`.
 Older hyphenated names remain valid ordinary names and are listed as unprefixed.
-To import an older module with `--add`, change `<module>-` to `<module>.` in
-its definitions and references.
+To update an older module, write its static prefix in every definition and
+reference, for example `disk.usage`. Import-time placeholders are not supported.
 
 This inspects configuration definitions. Use `statusbar list` for live line
 values, statuses, pushed jobs and FIFO bindings. Use `config --print` to retrieve
@@ -173,33 +173,30 @@ native terminal colors. A module is a config fragment, for example:
 
 ```sh
 statusbar config --add extra <<'EOF'
-[line.<module>.load]
-text = "#[fg=<module>.accent]#(command:<module>.load)#[default]"
+[line.extra.load]
+text = "#[fg=extra.accent]#(command:extra.load)#[default]"
 
-[command.<module>.load]
+[command.extra.load]
 run = uptime
 interval = 10
 
 [colors]
-<module>.accent = colour4
+extra.accent = colour4
 EOF
 ```
 
 Every new line, command, and color name must start with `PREFIX.` and have a
 nonempty suffix. Prefixes use 1–62 letters, digits, or underscores; the dot
-separates the prefix from the rest of the name. `<module>` expands to the
-prefix supplied to `--add`, so the example above defines `extra.load` and
-`extra.accent`. Import the same file with another prefix to create a separate
-instance. Fully written names such as `extra.load` remain supported and must
-match the supplied prefix. You can add more definitions with the same prefix
-later, provided their names are new.
+separates the prefix from the rest of the name. Names are defined explicitly
+in the source: the example defines `extra.load` and `extra.accent`.
+`--add extra` checks that prefix; it does not rename or substitute anything.
+You can add more definitions with the same prefix later, provided their names
+are new. To create a second instance, copy the module and change its names
+and references together.
 
-Expansion happens once across the incoming module's text, including section
-names, references, colors, command scripts, and comments. Write `<<module>>`
-to keep a literal `<module>`. The expanded text must fit the combined config's
-64 KiB limit. The existing config is not expanded again. Ordinary config
-loading and `--check` do not expand placeholders; use them on a resolved
-snapshot from `config --print current`.
+The source text is preserved, including command scripts and comments. The
+combined config must fit the 64 KiB limit. Modules that contain a line and
+all their dependencies can also be checked directly with `config --check`.
 
 Fragments may refer to existing commands and colors. A fragment may also
 contain only commands or colors. Global settings, `[push]`, and `[highlight]`
@@ -213,7 +210,7 @@ after existing configured lines and before pushed lines. Existing line IDs,
 values, statuses, FIFO bindings, command processes, schedules, and cached
 output are preserved. Only new commands start immediately.
 
-`config --print current` includes the expanded source, including its comments.
+`config --print current` includes the added source, including its comments.
 The startup snapshot and saved file stay unchanged; save the current config
 explicitly to reuse it in later sessions. Prefixes group related definitions
 without wrapper markup. There is no group-removal command yet.
