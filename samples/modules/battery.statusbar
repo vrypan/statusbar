@@ -1,10 +1,10 @@
 # Module: battery. macOS; pmset, awk. Shows AC power on Macs without a battery.
 # Load: statusbar config --add battery < battery.statusbar
 
-[line.<module>-status]
-text = " #[fg=colour5]battery#[default] #(command:<module>-status)#[default]#(fill: ) "
+[line.<module>.status]
+text = " #[fg=colour5]battery#[default] #(command:<module>.status)#[default]#(fill: ) "
 
-[command.<module>-status]
+[command.<module>.status]
 run = |
   [ "$(uname -s)" = Darwin ] || { printf 'macOS only'; exit; }
   LC_ALL=C pmset -g batt | awk '

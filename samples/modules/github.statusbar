@@ -2,10 +2,10 @@
 # Displays up to 100 unread notifications; the title opens your inbox.
 # Load: statusbar config --add github < github.statusbar
 
-[line.<module>-notifications]
-text = " #[fg=colour4]GitHub#[default] #[track]#(command:<module>-notifications)#[notrack]#(fill: ) "
+[line.<module>.notifications]
+text = " #[fg=colour4]GitHub#[default] #[track]#(command:<module>.notifications)#[notrack]#(fill: ) "
 
-[command.<module>-notifications]
+[command.<module>.notifications]
 run = |
   command -v gh >/dev/null 2>&1 || { printf 'install gh'; exit; }
   command -v jq >/dev/null 2>&1 || { printf 'install jq'; exit; }

@@ -6,6 +6,9 @@ order they were added.
 
 ## Unreleased
 
+- Use `module.name` for module lines, commands and colors; update `config --add`,
+  prefix grouping and the module library, and support dotted line names in
+  `set`, `push` and FIFO bindings
 - Add `config --list [current|startup|default]` to list configured line
   and command names grouped by module prefix
 - Add `list [--pushed] [--short] [--json]` to inspect session lines, including hidden

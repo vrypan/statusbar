@@ -100,7 +100,7 @@ interval = 60
 Keep these rules in mind:
 
 - **Layout:** each `[line.NAME]` adds a line, in declaration order. Names use
-  letters, digits, `_` and `-` and are not only digits. `text` is the
+  letters, digits, `_`, `-` and `.` and are not only digits. `text` is the
   template: text before `#(fill:PATTERN)` is left-aligned, text after it
   right-aligned, and a template that is only a fill draws a rule. The right
   side clips first on narrow terminals (`keep = right` reverses that). Give

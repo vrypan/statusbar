@@ -10,7 +10,7 @@
 //!     1|TOKEN|X|TARGET                 remove a FIFO binding
 //!     1|TOKEN|L                        publish a line snapshot, reply PATH
 //!
-//! Targets and names use only letters, digits, `_` and `-`, so they travel
+//! Targets and names use only letters, digits, `_`, `-` and `.`, so they travel
 //! as plain text. Every request but an update is acknowledged.
 const std = @import("std");
 const types = @import("line_types.zig");
@@ -258,7 +258,7 @@ test "hostile and truncated packets are rejected" {
         "1|t|C|job|empty|bad", "1|t|C|job|fifo|normal|extra", "1|t|C|job|stream|",
         "1|t|S",               "1|t|S|build",                 "1|t|S|build|-",
         "1|t|S|build|x|-",     "1|t|S|build|V:!|-",           "1|t|S|build|-|fail",
-        "1|t|S|a.b|-|-",       "1|t|S|0|-|-",                 "1|t|S|build|-|-|x",
+        "1|t|S|a..b|-|-",      "1|t|S|0|-|-",                 "1|t|S|build|-|-|x",
         "1|t|C",               "1|t|C|5|stream",              "1|t|C|job|pipe",
         "1|t|U|0|",            "1|t|U|job|eA==",              "1|t|U|1",
         "1|t|F|1",             "1|t|F|1|fail",                "1|t|P|",

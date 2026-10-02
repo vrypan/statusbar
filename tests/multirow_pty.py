@@ -400,7 +400,7 @@ run('set', '--', '1', '--dash'); settle()
 run('set', 'build', '#(value) #[fg=red]x ##'); settle()
 run('set', 'other', '\x1b[31mred\x1b[0m'); settle()
 for args in (['build', 'x', '--reset'], ['build', '', '--reset'], ['build', '--status', 'fail'],
-             ['bad.name', 'x'], ['0', 'x'], ['build', 'x' * 1025]):
+             ['bad..name', 'x'], ['0', 'x'], ['build', 'x' * 1025]):
     run('set', *args, code=2)
 for args in (['missing', 'x'], ['99', '--status', 'done']):
     run('set', *args, code=1)
@@ -429,7 +429,7 @@ mark('SET_OK')
     for args in (["prompt", "x"], ["prompt", "--status", "done"], ["5", "--reset"], ["prompt", ""]):
         result = subprocess.run([binary, "set", *args], env=env, capture_output=True)
         assert result.returncode == 0 and not result.stdout and not result.stderr, result
-    for args in (["prompt", "x", "--reset"], ["a.b", "x"], ["prompt", "--status", "fail"]):
+    for args in (["prompt", "x", "--reset"], ["a..b", "x"], ["prompt", "--status", "fail"]):
         result = subprocess.run([binary, "set", *args], env=env, capture_output=True)
         assert result.returncode == 2 and not result.stdout, result
     print("set changes only supplied attributes, atomically, and is quiet outside a session")
@@ -641,7 +641,7 @@ def check_zsh(binary):
     env = os.environ.copy()
     env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
     quoted_binary = shlex.quote(binary)
-    for bad in ("a.b", "0", "a b", ""):
+    for bad in ("a..b", "0", "a b", ""):
         result = subprocess.run([binary, "init", "zsh", "--starship-line", bad], env=env, capture_output=True)
         assert result.returncode == 2 and result.stdout == b"", (bad, result)
     for good in ("prompt", "5"):
@@ -1611,7 +1611,7 @@ from subprocess import PIPE, Popen
 first = run('push', input=b'partial\rfirst final\n')
 second = run('push', 'named', input='Καλημέρα ## #[bold]'.encode())
 assert first == '2' and second == 'named', (first, second)
-for args in (['5'], ['a.b'], ['1', 'x']):
+for args in (['5'], ['a..b'], ['1', 'x']):
     run('push', *args, input=b'x', code=2)
 for taken in ('named', 'base'):
     run('push', taken, input=b'x', code=1)
@@ -1809,7 +1809,7 @@ assert run('bind', 'prompt') == prompt
 run('bind', '--unbind', 'build')
 assert not os.path.exists(build)
 assert run('bind', 'build') == build
-for args, code in ((['missing'], 1), (['../escape'], 2), (['a.b'], 2), (['0'], 2), ([], 2)):
+for args, code in ((['missing'], 1), (['../escape'], 2), (['a..b'], 2), (['0'], 2), ([], 2)):
     run('bind', *args, code=code)
 wrong = os.environ.copy(); wrong['STATUSBAR_SESSION_ID'] = '0' * 32
 assert subprocess.run([b, 'bind', 'base'], env=wrong, capture_output=True).returncode != 0
@@ -2039,45 +2039,45 @@ before = json.loads(run('list', '--json'))
 with tempfile.TemporaryDirectory() as folder:
     counter = os.path.join(folder, 'counter')
     # A command that is still running when the next additions arrive.
-    fragment = ('[line.work-summary]\ntext = #(command:work-fetch) #(command:shared)\n'
-                '[command.work-fetch]\nrun = printf x >> ' + counter + '; sleep 1; printf WORK_DONE\ninterval = 60\n'
-                '[colors]\nwork-accent = blue\n')
+    fragment = ('[line.work.summary]\ntext = #(command:work.fetch) #(command:shared)\n'
+                '[command.work.fetch]\nrun = printf x >> ' + counter + '; sleep 1; printf WORK_DONE\ninterval = 60\n'
+                '[colors]\nwork.accent = blue\n')
     run('config', '--add', 'work', input=fragment.encode())
     wait_for(lambda: os.path.exists(counter))
-    wait_for(lambda: '[line.work-summary]' in current())
+    wait_for(lambda: '[line.work.summary]' in current())
     snapshot = current()
     # CLI preflight failures must not change the current config.
     for bad in ('[line.other]', '[command.other]\nrun = true', '[colors]\nwrong = red',
-                '[line.work-summary]', '[command.work-fetch]\nrun = true',
-                '[colors]\nwork-accent = red', '[line.work-bad]\ntext = #(command:missing)',
-                'interval = 1\n[line.work-bad]', '[push]\ntext = bad', '# empty'):
+                '[line.work.summary]', '[command.work.fetch]\nrun = true',
+                '[colors]\nwork.accent = red', '[line.work.bad]\ntext = #(command:missing)',
+                'interval = 1\n[line.work.bad]', '[push]\ntext = bad', '# empty'):
         run('config', '--add', 'work', input=bad.encode(), code=2)
         assert current() == snapshot
     for args in (('--add', 'bad-prefix'), ('--add', 'work', '--print'), ('--add', 'work', 'unexpected')):
-        run('config', *args, input=b'[line.work-other]', code=2)
+        run('config', *args, input=b'[line.work.other]', code=2)
     # Command-only and color-only fragments need no dummy line.
-    run('config', '--add', 'extra', input=b'[command.extra-fetch]\nrun = printf EXTRA\ninterval = 60\n')
-    wait_for(lambda: '[command.extra-fetch]' in current())
-    run('config', '--add', 'extra', input=b'[colors]\nextra-accent = green\n')
-    wait_for(lambda: 'extra-accent = green' in current())
+    run('config', '--add', 'extra', input=b'[command.extra.fetch]\nrun = printf EXTRA\ninterval = 60\n')
+    wait_for(lambda: '[command.extra.fetch]' in current())
+    run('config', '--add', 'extra', input=b'[colors]\nextra.accent = green\n')
+    wait_for(lambda: 'extra.accent = green' in current())
     # Requests in one write cannot lose each other's additions, including
     # while the terminal cursor is saved. Include a stale conflicting request.
-    os.write(1, b'\x1b7' + frame('one', '[line.one-row]\ntext = ONE\n') +
-             frame('two', '[line.two-row]\ntext = TWO\n') +
-             frame('work', '[line.work-summary]\ntext = BAD\n') + b'\x1b8')
-    wait_for(lambda: '[line.two-row]' in current())
-    assert '[line.one-row]' in current() and 'text = BAD' not in current()
+    os.write(1, b'\x1b7' + frame('one', '[line.one.row]\ntext = ONE\n') +
+             frame('two', '[line.two.row]\ntext = TWO\n') +
+             frame('work', '[line.work.summary]\ntext = BAD\n') + b'\x1b8')
+    wait_for(lambda: '[line.two.row]' in current())
+    assert '[line.one.row]' in current() and 'text = BAD' not in current()
     # References to existing commands/colors are allowed; the prefix is
     # required for definitions only.
-    run('config', '--add', 'three', input=b'[line.three-row]\ntext = #[fg=extra-accent]#(command:extra-fetch)\n')
-    wait_for(lambda: '[line.three-row]' in current())
+    run('config', '--add', 'three', input=b'[line.three.row]\ntext = #[fg=extra.accent]#(command:extra.fetch)\n')
+    wait_for(lambda: '[line.three.row]' in current())
     time.sleep(1.1)
     assert open(counter).read() == 'x', 'an existing command was restarted'
     # A pushed-name collision is checked by the session and rolls back all
     # definitions, even when the sender bypasses CLI validation.
-    run('push', 'clash-row', input=b'temporary\n')
+    run('push', 'clash.row', input=b'temporary\n')
     snapshot = current()
-    os.write(1, frame('clash', '[line.clash-row]\n[command.clash-run]\nrun = true\n'))
+    os.write(1, frame('clash', '[line.clash.row]\n[command.clash.run]\nrun = true\n'))
     settle()
     assert current() == snapshot
     assert run('config', '--print', 'startup') == startup
@@ -2086,37 +2086,55 @@ with tempfile.TemporaryDirectory() as folder:
     assert after['lines'][0] == before['lines'][0], (before, after)
     assert after['lines'][-2] == before['lines'][-1], (before, after)
     assert [line['name'] for line in after['lines']] == [
-        'base', 'work-summary', 'one-row', 'two-row', 'three-row', 'job', 'clash-row'], after
+        'base', 'work.summary', 'one.row', 'two.row', 'three.row', 'job', 'clash.row'], after
     # Import-time expansion resolves names, references, command text, and
     # colors. Escaped markers stay literal even across later additions.
-    module = ('[line.<module>-row]\ntext = #[fg=<module>-accent]#(command:<module>-fetch)\n'
-              '[command.<module>-fetch]\nrun = printf "%s" "<module> <<module>>"\ninterval = 60\n'
-              '[colors]\n<module>-accent = blue\n')
+    module = ('[line.<module>.row]\ntext = #[fg=<module>.accent]#(command:<module>.fetch)\n'
+              '[command.<module>.fetch]\nrun = printf "%s" "<module> <<module>>"\ninterval = 60\n'
+              '[colors]\n<module>.accent = blue\n')
     run('config', '--add', 'alpha', input=module.encode())
-    wait_for(lambda: '[line.alpha-row]' in current())
+    wait_for(lambda: '[line.alpha.row]' in current())
     os.write(1, frame('beta', module))
-    wait_for(lambda: '[line.beta-row]' in current())
+    wait_for(lambda: '[line.beta.row]' in current())
     snapshot = current()
-    assert 'fg=alpha-accent' in snapshot and 'fg=beta-accent' in snapshot
+    assert 'fg=alpha.accent' in snapshot and 'fg=beta.accent' in snapshot
     assert '"alpha <module>"' in snapshot and '"beta <module>"' in snapshot
     run('config', '--add', 'alpha', input=module.encode(), code=2)
     assert current() == snapshot
+    # Dotted names work through the line protocol and as FIFO basenames.
+    assert 'alpha\n  Lines\n    alpha.row\n  Commands\n    alpha.fetch' in run('config', '--list')
+    run('set', 'alpha.row', 'dotted-value', '--status', 'success')
+    pipe = run('bind', 'alpha.row')
+    assert os.path.basename(pipe) == 'alpha.row'
+    with open(pipe, 'w') as writer:
+        writer.write('dotted-fifo\n')
+    def alpha_value():
+        return next(line for line in json.loads(run('list', '--json'))['lines'] if line['name'] == 'alpha.row')
+    wait_for(lambda: alpha_value()['value'] == 'dotted-fifo')
+    assert alpha_value()['status'] == 'success'
+    run('bind', '--unbind', 'alpha.row')
+    assert not os.path.exists(pipe)
+    run('set', 'alpha.row', '--reset', '--status', 'normal')
+    run('push', 'tasks.build', input=b'dotted-job\n')
+    job_pipe = run('bind', 'tasks.build')
+    run('pop', 'tasks.build')
+    assert not os.path.exists(job_pipe)
     # A complete replacement reads the resolved snapshot literally.
     run('config', input=snapshot.encode())
     settle()
     assert current() == snapshot
-    too_large = ('[line.<module>-overflow]\n# ' + '<module>' * 1100).encode()
+    too_large = ('[line.<module>.overflow]\n# ' + '<module>' * 1100).encode()
     run('config', '--add', 'a' * 62, input=too_large, code=2)
     assert current() == snapshot
     run('set', '1', 'still-kept')
     # Accumulated configs can exceed the single-message limit. The parser's
     # total limit is still enforced without changing the live snapshot.
     for suffix in ('a', 'b', 'c'):
-        run('config', '--add', 'large', input=('[line.large-' + suffix + ']\n#' + 'x' * 15000).encode())
-        wait_for(lambda: '[line.large-' + suffix + ']' in current())
+        run('config', '--add', 'large', input=('[line.large.' + suffix + ']\n#' + 'x' * 15000).encode())
+        wait_for(lambda: '[line.large.' + suffix + ']' in current())
     assert len(current()) > 24523
     snapshot = current()
-    run('config', '--add', 'large', input=('[line.large-tooBig]\n#' + 'x' * 22000).encode(), code=2)
+    run('config', '--add', 'large', input=('[line.large.tooBig]\n#' + 'x' * 22000).encode(), code=2)
     assert current() == snapshot
     mark('CONFIG_ADD_OK')
 '''

@@ -9,7 +9,7 @@ const types = @import("session").line_types;
 /// count, before joining, so `set NAME ""` stores an explicit empty value.
 pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
     const args = command.positionals();
-    const target = types.Target.parse(args[0]) orelse return common.usageError(stderr, command, "NAME must be a line name (letters, digits, _ and -) or a numeric ID");
+    const target = types.Target.parse(args[0]) orelse return common.usageError(stderr, command, "NAME must be a line name (letters, digits, _, - and dots between nonempty segments) or a numeric ID");
     const has_text = args.len > 1;
     const reset = command.enabled("reset");
     if (reset and has_text) return common.usageError(stderr, command, "--reset cannot be combined with TEXT");

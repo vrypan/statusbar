@@ -130,23 +130,23 @@ limits how many rows can be visible.
 ## Write a module
 
 A module is a `.statusbar` template containing `[line.NAME]`, `[command.NAME]`,
-and optionally `[colors]`. Prefix each new name with `<module>-`, and use the
+and optionally `[colors]`. Prefix each new name with `<module>.`, and use the
 same placeholder in its references:
 
 ```ini
-[line.<module>-summary]
-text = "#[fg=<module>-accent]#(command:<module>-fetch)#[default]"
+[line.<module>.summary]
+text = "#[fg=<module>.accent]#(command:<module>.fetch)#[default]"
 
-[command.<module>-fetch]
+[command.<module>.fetch]
 run = hostname -s
 interval = 3600
 
 [colors]
-<module>-accent = colour4
+<module>.accent = colour4
 ```
 
-Import with `--add host` to define `host-summary`, `host-fetch`, and
-`host-accent`. Expansion happens once throughout the incoming module, including
+Import with `--add host` to define `host.summary`, `host.fetch`, and
+`host.accent`. Expansion happens once throughout the incoming module, including
 command scripts and comments. `<<module>>` keeps a literal `<module>`.
 Fixed names are also accepted if they match the import prefix. Snapshots from
 `config --print current` contain resolved names and can be saved, checked with

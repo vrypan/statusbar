@@ -102,7 +102,7 @@ def main():
     files = sorted(MODULES.glob('*.statusbar'))
     assert len(files) == 11
     for path in files:
-        assert '[line.<module>-' in path.read_text(), path
+        assert '[line.<module>.' in path.read_text(), path
         command = command_text(path)
         if command:
             subprocess.run(['/bin/sh', '-n'], input=command, text=True, check=True, capture_output=True)
@@ -201,7 +201,7 @@ assert len(lines) == len(list(library.glob('*.statusbar'))) + 1 and all(line['vi
 assert all(line['name'].startswith('custom_') for line in lines[1:]), lines
 run('config', '--add', 'second_clock', input=(library / 'clock.statusbar').read_bytes())
 deadline = time.monotonic() + 5
-while 'second_clock-time' not in run('config', '--print'):
+while 'second_clock.time' not in run('config', '--print'):
     assert time.monotonic() < deadline
     time.sleep(.05)
 snapshot = run('config', '--print')

@@ -25,7 +25,7 @@ pub fn merge(gpa: std.mem.Allocator, current: []const u8, prefix: []const u8, fr
                 section = .colors;
             } else {
                 const name = if (std.mem.startsWith(u8, header.name, "line.")) header.name[5..] else if (std.mem.startsWith(u8, header.name, "command.")) header.name[8..] else return statements.fail(diag, "--add accepts only [line.NAME], [command.NAME] and [colors]");
-                if (!prefix_names.contains(prefix, name)) return statements.fail(diag, "added names must start with PREFIX- and have a nonempty suffix");
+                if (!prefix_names.contains(prefix, name)) return statements.fail(diag, "added names must start with PREFIX. and have a nonempty suffix");
                 section = .named;
                 definitions += 1;
             }
@@ -34,7 +34,7 @@ pub fn merge(gpa: std.mem.Allocator, current: []const u8, prefix: []const u8, fr
             .root => return statements.fail(diag, "--add does not accept global settings; start with a section"),
             .named => {},
             .colors => {
-                if (!prefix_names.contains(prefix, assignment.key)) return statements.fail(diag, "added color names must start with PREFIX- and have a nonempty suffix");
+                if (!prefix_names.contains(prefix, assignment.key)) return statements.fail(diag, "added color names must start with PREFIX. and have a nonempty suffix");
                 for (base.palette().colors) |color| if (std.mem.eql(u8, color.name, assignment.key)) return statements.fail(diag, "this color is already defined");
                 for (colors[0..colors_len]) |name| if (std.mem.eql(u8, name, assignment.key)) return statements.fail(diag, "this color is already defined");
                 if (colors_len == colors.len) return statements.fail(diag, "too many colors");
@@ -88,10 +88,10 @@ test "one module imports under different prefixes with resolved references" {
     const module =
         \\# instance <module>
         \\[colors]
-        \\<module>-accent = blue
-        \\[line.<module>-summary]
-        \\text = #[fg=<module>-accent]#(command:<module>-fetch) #(command:shared)
-        \\[command.<module>-fetch]
+        \\<module>.accent = blue
+        \\[line.<module>.summary]
+        \\text = #[fg=<module>.accent]#(command:<module>.fetch) #(command:shared)
+        \\[command.<module>.fetch]
         \\run = |
         \\  printf '%s' '<module> <<module>>'
     ;
@@ -102,15 +102,15 @@ test "one module imports under different prefixes with resolved references" {
     defer std.testing.allocator.free(second);
     try std.testing.expect(std.mem.startsWith(u8, second, first));
     try std.testing.expect(std.mem.indexOf(u8, second, "# instance two") != null);
-    try std.testing.expect(std.mem.indexOf(u8, second, "fg=two-accent") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second, "fg=two.accent") != null);
     var parsed = try config.parse(std.testing.allocator, second, &diag);
     defer parsed.deinit();
-    try std.testing.expectEqualStrings("one-summary", parsed.lines[1].name);
-    try std.testing.expectEqualStrings("two-summary", parsed.lines[2].name);
+    try std.testing.expectEqualStrings("one.summary", parsed.lines[1].name);
+    try std.testing.expectEqualStrings("two.summary", parsed.lines[2].name);
     try std.testing.expectEqual(@as(u16, 5), parsed.lines[2].variants.text.commands);
     try std.testing.expect(std.mem.indexOf(u8, parsed.commands[1].run, "'one <module>'") != null);
     try std.testing.expect(std.mem.indexOf(u8, parsed.commands[2].run, "'two <module>'") != null);
-    try std.testing.expectEqualStrings("two-accent", parsed.palette().colors[1].name);
+    try std.testing.expectEqualStrings("two.accent", parsed.palette().colors[1].name);
 }
 
 test "module expansion is bounded by expanded size and keeps diagnostic lines" {
@@ -120,13 +120,13 @@ test "module expansion is bounded by expanded size and keeps diagnostic lines" {
     try std.testing.expectEqualStrings("xx", exact);
     try std.testing.expectError(error.InvalidConfig, expand(std.testing.allocator, "long", "<module>", 3, &diag));
     try std.testing.expectError(error.InvalidConfig, merge(std.testing.allocator, "[line.base]", "a" ** 62, "# " ++ "<module>" ** 1100, &diag));
-    try std.testing.expectError(error.InvalidConfig, merge(std.testing.allocator, "[line.base]", "x", "# <module>\n[line.<module>-]\n", &diag));
+    try std.testing.expectError(error.InvalidConfig, merge(std.testing.allocator, "[line.base]", "x", "# <module>\n[line.<module>.]\n", &diag));
     try std.testing.expectEqual(@as(usize, 2), diag.line);
 }
 
 test "fragments share existing commands and preserve source text" {
     const base = "# original\n[line.a]\n[command.shared]\nrun = true";
-    const fragment = "# addition\n[line.weather-summary]\ntext = #(command:shared) #(command:weather-fetch)\n[command.weather-fetch]\nrun = |\n  printf done\n[colors]\nweather-accent = blue";
+    const fragment = "# addition\n[line.weather.summary]\ntext = #(command:shared) #(command:weather.fetch)\n[command.weather.fetch]\nrun = |\n  printf done\n[colors]\nweather.accent = blue";
     var diag: config.Diagnostic = .{};
     const text = try merge(std.testing.allocator, base, "weather", fragment, &diag);
     defer std.testing.allocator.free(text);
@@ -139,12 +139,12 @@ test "fragments share existing commands and preserve source text" {
 }
 
 test "add rejects global settings, unprefixed names and duplicate colors" {
-    const base = "[line.a]\n[colors]\nweather-accent = blue\n";
+    const base = "[line.a]\n[colors]\nweather.accent = blue\n";
     for ([_][]const u8{
         "style = fg=red",         "[push]\ntext = x",               "[highlight]\npulses = 2",
-        "[line.other]",           "[line.weather-]",                "[command.other]\nrun = true",
-        "[colors]\naccent = red", "[colors]\nweather-accent = red", "[colors]\nweather-new = red\nweather-new = blue",
-        "# empty",                "[colors]",
+        "[line.other]",           "[line.weather.]",                "[command.other]\nrun = true",
+        "[colors]\naccent = red", "[colors]\nweather.accent = red", "[colors]\nweather.new = red\nweather.new = blue",
+        "# empty",                "[colors]",                       "[line.weather-summary]",
     }) |fragment| {
         var diag: config.Diagnostic = .{};
         try std.testing.expectError(error.InvalidConfig, merge(std.testing.allocator, base, "weather", fragment, &diag));
@@ -153,7 +153,7 @@ test "add rejects global settings, unprefixed names and duplicate colors" {
 }
 
 test "command-only and color-only fragments are valid additions" {
-    for ([_][]const u8{ "[command.extra-run]\nrun = true", "[colors]\nextra-blue = blue" }) |fragment| {
+    for ([_][]const u8{ "[command.extra.run]\nrun = true", "[colors]\nextra.blue = blue" }) |fragment| {
         var diag: config.Diagnostic = .{};
         const text = try merge(std.testing.allocator, "[line.a]", "extra", fragment, &diag);
         defer std.testing.allocator.free(text);
@@ -166,7 +166,7 @@ test "addition parsing cleans every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
         fn run(gpa: std.mem.Allocator) !void {
             var diag: config.Diagnostic = .{};
-            const text = try merge(gpa, "[line.base]", "extra", "[line.<module>-one]\ntext = <<module>>", &diag);
+            const text = try merge(gpa, "[line.base]", "extra", "[line.<module>.one]\ntext = <<module>>", &diag);
             defer gpa.free(text);
             var parsed = try config.parse(gpa, text, &diag);
             parsed.deinit();

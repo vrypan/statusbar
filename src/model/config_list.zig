@@ -18,7 +18,7 @@ const Entry = struct {
 };
 
 fn prefix(name: []const u8) []const u8 {
-    const end = std.mem.indexOfScalar(u8, name, '-') orelse return "";
+    const end = std.mem.indexOfScalar(u8, name, '.') orelse return "";
     const candidate = name[0..end];
     return if (prefixes.valid(candidate) and prefixes.contains(candidate, name)) candidate else "";
 }
@@ -50,18 +50,18 @@ pub fn list(cfg: *const config.Config, writer: *std.Io.Writer) !void {
 test "group names by prefix with unprefixed names first and declaration order within each kind" {
     var diag: config.Diagnostic = .{};
     var cfg = try config.parse(std.testing.allocator,
-        \\[line.weather-now]
+        \\[line.weather.now]
         \\[line.ornament]
-        \\[line.codex-usage]
+        \\[line.codex.usage]
         \\[line.prompt]
-        \\[line.codex-extra-details]
-        \\[command.z_only-fetch]
+        \\[line.codex.extra.details]
+        \\[command.z_only.fetch]
         \\run = true
-        \\[command.codex-usage]
+        \\[command.codex.usage]
         \\run = true
         \\[command.host]
         \\run = true
-        \\[command.codex-fetch]
+        \\[command.codex.fetch]
         \\run = true
     , &diag);
     defer cfg.deinit();
@@ -78,26 +78,26 @@ test "group names by prefix with unprefixed names first and declaration order wi
         \\
         \\codex
         \\  Lines
-        \\    codex-usage
-        \\    codex-extra-details
+        \\    codex.usage
+        \\    codex.extra.details
         \\  Commands
-        \\    codex-usage
-        \\    codex-fetch
+        \\    codex.usage
+        \\    codex.fetch
         \\
         \\weather
         \\  Lines
-        \\    weather-now
+        \\    weather.now
         \\
         \\z_only
         \\  Commands
-        \\    z_only-fetch
+        \\    z_only.fetch
         \\
     , out.written());
 }
 
 test "only valid module prefixes create groups" {
-    for ([_][]const u8{ "prompt", "-prompt", "prompt-" }) |name| {
+    for ([_][]const u8{ "prompt", ".prompt", "prompt.", "codex-usage" }) |name| {
         try std.testing.expectEqualStrings("", prefix(name));
     }
-    try std.testing.expectEqualStrings("codex", prefix("codex-extra-details"));
+    try std.testing.expectEqualStrings("codex", prefix("codex.extra.details"));
 }

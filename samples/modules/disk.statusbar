@@ -1,10 +1,10 @@
 # Module: disk. macOS/Linux; df and awk. Set volume to monitor another path.
 # Load: statusbar config --add disk < disk.statusbar
 
-[line.<module>-usage]
-text = " #[fg=colour5]disk#[default] #(command:<module>-usage)#[default]#(fill: ) "
+[line.<module>.usage]
+text = " #[fg=colour5]disk#[default] #(command:<module>.usage)#[default]#(fill: ) "
 
-[command.<module>-usage]
+[command.<module>.usage]
 run = |
   volume=""
   if [ -z "$volume" ]; then

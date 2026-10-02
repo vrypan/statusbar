@@ -29,11 +29,15 @@ fn allDigits(text: []const u8) bool {
     return true;
 }
 
-/// Explicit names are case-sensitive letters, digits, `_` and `-`. All-digit
-/// names are reserved for the numeric IDs statusbar assigns.
+/// Explicit names are case-sensitive letters, digits, `_` and `-`, with dots
+/// between nonempty segments. All-digit names are reserved for numeric IDs.
 pub fn validName(name: []const u8) bool {
     if (name.len == 0 or name.len > max_name or allDigits(name)) return false;
-    for (name) |byte| if (!nameByte(byte)) return false;
+    var segments = std.mem.splitScalar(u8, name, '.');
+    while (segments.next()) |segment| {
+        if (segment.len == 0) return false;
+        for (segment) |byte| if (!nameByte(byte)) return false;
+    }
     return true;
 }
 
@@ -72,10 +76,10 @@ pub fn normalizeValue(text: []u8) []u8 {
 }
 
 test "names are case-sensitive words and exclude all-digit spellings" {
-    for ([_][]const u8{ "build", "Build", "push", "a-1", "_x", "9lives", "x" ** max_name }) |name| {
+    for ([_][]const u8{ "build", "Build", "push", "a-1", "_x", "9lives", "codex.usage", "a.b-c.d", "x" ** max_name }) |name| {
         try std.testing.expect(validName(name));
     }
-    for ([_][]const u8{ "", "5", "007", "a.b", "a b", "a/b", "ü", "x" ** (max_name + 1) }) |name| {
+    for ([_][]const u8{ "", "5", "007", ".", "..", ".a", "a.", "a..b", "a b", "a/b", "ü", "x" ** (max_name + 1) }) |name| {
         try std.testing.expect(!validName(name));
     }
 }
@@ -83,7 +87,8 @@ test "names are case-sensitive words and exclude all-digit spellings" {
 test "decimal targets are IDs and names are validated" {
     try std.testing.expectEqualDeep(Target{ .id = 5 }, Target.parse("5").?);
     try std.testing.expectEqualDeep(Target{ .name = "build" }, Target.parse("build").?);
-    for ([_][]const u8{ "", "0", "05", "+1", "99999999999999999999999", "a.b" }) |text| {
+    try std.testing.expectEqualDeep(Target{ .name = "codex.usage" }, Target.parse("codex.usage").?);
+    for ([_][]const u8{ "", "0", "05", "+1", "99999999999999999999999", "a..b" }) |text| {
         try std.testing.expect(Target.parse(text) == null);
     }
 }

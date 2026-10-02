@@ -116,17 +116,22 @@ result. It shows only line and command names, grouped by module prefix:
 
 codex
   Lines
-    codex-usage
+    codex.usage
   Commands
-    codex-fetch
+    codex.fetch
 ```
 
-The prefix is the part before the first hyphen, following the same naming rules
+The prefix is the part before the first dot, following the same naming rules
 as `--add PREFIX`. Names without a valid prefix and nonempty suffix go under
 `(no prefix)`. Groups are alphabetical, with unprefixed names first. Within each
 group, lines and commands are separate and keep their declaration order. Full
 names are retained; colors, settings and template details are omitted.
 The report does not execute commands or change the session.
+
+Module names use a dot separator: `codex.usage` belongs to `codex`.
+Older hyphenated names remain valid ordinary names and are listed as unprefixed.
+To import an older module with `--add`, change `<module>-` to `<module>.` in
+its definitions and references.
 
 This inspects configuration definitions. Use `statusbar list` for live line
 values, statuses, pushed jobs and FIFO bindings. Use `config --print` to retrieve
@@ -168,24 +173,24 @@ native terminal colors. A module is a config fragment, for example:
 
 ```sh
 statusbar config --add extra <<'EOF'
-[line.<module>-load]
-text = "#[fg=<module>-accent]#(command:<module>-load)#[default]"
+[line.<module>.load]
+text = "#[fg=<module>.accent]#(command:<module>.load)#[default]"
 
-[command.<module>-load]
+[command.<module>.load]
 run = uptime
 interval = 10
 
 [colors]
-<module>-accent = colour4
+<module>.accent = colour4
 EOF
 ```
 
-Every new line, command, and color name must start with `PREFIX-` and have a
-nonempty suffix. Prefixes use 1–62 letters, digits, or underscores; the hyphen
+Every new line, command, and color name must start with `PREFIX.` and have a
+nonempty suffix. Prefixes use 1–62 letters, digits, or underscores; the dot
 separates the prefix from the rest of the name. `<module>` expands to the
-prefix supplied to `--add`, so the example above defines `extra-load` and
-`extra-accent`. Import the same file with another prefix to create a separate
-instance. Fully written names such as `extra-load` remain supported and must
+prefix supplied to `--add`, so the example above defines `extra.load` and
+`extra.accent`. Import the same file with another prefix to create a separate
+instance. Fully written names such as `extra.load` remain supported and must
 match the supplied prefix. You can add more definitions with the same prefix
 later, provided their names are new.
 
@@ -259,9 +264,11 @@ accepts, but not another name.
 
 Each section adds one line. Lines appear in the order their sections are
 first declared, whatever other sections come between them. At least one line
-is required. Names are case-sensitive and use letters, digits, `_` and `-`,
+is required. Names are case-sensitive and use letters, digits, `_`, `-` and `.`,
 up to 64 characters; names made only of digits are reserved for the IDs
 statusbar assigns. Each name may be declared once.
+Dots separate nonempty segments, such as `codex.usage`; leading, trailing
+and consecutive dots are invalid. Hyphens remain valid within names.
 
 | Key       | Meaning                                                            |
 |-----------|--------------------------------------------------------------------|

@@ -34,9 +34,9 @@ with tempfile.TemporaryDirectory(prefix="statusbar-config-list-") as directory:
     marker = Path(directory) / "command-must-not-run"
     startup = b"# original comment\n[line.original]\n"
     current = (
-        "[line.updated]\ndefault = #(command:test-run)\n"
+        "[line.updated]\ndefault = #(command:test.run)\n"
         "text = #(value)\ntext .= #(fill:-)\n"
-        f"[command.test-run]\nrun = touch '{marker}'\n"
+        f"[command.test.run]\nrun = touch '{marker}'\n"
     ).encode()
     token = "0123456789abcdef0123456789abcdef"
     state.write_bytes(
@@ -45,7 +45,7 @@ with tempfile.TemporaryDirectory(prefix="statusbar-config-list-") as directory:
     )
     env.update(STATUSBAR_STATE=str(state), STATUSBAR_SESSION_ID=token)
     report = run("--list")
-    assert "    updated\n" in report and "test\n  Commands\n    test-run\n" in report
+    assert "    updated\n" in report and "test\n  Commands\n    test.run\n" in report
     assert "    original\n" in run("--list", "startup")
     assert run("--print", "current") == current.decode()
     assert run("--print", "startup") == startup.decode()

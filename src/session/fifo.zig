@@ -180,8 +180,8 @@ pub const Registry = struct {
 };
 
 test "FIFO basenames are line names or decimal IDs" {
-    for ([_][]const u8{ "build", "5", "_a-B" }) |name| try std.testing.expect(validBasename(name));
-    for ([_][]const u8{ "", "05", ".", "..", "a/b", "a b", "a.b", "a\n", "x" ** 65 }) |name| try std.testing.expect(!validBasename(name));
+    for ([_][]const u8{ "build", "5", "_a-B", "codex.usage" }) |name| try std.testing.expect(validBasename(name));
+    for ([_][]const u8{ "", "05", ".", "..", "a/b", "a b", "a..b", ".a", "a.", "a\n", "x" ** 65 }) |name| try std.testing.expect(!validBasename(name));
 }
 
 test "FIFO stream joins writes and holds incomplete UTF-8" {

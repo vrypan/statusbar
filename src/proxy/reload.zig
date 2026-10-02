@@ -197,14 +197,14 @@ test "held additions accumulate and invalid additions keep earlier requests" {
     proxy.output.screen.cursor_saved = true;
     var lines = @import("session").lines.Lines.init(std.testing.allocator);
     defer lines.deinit();
-    _ = try lines.push("extra-clash", null);
+    _ = try lines.push("extra.clash", null);
     proxy.lines = &lines;
     proxy.warning_id = null;
     const base = "[line.base]\n";
     @memcpy(proxy.held_config[0..base.len], base);
     proxy.held_config_len = base.len;
     proxy.held_config_additive = true;
-    for ([_][]const u8{ "[line.extra-one]", "[line.extra-two]" }) |text| {
+    for ([_][]const u8{ "[line.extra.one]", "[line.extra.two]" }) |text| {
         const frame = try config_protocol.encodeAdd(std.testing.allocator, &proxy.session_token, "extra", text);
         defer std.testing.allocator.free(frame);
         try std.testing.expect(!proxy.applyConfigRequest(frame[2 + config_protocol.namespace.len .. frame.len - 2], 0));
@@ -212,9 +212,9 @@ test "held additions accumulate and invalid additions keep earlier requests" {
     }
     const before = try std.testing.allocator.dupe(u8, proxy.held_config[0..proxy.held_config_len.?]);
     defer std.testing.allocator.free(before);
-    try std.testing.expect(std.mem.indexOf(u8, before, "extra-one") != null);
-    try std.testing.expect(std.mem.indexOf(u8, before, "extra-two") != null);
-    for ([_][]const u8{ "[line.extra-one]", "[line.extra-clash]" }) |text| {
+    try std.testing.expect(std.mem.indexOf(u8, before, "extra.one") != null);
+    try std.testing.expect(std.mem.indexOf(u8, before, "extra.two") != null);
+    for ([_][]const u8{ "[line.extra.one]", "[line.extra.clash]" }) |text| {
         const bad = try config_protocol.encodeAdd(std.testing.allocator, &proxy.session_token, "extra", text);
         defer std.testing.allocator.free(bad);
         try std.testing.expect(!proxy.applyConfigRequest(bad[2 + config_protocol.namespace.len .. bad.len - 2], 0));

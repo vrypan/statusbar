@@ -131,14 +131,11 @@ fn parseSection(config: *Config, arena: std.mem.Allocator, raw_lines: *std.Array
     }
     if (std.mem.startsWith(u8, name, "line.")) {
         const line_name = name[5..];
-        if (std.mem.startsWith(u8, line_name, "push")) {
-            if (line_name.len > 4 and line_name[4] == '.') return fail(diag, "completion sections moved into [push] as done =, success = and failed =");
-        }
         if (!line_types.validName(line_name)) {
             if (line_name.len > 0 and std.mem.indexOfNone(u8, line_name, "0123456789") == null) {
                 return fail(diag, "line names cannot be all digits; statusbar assigns numeric IDs");
             }
-            return fail(diag, "line names use 1–64 letters, digits, _ and -");
+            return fail(diag, "line names use 1–64 letters, digits, _, - and dots between nonempty segments");
         }
         for (raw_lines.items) |raw| if (eql(u8, raw.name, line_name)) return fail(diag, "this line section is already defined");
         if (raw_lines.items.len == max_lines) return fail(diag, "too many lines");

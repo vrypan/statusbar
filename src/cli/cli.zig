@@ -236,14 +236,14 @@ const commands = [_]zecli.CommandSpec{
         \\To change the running bar, pass a complete config file as input. The
         \\new layout can change the number of rows without restarting your shell.
         \\--add PREFIX adds a fragment instead. New line, command and color names
-        \\must start with PREFIX-; existing names and global settings are rejected.
+        \\must start with PREFIX.; existing names and global settings are rejected.
         \\Prefixes use 1-62 letters, digits or underscores (no hyphens).
         \\Use <module> in a module for the import prefix; <<module>> stays literal.
         \\
         \\Printing startup or current requires a running session. Both preserve
         \\the config text and exclude values and statuses set at runtime.
         \\--list parses that snapshot and lists line and command names,
-        \\grouped by the prefix before the first hyphen. It does not
+        \\grouped by the prefix before the first dot. It does not
         \\run commands. Use --list default to inspect the built-in config anywhere.
         \\
         \\--path shows the file a new session would use: $STATUSBAR_CONFIG, then

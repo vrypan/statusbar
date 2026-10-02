@@ -11,7 +11,7 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     const args = command.positionals();
     if (args.len > 1) return common.usageError(stderr, command, "use -- before a push command");
     const name: ?[]const u8 = if (args.len == 1) name: {
-        if (!types.validName(args[0])) return common.usageError(stderr, command, "NAME must be 1–64 letters, digits, _ and -, and not only digits");
+        if (!types.validName(args[0])) return common.usageError(stderr, command, "NAME must be 1–64 letters, digits, _, - and dots between nonempty segments, and not only digits");
         break :name args[0];
     } else null;
     const fifo = command.enabled("fifo");
