@@ -133,23 +133,33 @@ native terminal colors. A module is a config fragment, for example:
 
 ```sh
 statusbar config --add extra <<'EOF'
-[line.extra-load]
-text = "#[fg=extra-accent]#(command:extra-load)#[default]"
+[line.<module>-load]
+text = "#[fg=<module>-accent]#(command:<module>-load)#[default]"
 
-[command.extra-load]
+[command.<module>-load]
 run = uptime
 interval = 10
 
 [colors]
-extra-accent = #89b4fa
+<module>-accent = colour4
 EOF
 ```
 
 Every new line, command, and color name must start with `PREFIX-` and have a
 nonempty suffix. Prefixes use 1–62 letters, digits, or underscores; the hyphen
-separates the prefix from the rest of the name. Names are used as written,
-with no automatic rewriting. You can add more definitions with the same
-prefix later, provided their names are new.
+separates the prefix from the rest of the name. `<module>` expands to the
+prefix supplied to `--add`, so the example above defines `extra-load` and
+`extra-accent`. Import the same file with another prefix to create a separate
+instance. Fully written names such as `extra-load` remain supported and must
+match the supplied prefix. You can add more definitions with the same prefix
+later, provided their names are new.
+
+Expansion happens once across the incoming module's text, including section
+names, references, colors, command scripts, and comments. Write `<<module>>`
+to keep a literal `<module>`. The expanded text must fit the combined config's
+64 KiB limit. The existing config is not expanded again. Ordinary config
+loading and `--check` do not expand placeholders; use them on a resolved
+snapshot from `config --print current`.
 
 Fragments may refer to existing commands and colors. A fragment may also
 contain only commands or colors. Global settings, `[push]`, and `[highlight]`
@@ -163,7 +173,7 @@ after existing configured lines and before pushed lines. Existing line IDs,
 values, statuses, FIFO bindings, command processes, schedules, and cached
 output are preserved. Only new commands start immediately.
 
-`config --print current` includes the added source, including its comments.
+`config --print current` includes the expanded source, including its comments.
 The startup snapshot and saved file stay unchanged; save the current config
 explicitly to reuse it in later sessions. Prefixes group related definitions
 without wrapper markup. There is no group-removal command yet.

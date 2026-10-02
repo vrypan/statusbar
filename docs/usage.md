@@ -163,7 +163,8 @@ the current statusbar session. Empty input is an error. Printing flags ignore
 stdin. Replacement prints nothing on success.
 
 `--add PREFIX` instead reads a fragment of new lines, commands, and colors
-from stdin. Their names must start with `PREFIX-`. It rejects existing names
+from stdin. `<module>` expands to `PREFIX` at import time; `<<module>>` keeps
+a literal `<module>`. Resolved names must start with `PREFIX-`. It rejects existing names
 and global settings, and preserves existing command processes and schedules.
 Use it separately from the other config options. See
 [adding to the running config](config.md#add-to-the-running-config).

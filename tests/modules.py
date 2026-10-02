@@ -79,7 +79,7 @@ def main():
     files = sorted(MODULES.glob('*.statusbar'))
     assert len(files) == 10
     for path in files:
-        subprocess.run([binary, 'config', '--check', str(path)], check=True, capture_output=True)
+        assert '[line.<module>-' in path.read_text(), path
         command = command_text(path)
         if command:
             subprocess.run(['/bin/sh', '-n'], input=command, text=True, check=True, capture_output=True)
@@ -143,7 +143,7 @@ def main():
 import json, pathlib
 library = pathlib.Path(sys.argv[2])
 for path in sorted(library.glob('*.statusbar')):
-    run('config', '--add', path.stem, input=path.read_bytes())
+    run('config', '--add', 'custom_' + path.stem, input=path.read_bytes())
     settle()
 deadline = time.monotonic() + 5
 while True:
@@ -151,6 +151,15 @@ while True:
     if len(lines) == 11 or time.monotonic() >= deadline: break
     time.sleep(.05)
 assert len(lines) == 11 and all(line['visible'] for line in lines), lines
+assert all(line['name'].startswith('custom_') for line in lines[1:]), lines
+run('config', '--add', 'second_clock', input=(library / 'clock.statusbar').read_bytes())
+deadline = time.monotonic() + 5
+while 'second_clock-time' not in run('config', '--print'):
+    assert time.monotonic() < deadline
+    time.sleep(.05)
+snapshot = run('config', '--print')
+assert '<module>' not in snapshot, snapshot
+run('config', '--add', 'second_clock', input=(library / 'clock.statusbar').read_bytes(), code=2)
 time.sleep(2)
 mark('MODULE_LIBRARY_OK')
 '''
@@ -161,7 +170,7 @@ mark('MODULE_LIBRARY_OK')
         for expected in (b'alice@laptop', b'0.25  1.50', b'95%', b'12.0/16G', '+24°C'.encode(),
                          b'A useful headline', b'2 unread', b'KiB/s'):
             assert expected in visible, (expected, visible[-5000:])
-        print('modules: all ten load through --add and render together in a terminal')
+        print('modules: custom import prefixes, repeated instances and resolved snapshots render correctly')
 
 
 if __name__ == '__main__':

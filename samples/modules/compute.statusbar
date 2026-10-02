@@ -1,10 +1,10 @@
 # Module: compute. macOS; top, sysctl, awk. CPU samples one second; memory is rounded used RAM.
 # Load: statusbar config --add compute < compute.statusbar
 
-[line.compute-status]
-text = " #(command:compute-status)#[default]#(fill: ) "
+[line.<module>-status]
+text = " #(command:<module>-status)#[default]#(fill: ) "
 
-[command.compute-status]
+[command.<module>-status]
 run = |
   [ "$(uname -s)" = Darwin ] || { printf 'macOS only'; exit; }
   LC_ALL=C; export LC_ALL

@@ -1,8 +1,8 @@
 # Module library
 
 Modules add a small feature to your running statusbar. Each file contains one
-line and its commands, with names prefixed by the module name. Choose the
-modules you want and load them with `statusbar config --add NAME`.
+line and its commands, using `<module>` for the prefix you choose when
+importing. Load a module with `statusbar config --add NAME`.
 
 All modules use the terminal's native palette, keep the theme's background,
 and use ordinary Unicode. They need no Nerd Font. Labels use palette magenta
@@ -11,7 +11,7 @@ red. The actual colors follow your terminal theme.
 
 ## Choose modules
 
-| Module / prefix | Shows | Platform and dependencies | Refresh |
+| Module | Shows | Platform and dependencies | Refresh |
 | --- | --- | --- | --- |
 | [clock](clock.statusbar) | Local date and clock | macOS/Linux; no commands | 1 second |
 | [host](host.statusbar) | `user@hostname` | macOS/Linux; `whoami`, `hostname` | 1 hour |
@@ -60,10 +60,18 @@ modules_dir="$(brew --prefix statusbar)/share/statusbar/modules"
 statusbar config --add disk < "$modules_dir/disk.statusbar"
 ```
 
-Use the prefix in the table even if you rename the file. New lines appear in
-the order modules are loaded, above any pushed lines. Loading the same module
-twice fails because its definitions already exist. References to commands
-use their full names, such as `#(command:disk-usage)`.
+Choose any valid prefix. For example, load two copies of the clock:
+
+```sh
+statusbar config --add clock < samples/modules/clock.statusbar
+statusbar config --add second < samples/modules/clock.statusbar
+```
+
+The resulting lines are `clock-time` and `second-time`. Each uses the local
+clock; edit a copy to change its format. New lines appear in import order,
+above pushed lines. Importing the same module again with the same prefix
+fails because its definitions already exist. After import, references use
+resolved names, such as `#(command:disk-usage)`.
 
 `config --add` checks and sends the module; the session checks it again before
 applying it. Inspect the bar and `statusbar config --print current` afterward.
@@ -71,7 +79,7 @@ applying it. Inspect the bar and `statusbar config --print current` afterward.
 ## Customize and save
 
 Copy a module into your own directory before editing it; installed copies may
-be replaced by upgrades. Its header lists the prefix and requirements.
+be replaced by upgrades. Its header lists an example import and requirements.
 
 - **Weather:** set `location` to a city, such as `Athens` or `New+York`.
   An empty location lets wttr.in infer it from the request's IP address.
@@ -112,9 +120,30 @@ limits how many rows can be visible.
 
 ## Write a module
 
-A module is an ordinary `.statusbar` fragment containing `[line.NAME]`,
-`[command.NAME]`, and optionally `[colors]`. Prefix every new name with the
-module name and `-`; for example, module `weather` defines `weather-current`.
+A module is a `.statusbar` template containing `[line.NAME]`, `[command.NAME]`,
+and optionally `[colors]`. Prefix each new name with `<module>-`, and use the
+same placeholder in its references:
+
+```ini
+[line.<module>-summary]
+text = "#[fg=<module>-accent]#(command:<module>-fetch)#[default]"
+
+[command.<module>-fetch]
+run = hostname -s
+interval = 3600
+
+[colors]
+<module>-accent = colour4
+```
+
+Import with `--add host` to define `host-summary`, `host-fetch`, and
+`host-accent`. Expansion happens once throughout the incoming module, including
+command scripts and comments. `<<module>>` keeps a literal `<module>`.
+Fixed names are also accepted if they match the import prefix. Snapshots from
+`config --print current` contain resolved names and can be saved, checked with
+`--check`, and loaded as complete configs. Raw module templates must be
+imported with `--add` before they can be used as a complete config.
+
 Module prefixes use letters, digits, and underscores. Set command intervals
 explicitly, use `colour0`–`colour15` or terminal color names, and finish styles
 with `#[default]`. Avoid global settings and `[push]` or `[highlight]`, which

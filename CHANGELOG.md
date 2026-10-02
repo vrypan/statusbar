@@ -12,6 +12,8 @@ order they were added.
   and colors, preserving existing line state and running commands
 - Bundle a library of ten modules using terminal-native colors, with setup
   instructions, platform requirements, and checks for theme composition
+- Resolve `<module>` to the prefix supplied to `config --add`, so module
+  files support custom names and multiple instances; `<<module>>` stays literal
 
 ## v0.5.1
 
