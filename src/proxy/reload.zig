@@ -1,8 +1,10 @@
-//! Replacing the running config with an authenticated OSC 3110 request.
+//! Replacing or editing the running config with an authenticated OSC 3110 request.
 
 const std = @import("std");
 const sys = @import("platform").sys;
 const config = @import("model").config;
+const config_add = @import("model").config_add;
+const config_remove = @import("model").config_remove;
 const Runtime = @import("model").runtime_config.Runtime;
 const config_protocol = @import("terminal").config_protocol;
 const Layout = @import("layout.zig").Layout;
@@ -81,41 +83,16 @@ pub fn applyConfigRequest(self: *Proxy, payload: []const u8, now_ms: i64) bool {
         if (self.log) |log| log.write("OSC config rejected: {t}", .{err});
         return false;
     };
-    var owned: ?[]u8 = null;
-    defer if (owned) |text| self.gpa.free(text);
-    var edit = false;
-    const text = if (request.kind != .replace) merged: {
-        const current = if (self.held_config_len) |len| self.held_config[0..len] else self.runtime.owned_text orelse self.session_state.startup;
-        var diag: config.Diagnostic = .{};
-        owned = (if (request.kind == .add) @import("model").config_add.merge(self.gpa, current, request.text, &diag) else @import("model").config_remove.remove(self.gpa, current, request.text, &diag)) catch |err| {
-            if (self.log) |log| log.write("OSC config edit rejected: {t}, line={d}", .{ err, diag.line });
-            return false;
-        };
-        // Reject invalid edits before replacing a previously held update.
-        var checked = config.parse(self.gpa, owned.?, &diag) catch |err| {
-            if (self.log) |log| log.write("OSC config edit rejected: {t}, line={d}", .{ err, diag.line });
-            return false;
-        };
-        defer checked.deinit();
-        var kept_pushed: usize = 0;
-        for (self.lines.pushed()) |line| {
-            if (line.id == self.warning_id) continue;
-            kept_pushed += 1;
-            if (line.explicitName()) |name| for (checked.lines) |spec| {
-                if (std.mem.eql(u8, name, spec.name)) {
-                    if (self.log) |log| log.write("OSC config edit rejected: NameTaken", .{});
-                    return false;
-                }
-            };
-        }
-        if (checked.lines.len + kept_pushed > config.max_lines) {
-            if (self.log) |log| log.write("OSC config edit rejected: RowLimit", .{});
-            return false;
-        }
-        edit = self.held_config_len == null or self.held_config_edit;
-        break :merged owned.?;
-    } else request.text;
-    // Replacement borrows the terminal's cursor save slot, like a paint.
+    if (request.kind == .replace) return submitConfig(self, request.text, now_ms, false);
+    const text = editedConfig(self, request) orelse return false;
+    defer self.gpa.free(text);
+    // An edit of a held replacement is applied as part of that replacement.
+    return submitConfig(self, text, now_ms, self.held_config_len == null or self.held_config_edit);
+}
+
+/// Replacement borrows the terminal's cursor save slot, like a paint, so it
+/// is held while the child has a saved cursor. Only the newest is kept.
+fn submitConfig(self: *Proxy, text: []const u8, now_ms: i64, edit: bool) bool {
     if (self.output.screen.cursor_saved) {
         @memcpy(self.held_config[0..text.len], text);
         self.held_config_len = text.len;
@@ -125,6 +102,44 @@ pub fn applyConfigRequest(self: *Proxy, payload: []const u8, now_ms: i64) bool {
     }
     self.held_config_len = null;
     return applyConfig(self, text, now_ms, edit);
+}
+
+/// Applies an addition or removal to the newest config, a held one first,
+/// and validates the result. Returns the owned text, or null after logging
+/// why the edit was rejected.
+fn editedConfig(self: *Proxy, request: config_protocol.Request) ?[]u8 {
+    const current = if (self.held_config_len) |len| self.held_config[0..len] else self.runtime.owned_text orelse self.session_state.startup;
+    var diag: config.Diagnostic = .{};
+    const text = switch (request.kind) {
+        .add => config_add.merge(self.gpa, current, request.text, &diag),
+        .remove => config_remove.remove(self.gpa, current, request.text, &diag),
+        .replace => unreachable,
+    } catch |err| {
+        if (self.log) |log| log.write("OSC config edit rejected: {t}, line={d}", .{ err, diag.line });
+        return null;
+    };
+    validateEdit(self, text, &diag) catch |err| {
+        self.gpa.free(text);
+        if (self.log) |log| log.write("OSC config edit rejected: {t}, line={d}", .{ err, diag.line });
+        return null;
+    };
+    return text;
+}
+
+/// Rejects an invalid edit before it can replace a previously held update:
+/// the result must parse, and its lines must fit beside the pushed lines
+/// without taking their names.
+fn validateEdit(self: *const Proxy, text: []const u8, diag: *config.Diagnostic) !void {
+    var checked = try config.parse(self.gpa, text, diag);
+    defer checked.deinit();
+    var kept_pushed: usize = 0;
+    for (self.lines.pushed()) |line| {
+        if (line.id == self.warning_id) continue;
+        kept_pushed += 1;
+        const name = line.explicitName() orelse continue;
+        for (checked.lines) |spec| if (std.mem.eql(u8, name, spec.name)) return error.NameTaken;
+    }
+    if (checked.lines.len + kept_pushed > config.max_lines) return error.RowLimit;
 }
 
 /// A held request applies once the child restores its cursor, or its
