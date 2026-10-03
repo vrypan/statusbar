@@ -315,12 +315,13 @@ const commands = [_]zecli.CommandSpec{
     },
     .{
         .name = "init",
-        .description = "Print shell setup for Starship, directory titles and +",
-        .usage = "statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME] [--no-plus]",
+        .description = "Print shell setup for Starship, directory titles, + and sb",
+        .usage = "statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME] [--no-plus] [--no-sb-alias]",
         .arguments = &.{
             .{ .name = "SHELL", .description = "Shell to configure: zsh or fish", .required = true, .completion = .{ .values = &.{ "zsh", "fish" } } },
         },
         .flags = &.{
+            .{ .name = "no-sb-alias", .description = "Do not define the sb alias for statusbar" },
             .{ .name = "no-plus", .description = "Do not define the + background command shortcut" },
             .{ .name = "starship", .value = .bool_required, .description = "Move Starship prompt details into the bar (default: true)" },
             .{ .name = "report-cwd", .value = .bool_required, .description = "Report the working directory for the terminal title (default: true)" },
@@ -334,6 +335,9 @@ const commands = [_]zecli.CommandSpec{
         \\Starship's prompt details go to the line named prompt by default, while
         \\the final prompt line stays in the terminal. If that line is absent,
         \\the full prompt stays in the terminal. Use --starship-line to choose another.
+        \\
+        \\Defines sb as an alias for statusbar, preserving an existing sb command.
+        \\Use --no-sb-alias to skip the alias.
         \\
         \\The + shortcut runs commands in background statusbar lines:
         \\+ make test names the line make-ID; + +build make test names it build.

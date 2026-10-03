@@ -12,6 +12,8 @@ const zsh_init = @embedFile("../shell/starship.zsh");
 const fish_init = @embedFile("../shell/starship.fish");
 const zsh_plus_init = @embedFile("../shell/plus.zsh");
 const fish_plus_init = @embedFile("../shell/plus.fish");
+const zsh_alias_init = @embedFile("../shell/alias.zsh");
+const fish_alias_init = @embedFile("../shell/alias.fish");
 
 /// `statusbar init zsh|fish`: prints the shell integration. Outside a session it
 /// prints nothing, so the `eval` costs nothing in other terminals.
@@ -21,11 +23,12 @@ pub fn run(arena: std.mem.Allocator, io: Io, invoked_as: []const u8, command: *c
     const starship = command.getValue(bool, "starship") orelse true;
     const report_cwd = command.getValue(bool, "report-cwd") orelse true;
     const plus = !command.enabled("no-plus");
+    const sb_alias = !command.enabled("no-sb-alias");
     if (!starship and command.present("starship-line")) return common.usageError(stderr, command, "--starship-line cannot be combined with --starship=false");
     const line = command.getValue([]const u8, "starship-line") orelse "prompt";
     if (@import("session").line_types.Target.parse(line) == null) return common.usageError(stderr, command, "--starship-line must be a line name or numeric ID");
     _ = @import("platform").environment.get("STATUSBAR_STATE") orelse return 0;
-    if (!starship and !report_cwd and !plus) return 0;
+    if (!starship and !report_cwd and !plus and !sb_alias) return 0;
     if (report_cwd) try stdout.writeAll(if (std.mem.eql(u8, args[0], "zsh")) zsh_cwd_init else fish_cwd_init);
 
     // Preserve the invocation rather than resolving the executable. In
@@ -34,6 +37,14 @@ pub fn run(arena: std.mem.Allocator, io: Io, invoked_as: []const u8, command: *c
     // a slash absolute so a later `cd` cannot break the prompt hook.
     const executable = try shellExecutable(arena, io, invoked_as);
     const quoted = try shellQuote(arena, executable);
+    if (sb_alias) {
+        const zsh = std.mem.eql(u8, args[0], "zsh");
+        const source = if (zsh) zsh_alias_init else fish_alias_init;
+        // Fish single quotes interpret escaped backslashes, so preserve the
+        // escapes already present in the quoted command before quoting again.
+        const alias_command = if (zsh) quoted else try std.mem.replaceOwned(u8, arena, quoted, "\\", "\\\\");
+        try stdout.writeAll(try std.mem.replaceOwned(u8, arena, source, "@COMMAND@", try shellQuote(arena, alias_command)));
+    }
     if (plus) {
         const source = if (std.mem.eql(u8, args[0], "zsh")) zsh_plus_init else fish_plus_init;
         try stdout.writeAll(try std.mem.replaceOwned(u8, arena, source, "@STATUSBAR@", quoted));

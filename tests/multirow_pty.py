@@ -482,6 +482,47 @@ def check_init_invocation(binary):
     print("shell init preserves upgrade-safe invocation paths")
 
 
+def check_sb_alias(binary):
+    env = clean_env()
+    env['STATUSBAR_STATE'] = '/session-indicator'
+    flags = ['--starship=false', '--report-cwd=false', '--no-plus']
+    for shell in ('zsh', 'fish'):
+        def generate(*extra, executable=binary, environment=env):
+            return subprocess.check_output([executable, 'init', shell, *flags, *extra],
+                                           env=environment, text=True)
+        assert generate('--no-sb-alias') == ''
+        assert generate(environment=clean_env()) == ''
+        assert 'no-sb-alias' in subprocess.check_output([binary, 'completion', shell], text=True)
+        executable = shutil.which(shell)
+        if not executable:
+            continue
+        shell_args = [executable, '-f' if shell == 'zsh' else '-N', '-c']
+        with tempfile.TemporaryDirectory(prefix="statusbar alias '") as directory:
+            stable = Path(directory) / 'statusbar'
+            stable.symlink_to(binary)
+            source = generate(executable=str(stable))
+            # The alias must preserve the invocation path, quoting and arguments.
+            stable.unlink()
+            stable.write_text(f'#!{sys.executable}\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n')
+            stable.chmod(0o755)
+            script = source + '\n' + source + '\n' + "eval 'sb list \"two words\" \"\" --json'"
+            result = subprocess.run(shell_args + [script], env=env, text=True, capture_output=True)
+            assert result.returncode == 0, (shell, result)
+            assert json.loads(result.stdout) == ['list', 'two words', '', '--json'], result
+            definitions = (["function sb { print ORIGINAL; }", "alias sb='print ORIGINAL'"]
+                           if shell == 'zsh' else
+                           ['function sb; echo ORIGINAL; end', "alias sb 'echo ORIGINAL'"])
+            external = Path(directory) / 'sb'
+            external.write_text('#!/bin/sh\nprintf "ORIGINAL\\n"\n')
+            external.chmod(0o755)
+            for definition in [*definitions, '']:
+                preserved_env = {**env, 'PATH': directory + os.pathsep + env['PATH']}
+                result = subprocess.run(shell_args + [definition + '\n' + source + "\neval 'sb'"],
+                                        env=preserved_env, text=True, capture_output=True)
+                assert result.returncode == 0 and result.stdout.strip() == 'ORIGINAL', (shell, result)
+        print(f'sb alias: {shell} quoting, arguments, opt-out, repeat init and existing commands passed')
+
+
 def check_plus(binary):
     env = clean_env()
     env['STATUSBAR_STATE'] = '/session-indicator'
@@ -491,7 +532,7 @@ def check_plus(binary):
             return subprocess.run([executable, 'init', shell, *flags, *extra],
                                   env=environment, text=True, capture_output=True, check=True).stdout
 
-        assert generate('--no-plus') == ''
+        assert generate('--no-plus', '--no-sb-alias') == ''
         assert generate(environment=clean_env()) == ''
         completion = subprocess.check_output([binary, 'completion', shell], text=True)
         assert 'no-plus' in completion
@@ -842,7 +883,7 @@ def check_init_features(binary):
     env = os.environ.copy()
     env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
     for shell in ("zsh", "fish"):
-        for flags in (("--starship=false", "--report-cwd=false", "--no-plus"),):
+        for flags in (("--starship=false", "--report-cwd=false", "--no-plus", "--no-sb-alias"),):
             result = subprocess.run([binary, "init", shell, *flags], env=env, capture_output=True)
             assert result.returncode == 0 and result.stdout == b"", result
         for flags in (("--starship=false", "--starship-line=prompt"), ("--report-cwd=wrong",), ("--starship-slot=3",)):
@@ -2849,6 +2890,7 @@ def main():
     check_set(binary)
     check_default_templates(binary)
     check_init_invocation(binary)
+    check_sb_alias(binary)
     check_plus(binary)
     check_stdin_config(binary)
     check_startup_recovery(binary)
