@@ -1647,6 +1647,62 @@ mark('CONFIGURED_IDS_OK')
     print('IDs select standalone lines or whole groups, check dependencies, clean up FIFOs, and roll back failures')
 
 
+
+def check_new_prefix(binary):
+    child = CHILD_PRELUDE + r"""
+import concurrent.futures, json
+
+def entries(): return json.loads(run('ls', '--temp', '--json'))['lines']
+def check_name(name, prefix):
+    entry = next(x for x in entries() if x['name'] == name)
+    assert name == prefix + '-' + str(entry['id']), entry
+    return entry
+
+# The configured tmp-3.* group reserves the first candidate name.
+first = run('new', input=b'default')
+assert first == 'tmp-4'
+assert check_name(first, 'tmp')['value'] == 'default'
+# Explicit names can reserve a future generated name, which is skipped.
+run('new', 'tmp-6', input=b'explicit')
+second = run('new', input=b'second')
+assert second == 'tmp-7'
+check_name(second, 'tmp')
+empty = run('new', '-p', 'jobs', '--status', 'normal')
+assert check_name(empty, 'jobs')['status'] == 'normal'
+command_name = run('new', '--prefix', 'jobs', '--', sys.executable, '-c', 'print("command")')
+command_line = check_name(command_name, 'jobs')
+assert command_line['status'] == 'success' and command_line['value'] == 'command'
+fifo = run('new', '-p', 'pipes', '--fifo')
+check_name(os.path.basename(fifo), 'pipes')
+with open(fifo, 'w') as f: f.write('fifo value\n')
+settle()
+assert check_name(os.path.basename(fifo), 'pipes')['value'] == 'fifo value'
+run('rm', os.path.basename(fifo))
+assert not os.path.exists(fifo)
+with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+    names = list(pool.map(lambda _: run('new', '-p', 'jobs', input=b'parallel'), range(6)))
+assert len(set(names)) == 6
+for name in names: check_name(name, 'jobs')
+# Numeric removal of a generated name removes only that standalone line.
+run('rm', str(check_name(first, 'tmp')['id']))
+assert any(x['name'] == second for x in entries())
+assert '[line.tmp-3.child]' in run('config', 'show')
+saved = entries()
+for args in (('--prefix', ''), ('--prefix', 'a.b'), ('--prefix', 'two words'),
+             ('--prefix', 'x' * 44), ('--prefix',)):
+    run('new', *args, input=b'bad', code=2)
+    assert entries() == saved
+for prefix in ('jobs', '', 'bad.prefix', 'x' * 44):
+    assert run('new', 'fixed', '-p', prefix, input=b'explicit') == 'fixed'
+    assert next(x for x in entries() if x['name'] == 'fixed')['value'] == 'explicit'
+    run('rm', 'fixed')
+run('rm', '--all')
+mark('PREFIX_OK')
+"""
+    code, data = run_session(binary, '[line.base]\n[line.tmp-3.child]\n', child, timeout=25, cursor_rows=(1,) * 32)
+    assert code == 0 and b'PREFIX_OK' in data, data[-5000:]
+    print('new prefixes: defaults, collision skips, empty/stream/command/FIFO modes, concurrency and validation passed')
+
 def check_background_job_exit(binary):
     # The job ignores SIGHUP and keeps the pty open after the shell exits.
     script = "(trap '' HUP; exec sleep 10) & printf LAST_WORDS; exit 3"
@@ -1710,7 +1766,7 @@ def check_hidden_push_without_paint(binary):
               '[line.c]\ntext = C\n[push]\ntext = "#(value)"\n')
     child = CHILD_PRELUDE + r'''
 mark('HIDDEN_READY')
-assert run('new', input=b'hidden value') == '4'
+assert run('new', input=b'hidden value') == 'tmp-4'
 mark('HIDDEN_ADDED')
 run('rm', '4')
 mark('HIDDEN_REMOVED')
@@ -1770,15 +1826,15 @@ assert listing()[1]['value'] is None
 unnamed = run('new', input=b'unnamed')
 run('new', 'job', input=b'finished')
 pushed = listing('--temp')
-assert [x['id'] for x in pushed] == [int(unnamed), int(unnamed) + 1], pushed
-assert [x['name'] for x in pushed] == [None, 'job'], pushed
+assert [x['id'] for x in pushed] == [int(unnamed.removeprefix('tmp-')), int(unnamed.removeprefix('tmp-')) + 1], pushed
+assert [x['name'] for x in pushed] == [unnamed, 'job'], pushed
 assert all(x['temp'] and x['status'] == 'done' and not x['visible'] for x in pushed)
 assert temporary() == pushed
 run('update', 'job', '--status', 'failed')
 assert listing('--temp')[-1]['access'] == 'ro'
 run('update', 'job', '--status', 'done')
 assert listing('--temp')[-1]['access'] == 'rw'
-# Bindings are discovered by stable line ID, including hidden and unnamed lines.
+# Bindings are discovered by stable line ID, including hidden and generated names.
 base_fifo = run('bind', 'base')
 hidden_fifo = run('bind', 'hidden')
 unnamed_fifo = run('bind', unnamed)
@@ -1867,7 +1923,7 @@ def check_push_pop(binary):
 from subprocess import PIPE, Popen
 first = run('new', input=b'partial\rfirst final\n')
 second = run('new', 'named', input='Καλημέρα ## #[bold]'.encode())
-assert first == '2' and second == 'named', (first, second)
+assert first == 'tmp-2' and second == 'named', (first, second)
 for args in (['5'], ['a..b'], ['1', 'x']):
     run('new', *args, input=b'x', code=2)
 for taken in ('named', 'base'):
@@ -1886,7 +1942,7 @@ p.stdin.write(b'in progress'); p.stdin.flush(); time.sleep(1)
 run('rm', '5')
 p.stdin.write(b'\rfinished'); p.stdin.close()
 assert p.wait(timeout=4) == 0, p.stderr.read()
-assert p.stdout.read() == b'5\n'
+assert p.stdout.read() == b'tmp-5\n'
 # A retired producer cannot touch a replacement with the same name.
 p = Popen([b, 'new', 'job'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
 p.stdin.write(b'old job'); p.stdin.flush(); time.sleep(1)
@@ -1904,19 +1960,19 @@ ids = []
 for stream in simultaneous:
     assert stream.wait(timeout=5) == 0, stream.stderr.read()
     ids.append(stream.stdout.read().strip())
-assert set(ids) == {b'8', b'9'}, ids
+assert set(ids) == {b'tmp-8', b'tmp-9'}, ids
 for line_id in ids:
     run('rm', line_id.decode())
-assert run('new', input=b'') == '10'
+assert run('new', input=b'') == 'tmp-10'
 run('rm', '10')
 command = subprocess.run([b, 'new', '--', sys.executable, '-c',
                           'import os,sys; '
                           'sys.stdout.write("started\\n"); sys.stdout.flush(); '
                           'w=int(os.environ["COLUMNS"]); '
                           'sys.stderr.write("#" * (w-6) + " 99.9%\\r"); '
-                          'sys.exit(7 if w==74 else 9)'], capture_output=True)
+                          'sys.exit(7 if w==70 else 9)'], capture_output=True)
 assert command.returncode == 7, (command.returncode, command.stderr)
-assert command.stdout == b'11\n', command.stdout
+assert command.stdout == b'tmp-11\n', command.stdout
 assert command.stderr == b'', command.stderr
 settle()
 run('rm', '11')
@@ -1928,7 +1984,7 @@ run('rm', 'named')
 missing = subprocess.run([b, 'new', '--', '/nonexistent/command'], capture_output=True)
 assert missing.returncode == 1 and b'cannot start command' in missing.stderr, missing
 stack = [run('new', input=value) for value in (b'older', b'middle', b'newer')]
-assert stack == ['14', '15', '16'], stack
+assert stack == ['tmp-14', 'tmp-15', 'tmp-16'], stack
 run('rm', '15')
 assert run('rm') == ''
 run('rm', '14')
@@ -1939,11 +1995,11 @@ assert subprocess.run([b, 'rm', 'named'], env=wrong, capture_output=True).return
 assert subprocess.run([b, 'new'], env=wrong, input=b'x', capture_output=True).returncode != 0
 # A cursor save that is never restored must not starve line requests.
 sys.stdout.write('\x1b7'); sys.stdout.flush()
-assert run('new', input=b'saved cursor') == '17'
+assert run('new', input=b'saved cursor') == 'tmp-17'
 run('rm', '17')
 p = Popen([b, 'new'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
 p.stdin.write(b'active before clear'); p.stdin.flush(); time.sleep(1)
-assert run('new', input=b'completed before clear') == '19'
+assert run('new', input=b'completed before clear') == 'tmp-19'
 assert os.get_terminal_size(0).lines == 20
 run('rm', '--all', '19', code=2)
 assert subprocess.run([b, 'rm', '--all'], env=wrong, capture_output=True).returncode != 0
@@ -1953,8 +2009,8 @@ assert os.get_terminal_size(0).lines == 22
 assert run('rm', '-a') == ''
 p.stdin.write(b'late output'); p.stdin.close()
 assert p.wait(timeout=4) == 0, p.stderr.read()
-assert p.stdout.read() == b'18\n'
-assert run('new', input=b'new after clear') == '20'
+assert p.stdout.read() == b'tmp-18\n'
+assert run('new', input=b'new after clear') == 'tmp-20'
 assert run('rm', '-a') == ''
 print('PUSH_POP_OK', flush=True)
 '''
@@ -1962,7 +2018,7 @@ print('PUSH_POP_OK', flush=True)
     code, data = run_session(binary, config, child, timeout=25)
     assert code == 0 and b'PUSH_POP_OK' in data, data[-2500:]
     rows = painted(data)
-    assert any(row.startswith(b'> first final') and row.endswith(b'<2>') for row in rows), rows[-6:]
+    assert any(row.startswith(b'> first final') and row.endswith(b'<tmp-2>') for row in rows), rows[-6:]
     assert any(row.startswith('> Καλημέρα ## #[bold]'.encode()) and row.endswith(b'<named>') for row in rows), rows[-6:]
     assert b'\x1b[0;38;2;18;52;86m' in data and b'38;2;171;205;239' in data, data[-2500:]
     assert b'\x1b[0;38;2;101;67;33m' in data, data[-2500:]
@@ -1970,7 +2026,7 @@ print('PUSH_POP_OK', flush=True)
     assert any(row.startswith(b'> new job') for row in rows), rows
     assert b'STALE UPDATE' not in plain(data), data[-2000:]
     assert any(row.startswith(b'> width=68') and row.endswith(b'<download>') for row in rows), rows[-8:]
-    assert any(b'99.9%' in row and row.endswith(b'<11>') for row in rows), rows[-8:]
+    assert any(b'99.9%' in row and row.endswith(b'<tmp-11>') for row in rows), rows[-8:]
     print('add/rm' + ' names, IDs, command width, reloads, retired producers, remove-all, and authentication passed')
 
 
@@ -2016,7 +2072,7 @@ with open(build, 'wb') as writer: writer.write(b'\nLATER\n')
 mark('BUILD_LATER')
 unnamed = run('new', '--fifo')
 name = os.path.basename(unnamed)
-assert name == '4' and unnamed == directory + '/4'
+assert name == 'tmp-4' and unnamed == directory + '/tmp-4'
 with open(unnamed, 'wb') as writer: writer.write(b'UNNAMED\n')
 settle()
 run('update', name, '--status', 'failed')
@@ -2104,7 +2160,7 @@ print('FIFO_OK', flush=True)
     assert any('Καλημέρα'.encode() in row and row.endswith(b'running [build]') for row in rows), rows[-10:]
     assert any(row.startswith(b'FINAL') and row.endswith(b'success [build]') for row in rows), rows[-10:]
     assert any(row.startswith(b'LATER') and row.endswith(b'success [build]') for row in rows), rows[-10:]
-    assert any(row.startswith(b'UNNAMED') and row.endswith(b'failed [4]') for row in rows), rows[-10:]
+    assert any(row.startswith(b'UNNAMED') and row.endswith(b'failed [tmp-4]') for row in rows), rows[-10:]
     assert b'BASE RESPONSIVE' in text and b'NEW[BEFORE_UNBIND]' in text, text[-2500:]
     assert b'NEW[OLD]' not in text, text[-2500:]
     cleanup = re.search(rb'FIFO_CLEANUP=([^\r\n]+)', data)
@@ -2197,7 +2253,7 @@ settle()
 run('update', 'manual', 'UPDATED', '--status', 'success'); settle()
 run('rm', 'manual')
 unnamed = run('new', '--status', 'done')
-assert unnamed.isdecimal(), unnamed
+assert unnamed.startswith('tmp-') and unnamed.removeprefix('tmp-').isdecimal(), unnamed
 run('rm', unnamed)
 run('new', 'invalid', '--status', 'bad', code=2)
 path = run('new', 'fifo', '--fifo', '--status', 'failed')
@@ -2242,7 +2298,7 @@ import os, subprocess, sys, time
 b = sys.argv[1]
 r = subprocess.run([b, 'new', '--', sys.executable, '-c',
     'import os,time; print("width=" + os.environ["COLUMNS"], flush=True); time.sleep(.8)'], capture_output=True)
-assert r.returncode == 0 and r.stdout == b'2\n', r
+assert r.returncode == 0 and r.stdout == b'tmp-2\n', r
 # A completed line must remain quiet even while the session stays open.
 time.sleep(.4)
 with open(os.environ['SPINNER_COUNTER']) as f:
@@ -2267,10 +2323,10 @@ interval = 86400
         code, data = run_session(binary, config, child, env=env, timeout=8)
         assert code == 0 and b'SPINNER_OK' in data, data[-2000:]
         text = plain(data)
-        assert text.count(b'<- >width=73') >= 2, text[-2000:]
-        assert text.count('<界>width=73'.encode()) >= 2, text[-2000:]
-        assert b'DONE width=73' in text, text[-2000:]
-        completed = text[text.index(b'DONE width=73'):]
+        assert text.count(b'<- >width=69') >= 2, text[-2000:]
+        assert text.count('<界>width=69'.encode()) >= 2, text[-2000:]
+        assert b'DONE width=69' in text, text[-2000:]
+        completed = text[text.index(b'DONE width=69'):]
         assert b'<- >' not in completed and '<界>'.encode() not in completed, completed
     print('push spinner animation, stable command width, completion, and command pacing passed')
 
@@ -2806,6 +2862,7 @@ def main():
     check_theme_growth(binary)
     check_new_at_bottom(binary)
     check_remove_configured_ids(binary)
+    check_new_prefix(binary)
     check_background_job_exit(binary)
     check_background_push_tty_output(binary)
     check_hidden_push_without_paint(binary)

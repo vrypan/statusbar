@@ -1,7 +1,7 @@
 //! Wire format shared by line-control clients and the session handler.
 //!
 //!     1|TOKEN|S|TARGET|VALUE|STATUS    set: VALUE is -, R (reset) or V:BASE64
-//!     1|TOKEN|C|NAME|MODE[|STATUS]     push: MODE stream|fifo|empty
+//!     1|TOKEN|C|NAME|MODE[|STATUS[|PREFIX]]     push: MODE stream|fifo|empty
 //!     1|TOKEN|U|ID|BASE64              stream update (unacknowledged)
 //!     1|TOKEN|F|ID|STATUS              finish a stream
 //!     1|TOKEN|P[|TARGET]               pop the target or the latest pushed line
@@ -23,7 +23,7 @@ pub const PushMode = enum { stream, fifo, empty };
 
 pub const Request = union(enum) {
     set: struct { target: Target, value: ValueOp = .unchanged, status: ?Status = null },
-    push: struct { name: ?[]const u8 = null, mode: PushMode = .stream, status: ?Status = null },
+    push: struct { name: ?[]const u8 = null, prefix: ?[]const u8 = null, mode: PushMode = .stream, status: ?Status = null },
     update: struct { id: u64, value: []const u8 },
     finish: struct { id: u64, status: Status },
     pop: ?Target,
@@ -75,11 +75,16 @@ pub const Envelope = struct {
                 .value = try decodeValueOp(try self.field(), buffer),
                 .status = try parseOptionalStatus(try self.field()),
             } },
-            'C' => .{ .push = .{
-                .name = try parseName(try self.field()),
-                .mode = std.meta.stringToEnum(PushMode, try self.field()) orelse return error.InvalidPacket,
-                .status = if (self.fields.next()) |status| try parseOptionalStatus(status) else null,
-            } },
+            'C' => push: {
+                const name = try parseName(try self.field());
+                const mode = std.meta.stringToEnum(PushMode, try self.field()) orelse return error.InvalidPacket;
+                const status = if (self.fields.next()) |status| try parseOptionalStatus(status) else null;
+                const prefix = self.fields.next();
+                if (name == null) if (prefix) |value| {
+                    if (!types.validPrefix(value)) return error.InvalidPacket;
+                };
+                break :push .{ .push = .{ .name = name, .mode = mode, .status = status, .prefix = if (name == null) prefix else null } };
+            },
             'U' => .{ .update = .{ .id = try parseId(try self.field()), .value = try decodeValue(try self.field(), buffer) } },
             'F' => .{ .finish = .{ .id = try parseId(try self.field()), .status = Status.parse(try self.field()) orelse return error.InvalidPacket } },
             'P' => .{ .pop = if (self.fields.next()) |text| try parseTarget(text) else null },
@@ -163,7 +168,9 @@ pub fn encode(buffer: []u8, token: []const u8, request: Request) ![]const u8 {
         },
         .push => |push| {
             try writer.print("C|{s}|{t}", .{ push.name orelse "", push.mode });
-            if (push.status) |status| try writer.print("|{t}", .{status});
+            if (if (push.name == null) push.prefix else null) |prefix| {
+                try writer.print("|{s}|{s}", .{ if (push.status) |status| @tagName(status) else "-", prefix });
+            } else if (push.status) |status| try writer.print("|{t}", .{status});
         },
         .update => |update| {
             try writer.print("U|{d}|", .{update.id});
@@ -225,6 +232,8 @@ test "requests round-trip omitted, empty and reset values with optional status" 
         .{ .request = .{ .set = .{ .target = .{ .id = 5 }, .value = .{ .replace = "ok" }, .status = .success } }, .wire = "1|t|S|5|V:b2s=|success" },
         .{ .request = .{ .set = .{ .target = .{ .name = "build" }, .value = .reset } }, .wire = "1|t|S|build|R|-" },
         .{ .request = .{ .set = .{ .target = .{ .name = "build" }, .value = .reset, .status = .normal } }, .wire = "1|t|S|build|R|normal" },
+        .{ .request = .{ .push = .{ .prefix = "build", .mode = .empty } }, .wire = "1|t|C||empty|-|build" },
+        .{ .request = .{ .push = .{ .prefix = "tmp", .status = .failed } }, .wire = "1|t|C||stream|failed|tmp" },
         .{ .request = .{ .push = .{} }, .wire = "1|t|C||stream" },
         .{ .request = .{ .push = .{ .name = "job", .mode = .fifo } }, .wire = "1|t|C|job|fifo" },
         .{ .request = .{ .push = .{ .name = "job", .mode = .empty, .status = .normal } }, .wire = "1|t|C|job|empty|normal" },
@@ -255,15 +264,16 @@ test "requests round-trip omitted, empty and reset values with optional status" 
 test "hostile and truncated packets are rejected" {
     var decoded: [types.max_value]u8 = undefined;
     for ([_][]const u8{
-        "1|t|C|job|empty|bad", "1|t|C|job|fifo|normal|extra", "1|t|C|job|stream|",
-        "1|t|S",               "1|t|S|build",                 "1|t|S|build|-",
-        "1|t|S|build|x|-",     "1|t|S|build|V:!|-",           "1|t|S|build|-|fail",
-        "1|t|S|a..b|-|-",      "1|t|S|0|-|-",                 "1|t|S|build|-|-|x",
-        "1|t|C",               "1|t|C|5|stream",              "1|t|C|job|pipe",
-        "1|t|U|0|",            "1|t|U|job|eA==",              "1|t|U|1",
-        "1|t|F|1",             "1|t|F|1|fail",                "1|t|P|",
-        "1|t|P|a/b",           "1|t|A|1",                     "1|t|B",
-        "1|t|X|..",            "1|t|U|1|" ++ "eHh4" ** 342,   "1|t|L|extra",
+        "1|t|C||stream|-|a.b", "1|t|C||fifo|-|",                "1|t|C||stream|-|" ++ "x" ** (types.max_prefix + 1),
+        "1|t|C|job|empty|bad", "1|t|C||fifo|normal|bad.prefix", "1|t|C|job|stream|",
+        "1|t|S",               "1|t|S|build",                   "1|t|S|build|-",
+        "1|t|S|build|x|-",     "1|t|S|build|V:!|-",             "1|t|S|build|-|fail",
+        "1|t|S|a..b|-|-",      "1|t|S|0|-|-",                   "1|t|S|build|-|-|x",
+        "1|t|C",               "1|t|C|5|stream",                "1|t|C|job|pipe",
+        "1|t|U|0|",            "1|t|U|job|eA==",                "1|t|U|1",
+        "1|t|F|1",             "1|t|F|1|fail",                  "1|t|P|",
+        "1|t|P|a/b",           "1|t|A|1",                       "1|t|B",
+        "1|t|X|..",            "1|t|U|1|" ++ "eHh4" ** 342,     "1|t|L|extra",
     }) |wire| {
         var envelope = try Envelope.parse(wire);
         try std.testing.expectError(error.InvalidPacket, envelope.decode(&decoded));
@@ -281,4 +291,14 @@ test "replies are bounded and distinguish outcomes" {
     const path = "/tmp/statusbar-state-1-2.fifos/build";
     try std.testing.expectEqualStrings(path, (try decodeReply(try encodeReply(&buffer, .{ .path = path }))).path);
     try std.testing.expectError(error.NoSpaceLeft, encodeReply(&buffer, .{ .path = "x" ** 256 }));
+}
+
+test "explicit names ignore prefixes" {
+    var packet: [max_packet]u8 = undefined;
+    var decoded: [types.max_value]u8 = undefined;
+    try std.testing.expectEqualStrings("1|t|C|fixed|empty", try encode(&packet, "t", .{ .push = .{ .name = "fixed", .prefix = "bad.prefix", .mode = .empty } }));
+    var envelope = try Envelope.parse("1|t|C|fixed|empty|-|bad.prefix");
+    const request = try envelope.decode(&decoded);
+    try std.testing.expectEqualStrings("fixed", request.push.name.?);
+    try std.testing.expect(request.push.prefix == null);
 }

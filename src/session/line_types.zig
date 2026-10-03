@@ -8,6 +8,13 @@ const names = @import("shared").names;
 pub const max_value = 1024;
 /// The longest explicit line name. Names double as FIFO basenames.
 pub const max_name = names.max_name;
+pub const default_prefix = "tmp";
+/// Leave room for a hyphen and any u64 ID (up to 20 decimal digits).
+pub const max_prefix = max_name - 21;
+
+pub fn validPrefix(prefix: []const u8) bool {
+    return prefix.len <= max_prefix and names.validSegment(prefix);
+}
 
 pub const Status = enum {
     normal,
@@ -99,4 +106,12 @@ test "value normalization keeps spaces on one line" {
     try std.testing.expectEqualStrings("", normalizeValue(&line_breaks));
     var mixed = [_]u8{ '\n', ' ', 'a', '\t', 'b', '\r', ' ', '\n' };
     try std.testing.expectEqualStrings(" a b  ", normalizeValue(&mixed));
+}
+
+test "prefixes fit generated names for any numeric ID and exclude dots" {
+    for ([_][]const u8{ "tmp", "build", "123", "_x-9", "x" ** max_prefix }) |prefix| try std.testing.expect(validPrefix(prefix));
+    for ([_][]const u8{ "", "a.b", "a b", "ü", "x" ** (max_prefix + 1) }) |prefix| try std.testing.expect(!validPrefix(prefix));
+    var buffer: [max_name]u8 = undefined;
+    const name = try std.fmt.bufPrint(&buffer, "{s}-{d}", .{ "x" ** max_prefix, std.math.maxInt(u64) });
+    try std.testing.expect(validName(name));
 }

@@ -38,6 +38,7 @@ assert json.loads(run('show', 'default', '--json'))['lines']
 completion = subprocess.check_output([binary, 'completion', 'bash'], text=True)
 for words, position, expected in (
     ('statusbar ""', 1, {'run', 'new', 'remove', 'rm', 'list', 'ls', 'update', 'upd', 'bind', 'config', 'init', 'completion'}),
+    ('statusbar new "-"', 2, {'--prefix', '-p', '--fifo', '--status', '--help', '-h'}),
     ('statusbar upd "--"', 2, {'--status', '--reset', '--help'}),
     ('statusbar update "--"', 2, {'--status', '--reset', '--help'}),
     ('statusbar config ""', 2, {'load', 'import', 'check', 'show', 'path'}),

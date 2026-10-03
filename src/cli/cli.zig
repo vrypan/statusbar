@@ -130,12 +130,13 @@ const list_output_flags = [_]zecli.FlagSpec{
 };
 
 const temp_add_flags = [_]zecli.FlagSpec{
+    .{ .name = "prefix", .short = 'p', .value = .string, .value_name = "PREFIX", .description = "Generate PREFIX-ID names when NAME is omitted (default: tmp)" },
     .{ .name = "fifo", .description = "Create the line with a FIFO and print its path" },
     .{ .name = "status", .value = .string, .value_name = "STATE", .description = "Set the initial status (default: running)", .choices = &status_names },
 };
 
 const temp_add_arguments = [_]zecli.ArgumentSpec{
-    .{ .name = "NAME", .description = "Name for the new line; omit to use its numeric ID" },
+    .{ .name = "NAME", .description = "Name for the new line; omit to generate PREFIX-ID" },
 };
 
 const temp_remove_flags = [_]zecli.FlagSpec{
@@ -223,13 +224,15 @@ const commands = [_]zecli.CommandSpec{
     .{
         .name = "new",
         .description = "Create a temporary line, optionally streaming text into it",
-        .usage = "statusbar new [NAME] [--status STATE] [--fifo | -- COMMAND [ARG...]]",
+        .usage = "statusbar new [NAME] [--prefix PREFIX] [--status STATE] [--fifo | -- COMMAND [ARG...]]",
         .flags = &temp_add_flags,
         .arguments = &temp_add_arguments,
         .extra_help =
         \\Adds a line below the configured ones, using the [push] templates.
         \\With terminal stdin and no command or FIFO, creates an empty line,
-        \\prints its name (or numeric ID), and returns. Update it with update.
+        \\prints its name, and returns. Update it with update.
+        \\Without NAME, generates tmp-ID. --prefix (-p) changes tmp. NAME
+        \\takes precedence over --prefix. Prefixes are 1–43 letters, digits, _ or -.
         \\--status sets the initial status in every mode (default: running).
         \\Read stdin from a pipe or file, or run a command after --. Each new
         \\line of input replaces the value; the last one stays visible after
@@ -238,10 +241,10 @@ const commands = [_]zecli.CommandSpec{
         \\Background commands receive /dev/null instead of terminal stdin;
         \\piped or redirected input is preserved.
         \\
-        \\At the end of input, new prints the line's name (its numeric ID when
-        \\unnamed) and sets its status: done for stdin, success or failed from
-        \\the command's result. It stays quiet when run in the background with
-        \\stdout on the terminal. Command mode exits with the command's status.
+        \\At the end of input, new prints the line's name and sets its status:
+        \\done for stdin, or success/failed from the command's result. It stays
+        \\quiet when run in the background with stdout on the terminal.
+        \\Command mode exits with the command's status.
         \\With --fifo, new prints the FIFO path at once; writes to it update
         \\the value, and closing it keeps the value and status.
         \\Use `statusbar remove NAME` to remove the line.
@@ -251,6 +254,7 @@ const commands = [_]zecli.CommandSpec{
             "statusbar new download -- curl --progress-bar -o /dev/null URL",
             "name=$(printf 'Done\\n' | statusbar new)",
             "fifo=$(statusbar new build --fifo)",
+            "statusbar new -p download -- curl --progress-bar -o /dev/null URL",
         },
     },
     .{

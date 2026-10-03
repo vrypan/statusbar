@@ -22,7 +22,7 @@ fn reject(reason: []const u8) protocol.Reply {
 pub fn controlRequest(self: *Proxy, request: protocol.Request, owner: []const u8, now_ms: i64) protocol.Reply {
     return switch (request) {
         .set => |set| setLine(self, set.target, .{ .value = set.value, .status = set.status }, now_ms),
-        .push => |push| pushLine(self, push.name, push.mode, push.status, owner, now_ms),
+        .push => |push| pushLine(self, push.name, push.prefix, push.mode, push.status, owner, now_ms),
         .update => |update| streamUpdate(self, update.id, update.value, owner, now_ms),
         .finish => |finish| finishStream(self, finish.id, finish.status, owner, now_ms),
         .pop => |target| popLine(self, target, now_ms),
@@ -99,24 +99,34 @@ fn valueColumns(self: *const Proxy, index: usize) usize {
     return @max(1, cols -| fixed);
 }
 
-fn pushLine(self: *Proxy, name: ?[]const u8, mode: protocol.PushMode, status: ?line_types.Status, owner: []const u8, now_ms: i64) protocol.Reply {
-    if (name) |value| if (self.lines.nameTaken(value)) return reject("name is already used by another line");
-    if (name) |value| {
-        const other = self.runtime.cfg.nameConflict(value) orelse self.lines.nameConflict(value);
-        if (other) |conflict| return reject(std.fmt.bufPrint(&self.control_reply, "line name '{s}' conflicts with '{s}'; a standalone line cannot also be a group prefix", .{ value, conflict }) catch "line name conflicts with a group prefix");
+fn pushLine(self: *Proxy, requested_name: ?[]const u8, prefix_option: ?[]const u8, mode: protocol.PushMode, status: ?line_types.Status, owner: []const u8, now_ms: i64) protocol.Reply {
+    const prefix = if (requested_name == null) prefix_option orelse line_types.default_prefix else line_types.default_prefix;
+    if (!line_types.validPrefix(prefix)) return reject("invalid name prefix");
+    var buffer: [line_types.max_name]u8 = undefined;
+    const generated = if (requested_name == null) generatedName(self, prefix, &buffer) catch return reject("line limit reached") else null;
+    const name: []const u8 = requested_name orelse generated.?.name;
+    if (self.lines.nameTaken(name)) return reject("name is already used by another line");
+    {
+        const other = self.runtime.cfg.nameConflict(name) orelse self.lines.nameConflict(name);
+        if (other) |conflict| return reject(std.fmt.bufPrint(&self.control_reply, "line name '{s}' conflicts with '{s}'; a standalone line cannot also be a group prefix", .{ name, conflict }) catch "line name conflicts with a group prefix");
     }
     if (self.lines.items.items.len >= config.max_lines) return reject("line limit reached");
-    const id = self.lines.push(name, if (mode == .stream) owner else null) catch |err| return reject(switch (err) {
-        error.LineLimit => "line limit reached",
-        error.NameTaken => "name is already used by another line",
-        error.NameConflict => "line name conflicts with a group prefix",
-        else => "invalid line",
-    });
+    const previous_id = self.lines.next_id;
+    if (generated) |choice| self.lines.next_id = choice.id;
+    const id = self.lines.push(name, if (mode == .stream) owner else null) catch |err| {
+        self.lines.next_id = previous_id;
+        return reject(switch (err) {
+            error.LineLimit => "line limit reached",
+            error.NameTaken => "name is already used by another line",
+            error.NameConflict => "line name conflicts with a group prefix",
+            else => "invalid line",
+        });
+    };
     const index = self.lines.items.items.len - 1;
     _ = self.lines.apply(index, .{ .status = status });
     self.resizeForLines(now_ms) catch {
         _ = self.lines.remove(index);
-        self.lines.next_id = id;
+        self.lines.next_id = previous_id;
         self.recoverRows();
         return reject("cannot resize bar");
     };
@@ -127,6 +137,16 @@ fn pushLine(self: *Proxy, name: ?[]const u8, mode: protocol.PushMode, status: ?l
         return reject(bindError(err));
     };
     return .{ .path = path };
+}
+
+fn generatedName(self: *const Proxy, prefix: []const u8, buffer: *[line_types.max_name]u8) !struct { id: u64, name: []const u8 } {
+    var id = self.lines.next_id;
+    while (id < std.math.maxInt(u64)) : (id += 1) {
+        const name = try std.fmt.bufPrint(buffer, "{s}-{d}", .{ prefix, id });
+        if (self.lines.nameTaken(name) or self.lines.nameConflict(name) != null or self.runtime.cfg.nameConflict(name) != null) continue;
+        return .{ .id = id, .name = name };
+    }
+    return error.LineLimit;
 }
 
 fn streamUpdate(self: *Proxy, id: u64, value: []const u8, owner: []const u8, now_ms: i64) protocol.Reply {
@@ -340,4 +360,21 @@ test "removal rejects final configured lines by name or ID, dotted names and pen
     const numeric = h.proxy.controlRequest(.{ .pop = .{ .id = 1 } }, "cli", 0);
     try std.testing.expect(numeric == .rejected and std.mem.indexOf(u8, numeric.rejected, "pending") != null);
     try std.testing.expectEqual(@as(usize, 2), h.lines.items.items.len);
+}
+
+test "generated names skip explicit names and group conflicts without changing IDs" {
+    var h: Harness = undefined;
+    try h.init("[line.tmp-3.child]\n");
+    defer h.deinit();
+    var buffer: [line_types.max_name]u8 = undefined;
+    const first = try generatedName(&h.proxy, "tmp", &buffer);
+    try std.testing.expectEqualStrings("tmp-4", first.name);
+    try std.testing.expectEqual(@as(u64, 3), h.lines.next_id);
+    _ = try h.lines.push("tmp-4", null);
+    const next = try generatedName(&h.proxy, "tmp", &buffer);
+    try std.testing.expectEqualStrings("tmp-5", next.name);
+    try std.testing.expectEqual(@as(u64, 5), next.id);
+    try std.testing.expectEqual(@as(u64, 4), h.lines.next_id);
+    h.lines.next_id = std.math.maxInt(u64);
+    try std.testing.expectError(error.LineLimit, generatedName(&h.proxy, "tmp", &buffer));
 }

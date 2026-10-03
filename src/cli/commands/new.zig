@@ -14,6 +14,9 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         if (!types.validName(args[0])) return common.usageError(stderr, command, "NAME must be 1–64 letters, digits, _, - and dots between nonempty segments, and not only digits");
         break :name args[0];
     } else null;
+    const prefix_option = command.getValue([]const u8, "prefix");
+    const prefix = prefix_option orelse types.default_prefix;
+    if (name == null and !types.validPrefix(prefix)) return common.usageError(stderr, command, "PREFIX must be 1–43 letters, digits, _ or -");
     const fifo = command.enabled("fifo");
     const status: ?types.Status = if (command.getValue([]const u8, "status")) |value|
         types.Status.parse(value) orelse return common.usageError(stderr, command, "STATE must be normal, running, done, success or failed")
@@ -27,7 +30,7 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     if (!try session.open(io, stderr)) return 1;
     defer session.close();
 
-    const created = try session.request(stderr, .{ .push = .{ .name = name, .mode = mode, .status = status } }) orelse return 1;
+    const created = try session.request(stderr, .{ .push = .{ .name = name, .prefix = if (name == null) prefix else null, .mode = mode, .status = status } }) orelse return 1;
     if (fifo) {
         if (created != .path) return common.rejected(stderr, created, "the session rejected new");
         if (!sys.isBackgroundTty(io, 1)) {
@@ -38,9 +41,11 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     }
     if (created != .created) return common.rejected(stderr, created, "the session rejected new");
     const id = created.created.id;
+    var name_buffer: [types.max_name]u8 = undefined;
+    const public_name = name orelse try std.fmt.bufPrint(&name_buffer, "{s}-{d}", .{ prefix, id });
     if (mode == .empty) {
         if (!sys.isBackgroundTty(io, 1)) {
-            if (name) |value| try stdout.print("{s}\n", .{value}) else try stdout.print("{d}\n", .{id});
+            try stdout.print("{s}\n", .{public_name});
             try stdout.flush();
         }
         return 0;
@@ -98,7 +103,7 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     const finished = try session.request(stderr, .{ .finish = .{ .id = id, .status = final_status } }) orelse return 1;
     if (finished != .ok) return common.rejected(stderr, finished, "the session rejected the final status");
     if (!sys.isBackgroundTty(io, 1)) {
-        if (name) |value| try stdout.print("{s}\n", .{value}) else try stdout.print("{d}\n", .{id});
+        try stdout.print("{s}\n", .{public_name});
         try stdout.flush();
     }
     return exit_code;
