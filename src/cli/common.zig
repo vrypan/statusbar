@@ -6,8 +6,15 @@ const control = @import("session").session_control;
 const protocol = @import("session").line_protocol;
 
 /// Reports an invalid value the way zecli reports a parse error.
+/// Usage written for a mounted application is rebased onto the command path.
 pub fn usageError(stderr: *Io.Writer, command: *const zecli.Command, message: []const u8) !u8 {
-    try stderr.print("error: {s}\n\nUsage: {s}\n\nTry 'statusbar {s} --help' for more information.\n", .{ message, command.spec.usage, command.name });
+    const usage = command.spec.usage;
+    const source = command.source_application_name;
+    const rebased = source.len > 0 and std.mem.startsWith(u8, usage, source) and
+        (usage.len == source.len or usage[source.len] == ' ');
+    try stderr.print("error: {s}\n\nUsage: ", .{message});
+    if (rebased) try stderr.print("{s}{s}", .{ command.source_path, usage[source.len..] }) else try stderr.writeAll(usage);
+    try stderr.print("\n\nTry '{s} --help' for more information.\n", .{command.path orelse command.name});
     try stderr.flush();
     return 2;
 }

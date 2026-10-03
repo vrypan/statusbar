@@ -20,13 +20,13 @@ pub fn merge(gpa: std.mem.Allocator, current: []const u8, fragment: []const u8, 
             if (std.mem.eql(u8, header.name, "colors")) {
                 section = .colors;
             } else {
-                if (!std.mem.startsWith(u8, header.name, "line.") and !std.mem.startsWith(u8, header.name, "command.")) return statements.fail(diag, "--add accepts only [line.NAME], [command.NAME] and [colors]");
+                if (!std.mem.startsWith(u8, header.name, "line.") and !std.mem.startsWith(u8, header.name, "command.")) return statements.fail(diag, "config add accepts only [line.NAME], [command.NAME] and [colors]");
                 section = .named;
                 definitions += 1;
             }
         },
         .assignment => |assignment| switch (section) {
-            .root => return statements.fail(diag, "--add does not accept global settings; start with a section"),
+            .root => return statements.fail(diag, "config add does not accept global settings; start with a section"),
             .named => {},
             .colors => {
                 for (base.palette().colors) |color| if (std.mem.eql(u8, color.name, assignment.key)) return statements.fail(diag, "this color is already defined");
@@ -38,7 +38,7 @@ pub fn merge(gpa: std.mem.Allocator, current: []const u8, fragment: []const u8, 
             },
         },
     };
-    if (definitions == 0) return statements.fail(diag, "stdin contains no definitions to add");
+    if (definitions == 0) return statements.fail(diag, "no definitions to add");
     diag.* = .{};
     // A physical newline also separates a fragment from a final comment or
     // assignment when the existing source has no trailing newline.

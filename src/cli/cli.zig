@@ -8,7 +8,7 @@
 //!     statusbar list [--pushed] [--short] [--json]
 //!     statusbar bind [-u] NAME
 //!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]
-//!     statusbar config [--print [default|startup|current] | --default | --path | --check FILE]
+//!     statusbar config [show [SOURCE] | check FILE | load FILE | add FILE | list [--debug] | remove PREFIX]
 //!     statusbar completion <bash|zsh|fish>
 
 const std = @import("std");
@@ -23,22 +23,151 @@ const config_flag = zecli.FlagSpec{
     .completion = .files,
 };
 
-const config_flags = [_]zecli.FlagSpec{
-    .{ .name = "print", .description = "Print a config (current if omitted)" },
-    .{ .name = "list", .description = "List line and command names by prefix (current if omitted)" },
-    .{ .name = "default", .description = "Same as --print default" },
-    .{ .name = "path", .description = "Print the config path for a new session" },
-    .{ .name = "check", .value = .string, .value_name = "FILE", .description = "Validate a config file without starting a session", .completion = .files },
-    .{ .name = "add", .description = "Add new lines, commands and colors from stdin" },
-    .{ .name = "remove", .value = .string, .value_name = "PREFIX", .description = "Remove configured PREFIX.* lines, commands and colors" },
-};
-
 const status_names = [_][]const u8{ "normal", "running", "done", "success", "failed" };
 
 const run_flags = [_]zecli.FlagSpec{
     config_flag,
     .{ .name = "log", .value = .string, .value_name = "PATH", .description = "Append runtime diagnostics to a file" },
 };
+
+const config_file_argument = zecli.ArgumentSpec{
+    .name = "FILE",
+    .description = "Config file, or - for stdin",
+    .required = true,
+    .completion = .files,
+};
+
+pub const config_sources = [_][]const u8{ "current", "startup", "default", "path" };
+
+const config_commands = [_]zecli.CommandSpec{
+    .{
+        .name = "show",
+        .description = "Print a saved, built-in, or selected config",
+        .usage = "config show [current|startup|default|path]",
+        .arguments = &.{.{ .name = "SOURCE", .description = "What to show (default: current)", .completion = .{ .values = &config_sources } }},
+        .double_dash = .positionals,
+        .help_sections = &.{.{
+            .title = "SOURCES",
+            .entries = &.{
+                .{ .name = "current", .description = "Active config text, including live edits" },
+                .{ .name = "startup", .description = "Exact config text originally loaded by this session" },
+                .{ .name = "default", .description = "Built-in default config; works outside a session" },
+                .{ .name = "path", .description = "Config path a new session would use; works outside a session" },
+            },
+        }},
+        .extra_help =
+        \\current and startup require a running session. Both preserve the
+        \\config text and exclude values and statuses set at runtime.
+        \\
+        \\path shows the file a new session would use: $STATUSBAR_CONFIG, then
+        \\$XDG_CONFIG_HOME/statusbar/config.statusbar (or
+        \\~/.config/statusbar/config.statusbar when $XDG_CONFIG_HOME is unset).
+        \\A missing default file shows 'built-in'. It does not describe where
+        \\the running session's config came from.
+        ++ "\n",
+        .examples = &.{
+            "config show",
+            "config show startup > original.statusbar",
+            "config show default > my.statusbar",
+            "config show path",
+        },
+    },
+    .{
+        .name = "check",
+        .description = "Validate a config without loading it",
+        .usage = "config check FILE",
+        .arguments = &.{config_file_argument},
+        .double_dash = .positionals,
+        .extra_help =
+        \\Parses FILE without loading it or running commands. Works outside a
+        \\session and reports syntax errors with file and line.
+        ++ "\n",
+        .examples = &.{ "config check my.statusbar", "generate-config | statusbar config check -" },
+    },
+    .{
+        .name = "load",
+        .description = "Replace the running bar's config",
+        .usage = "config load FILE",
+        .arguments = &.{config_file_argument},
+        .double_dash = .positionals,
+        .extra_help =
+        \\Validates FILE and replaces the current config with it. The new
+        \\layout can change the number of rows without restarting your shell.
+        \\An invalid config leaves the running bar unchanged.
+        \\`statusbar config < FILE` is the same as `statusbar config load - < FILE`.
+        ++ "\n",
+        .examples = &.{ "config load my.statusbar", "config show startup | statusbar config load -" },
+    },
+    .{
+        .name = "add",
+        .description = "Add lines, commands and colors to the running bar",
+        .usage = "config add FILE",
+        .arguments = &.{config_file_argument},
+        .double_dash = .positionals,
+        .extra_help =
+        \\Merges new line, command and color definitions into the current
+        \\config. Names must be unique within each kind; duplicates are rejected.
+        \\Global settings require a full replacement with `load`.
+        ++ "\n",
+        .examples = &.{ "config add extra.statusbar", "config add - < extra.statusbar" },
+    },
+    .{
+        .name = "list",
+        .aliases = &.{"ls"},
+        .description = "List the current config's definitions by prefix",
+        .usage = "config list [--debug]",
+        .flags = &.{.{ .name = "debug", .description = "Show the whole parsed config instead of names" }},
+        .extra_help =
+        \\Lists line and command names in the current config, one line per
+        \\prefix (the part of a name before its first dot). Requires a running
+        \\session.
+        \\
+        \\--debug shows the parsed config: global settings, colors, lines with
+        \\their compiled templates and defaults, commands, push templates and
+        \\highlight settings. It excludes runtime values and statuses, and is
+        \\not a reloadable config. Neither form runs commands.
+        ++ "\n",
+        .examples = &.{ "config list", "config ls --debug" },
+    },
+    .{
+        .name = "remove",
+        .aliases = &.{"rm"},
+        .description = "Remove a prefix's definitions from the running bar",
+        .usage = "config remove PREFIX",
+        .arguments = &.{.{ .name = "PREFIX", .description = "Prefix of the PREFIX.* lines, commands and colors to remove", .required = true }},
+        .double_dash = .positionals,
+        .extra_help =
+        \\Removes PREFIX.* definitions, rejecting the removal when remaining
+        \\definitions depend on them. Surviving lines keep their values,
+        \\statuses, FIFOs and command processes.
+        ++ "\n",
+        .examples = &.{"config remove extra"},
+    },
+};
+
+const config_application = zecli.comptimeValidated(.{
+    .name = "config",
+    .description = "View configuration or change the running bar's layout",
+    .usage = "config [COMMAND] [ARGS] | statusbar config < FILE",
+    .commands = &config_commands,
+    .extra_help =
+    \\With redirected or piped input and no command, loads it as a
+    \\replacement config. Run directly in a terminal, shows this help.
+    \\Commands other than load, add and check ignore stdin.
+    \\FILE may be - to read stdin.
+    ++ "\n",
+    .examples = &.{
+        "config show",
+        "config list",
+        "config check my.statusbar",
+        "config < my.statusbar",
+        "config show default | statusbar config",
+        "config add extra.statusbar",
+        "config remove extra",
+    },
+});
+
+pub const ConfigCommandName = zecli.CommandEnum(config_application);
 
 const commands = [_]zecli.CommandSpec{
     .{
@@ -226,60 +355,7 @@ const commands = [_]zecli.CommandSpec{
             "eval \"$(statusbar init zsh --starship=false)\"",
         },
     },
-    .{
-        .name = "config",
-        .description = "View configuration or load a new layout",
-        .usage = "statusbar config [--print [default|startup|current] | --list [default|startup|current] | --default | --path | --check FILE | --add | --remove PREFIX]",
-        .flags = &config_flags,
-        .arguments = &.{.{ .name = "SOURCE", .description = "Config to show with --print or --list: default, startup, or current", .completion = .{ .values = &.{ "default", "startup", "current" } } }},
-        .double_dash = .positionals,
-        .extra_help =
-        \\To change the running bar, pass a complete config file as input. The
-        \\new layout can change the number of rows without restarting your shell.
-        \\--add merges new line, command and color definitions from stdin.
-        \\Names must be unique within each kind. Prefixes are a naming convention.
-        \\--remove PREFIX removes PREFIX.* definitions, rejecting dependencies
-        \\from remaining definitions. Global settings require full replacement.
-        \\
-        \\Printing startup or current requires a running session. Both preserve
-        \\the config text and exclude values and statuses set at runtime.
-        \\--list parses that snapshot and lists line and command names,
-        \\grouped by the prefix before the first dot. It does not
-        \\run commands. Use --list default to inspect the built-in config anywhere.
-        \\
-        \\--path shows the file a new session would use: $STATUSBAR_CONFIG, then
-        \\$XDG_CONFIG_HOME/statusbar/config.statusbar (or
-        \\~/.config/statusbar/config.statusbar when $XDG_CONFIG_HOME is unset).
-        \\A missing default file shows 'built-in'.
-        \\--check FILE validates a file without loading it or running commands;
-        \\it works outside a session and reports syntax errors with file and line.
-        \\Display options ignore stdin and do not change the running bar.
-        \\
-        \\With no flags, shows this help when run directly in a terminal.
-        ++ "\n",
-        .help_sections = &.{.{
-            .title = "PRINT CHOICES",
-            .entries = &.{
-                .{ .name = "default", .description = "Built-in default config; works outside a session" },
-                .{ .name = "startup", .description = "Exact config originally loaded by this session" },
-                .{ .name = "current", .description = "Active config, including live replacements" },
-            },
-        }},
-        .examples = &.{
-            "statusbar config --print",
-            "statusbar config --list",
-            "statusbar config --list default",
-            "statusbar config --add < extra.statusbar",
-            "statusbar config --remove extra",
-            "statusbar config --print startup > original.statusbar",
-            "statusbar config --print current > active.statusbar",
-            "statusbar config --default > my.statusbar",
-            "statusbar config --path",
-            "statusbar config --check my.statusbar",
-            "statusbar config < my.statusbar",
-            "statusbar config --default | statusbar config",
-        },
-    },
+    zecli.mount("config", config_application),
     .{
         .name = "completion",
         .description = "Generate tab completion for your shell",
@@ -328,19 +404,6 @@ pub const application = application: {
 };
 
 pub const CommandName = zecli.CommandEnum(application);
-
-/// zecli parses the optional --print choice as a positional. Present it
-/// as part of --print in help, without changing parsing or completion metadata.
-pub fn printCommandHelp(allocator: std.mem.Allocator, writer: anytype, spec: zecli.CommandSpec) !void {
-    if (!std.mem.eql(u8, spec.name, "config")) return zecli.printCommandHelp(allocator, writer, spec);
-    var help = spec;
-    help.arguments = &.{};
-    var flags = config_flags;
-    flags[0].name = "print [default|startup|current]";
-    flags[1].name = "list [default|startup|current]";
-    help.flags = &flags;
-    try zecli.printCommandHelp(allocator, writer, help);
-}
 
 pub fn findCommand(name: []const u8) ?zecli.CommandSpec {
     return zecli.findCommand(application, name);

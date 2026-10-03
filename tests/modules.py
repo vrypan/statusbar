@@ -104,7 +104,7 @@ def main():
     for path in files:
         assert f'[line.{path.stem}.' in path.read_text(), path
         assert '<module>' not in path.read_text(), path
-        subprocess.run([binary, 'config', '--check', str(path)], check=True, capture_output=True)
+        subprocess.run([binary, 'config', 'check', str(path)], check=True, capture_output=True)
         command = command_text(path)
         if command:
             subprocess.run(['/bin/sh', '-n'], input=command, text=True, check=True, capture_output=True)
@@ -192,7 +192,7 @@ def main():
 import json, pathlib
 library = pathlib.Path(sys.argv[2])
 for path in sorted(library.glob('*.statusbar')):
-    run('config', '--add', input=path.read_bytes())
+    run('config', 'add', str(path))
     settle()
 deadline = time.monotonic() + 5
 while True:
@@ -201,11 +201,13 @@ while True:
     time.sleep(.05)
 assert len(lines) == len(list(library.glob('*.statusbar'))) + 1 and all(line['visible'] for line in lines), lines
 assert {line['name'].split('.')[0] for line in lines[1:]} == {path.stem for path in library.glob('*.statusbar')}, lines
-snapshot = run('config', '--print')
+snapshot = run('config', 'show')
 assert '<module>' not in snapshot, snapshot
-run('config', '--add', input=(library / 'clock.statusbar').read_bytes(), code=2)
-run('config', '--add', input=(library / 'clock.statusbar').read_bytes(), code=2)
-assert run('config', '--print') == snapshot
+listing = run('config', 'ls').splitlines()
+assert sorted(row.split()[0] for row in listing[1:]) == sorted(path.stem for path in library.glob('*.statusbar')), listing
+run('config', 'add', '-', input=(library / 'clock.statusbar').read_bytes(), code=2)
+run('config', 'add', str(library / 'clock.statusbar'), code=2)
+assert run('config', 'show') == snapshot
 time.sleep(2)
 for line in lines[1:]:
     name = line['name']

@@ -144,7 +144,7 @@ def check_live(picker, statusbar, root):
 "$1" "$2"
 printf '__PICKER_DONE__'
 IFS= read -r go
-"$3" config --print current
+"$3" config show current
 printf '__SNAPSHOT_DONE__'
 IFS= read -r done
 '''

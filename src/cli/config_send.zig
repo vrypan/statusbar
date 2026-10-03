@@ -20,7 +20,8 @@ pub fn sendText(arena: std.mem.Allocator, io: Io, token: []const u8, text: []con
 
 /// Preflight against a snapshot for useful CLI diagnostics. Send only the
 /// fragment: the running session merges again against its latest config.
-pub fn sendEdit(arena: std.mem.Allocator, io: Io, token: []const u8, text: []const u8, remove: bool, stderr: *Io.Writer) !u8 {
+/// `label` names the fragment's source in diagnostics.
+pub fn sendEdit(arena: std.mem.Allocator, io: Io, token: []const u8, text: []const u8, remove: bool, label: []const u8, stderr: *Io.Writer) !u8 {
     const state = @import("session").session_state;
     const path = @import("platform").environment.get("STATUSBAR_STATE") orelse {
         try stderr.writeAll("statusbar: config edits require a running statusbar session\n");
@@ -36,7 +37,7 @@ pub fn sendEdit(arena: std.mem.Allocator, io: Io, token: []const u8, text: []con
     var diag: config.Diagnostic = .{};
     const merged = (if (remove) @import("model").config_remove.remove(arena, current, text, &diag) else @import("model").config_add.merge(arena, current, text, &diag)) catch |err| {
         if (err == error.OutOfMemory) return err;
-        try stderr.print("statusbar: stdin:{d}: {s}\n", .{ diag.line, diag.message });
+        if (diag.line > 0) try stderr.print("statusbar: {s}:{d}: {s}\n", .{ label, diag.line, diag.message }) else try stderr.print("statusbar: {s}\n", .{diag.message});
         try stderr.flush();
         return 2;
     };

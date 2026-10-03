@@ -36,11 +36,6 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     };
 
-    if (invocation.help_target == .command) {
-        try cli.printCommandHelp(arena, help_output, invocation.getCommand().?.spec);
-        try stdout.flush();
-        return 0;
-    }
     if (try invocation.printHelpIfRequested(arena, help_output)) {
         try stdout.flush();
         return 0;

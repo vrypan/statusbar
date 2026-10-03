@@ -323,25 +323,35 @@ def check_config_file(binary):
         marker = os.path.join(directory, "command-ran")
         with open(valid, "w") as file:
             file.write(f'[line.a]\ntext = #(command:probe)\n[command.probe]\nrun = touch "{marker}"\n')
-        result = subprocess.run([binary, "config", "--check", valid], env=clean_env(), capture_output=True, timeout=5)
+        result = subprocess.run([binary, "config", "check", valid], env=clean_env(), capture_output=True, timeout=5)
         assert result.returncode == 0 and result.stdout == b"" and result.stderr == b"", result
         assert not os.path.exists(marker), "validation executed a configured command"
 
         invalid = os.path.join(directory, "invalid.statusbar")
         with open(invalid, "w") as file:
             file.write("[line.a]\nleft = old\n")
-        result = subprocess.run([binary, "config", "--check", invalid], env=clean_env(), capture_output=True, timeout=5)
+        result = subprocess.run([binary, "config", "check", invalid], env=clean_env(), capture_output=True, timeout=5)
         assert result.returncode == 2 and f"{invalid}:2:".encode() in result.stderr, result
         assert b"left, right and rule were removed" in result.stderr and result.stdout == b"", result
 
         empty = os.path.join(directory, "empty.statusbar")
         open(empty, "w").close()
-        result = subprocess.run([binary, "config", "--check", empty], env=clean_env(), capture_output=True, timeout=5)
+        result = subprocess.run([binary, "config", "check", empty], env=clean_env(), capture_output=True, timeout=5)
         assert result.returncode == 2 and b"empty config" in result.stderr, result
-        result = subprocess.run([binary, "config", "--check", os.path.join(directory, "missing")], env=clean_env(), capture_output=True, timeout=5)
+        result = subprocess.run([binary, "config", "check", os.path.join(directory, "missing")], env=clean_env(), capture_output=True, timeout=5)
         assert result.returncode == 1 and b"cannot read" in result.stderr, result
-        result = subprocess.run([binary, "config", "--check", valid, "--print"], env=clean_env(), capture_output=True, timeout=5)
-        assert result.returncode == 2 and b"choose one of" in result.stderr, result
+        for args in ([], [valid, "--print"], [valid, valid], ["--check", valid]):
+            result = subprocess.run([binary, "config", "check", *args], env=clean_env(), capture_output=True, timeout=5)
+            assert result.returncode == 2 and not result.stdout and b"Usage: statusbar config check FILE" in result.stderr, result
+        with open(valid, "rb") as source:
+            result = subprocess.run([binary, "config", "check", "-"], stdin=source, env=clean_env(), capture_output=True, timeout=5)
+        assert result.returncode == 0 and result.stdout == b"" and result.stderr == b"", result
+        with open(invalid, "rb") as source:
+            result = subprocess.run([binary, "config", "check", "-"], stdin=source, env=clean_env(), capture_output=True, timeout=5)
+        assert result.returncode == 2 and b"stdin:2:" in result.stderr, result
+        # An explicit file ignores redirected stdin.
+        result = subprocess.run([binary, "config", "check", valid], input=b"[broken\n", env=clean_env(), capture_output=True, timeout=5)
+        assert result.returncode == 0, result
     print("standalone config validation reports errors without executing commands")
 
 
@@ -1098,8 +1108,8 @@ def check_config_snapshots(binary):
     clean_env.pop("STATUSBAR_STATE", None)
     clean_env.pop("STATUSBAR_SESSION_ID", None)
     clean_env["STATUSBAR_CONFIG"] = "/does/not/exist/statusbar-config"
-    builtin = subprocess.run([binary, "config", "--default"], env=clean_env, capture_output=True, check=True).stdout
-    result = subprocess.run([binary, "config", "--print", "default"], input=b"invalid", env=clean_env, capture_output=True)
+    builtin = subprocess.run([binary, "config", "show", "default"], env=clean_env, capture_output=True, check=True).stdout
+    result = subprocess.run([binary, "config", "show", "default"], input=b"invalid", env=clean_env, capture_output=True)
     assert result.returncode == 0 and result.stdout == builtin, result
     with tempfile.TemporaryDirectory() as folder:
         invalid_path = os.path.join(folder, "invalid.statusbar")
@@ -1107,17 +1117,18 @@ def check_config_snapshots(binary):
             config_file.write(b"[broken\n")
         path_env = clean_env.copy()
         path_env["STATUSBAR_CONFIG"] = invalid_path
-        result = subprocess.run([binary, "config", "--path"], env=path_env, capture_output=True)
+        result = subprocess.run([binary, "config", "show", "path"], env=path_env, capture_output=True)
         assert result.returncode == 0 and result.stdout == os.fsencode(invalid_path) + b"\n", result
         assert result.stderr == b"", result
         path_env.pop("STATUSBAR_CONFIG")
         path_env["XDG_CONFIG_HOME"] = folder
-        result = subprocess.run([binary, "config", "--path"], env=path_env, capture_output=True)
+        result = subprocess.run([binary, "config", "show", "path"], env=path_env, capture_output=True)
         assert result.returncode == 0 and result.stdout == b"built-in\n", result
-    for args in (["--print"], ["--print", "current"], ["--print", "startup"]):
+    for args in (["show"], ["show", "current"], ["show", "startup"], ["list"], ["ls"], ["list", "--debug"], ["ls", "--debug"]):
         result = subprocess.run([binary, "config", *args], env=clean_env, capture_output=True)
         assert result.returncode == 2 and not result.stdout and b"requires a running" in result.stderr, result
-    for args in (["--print", "unknown"], ["startup"], ["--default", "current"], ["--print", "current", "--path"], ["--print", "--default"]):
+    for args in (["show", "unknown"], ["startup"], ["show", "default", "current"], ["show", "current", "--path"],
+                 ["show", "--default"], ["--print"], ["--default"], ["--path"], ["list", "default"], ["ls", "--debug", "current"]):
         result = subprocess.run([binary, "config", *args], env=clean_env, capture_output=True)
         assert result.returncode == 2 and not result.stdout, result
 
@@ -1132,44 +1143,44 @@ def show(*args):
     return r.stdout
 def current_is(expected):
     deadline = time.monotonic() + 3
-    while show('--print') != expected:
+    while show('show') != expected:
         assert time.monotonic() < deadline
         time.sleep(.01)
-assert show('--print', 'startup') == original
-assert show('--print') == original
-assert show('--print', 'current') == original
+assert show('show', 'startup') == original
+assert show('show') == original
+assert show('show', 'current') == original
 if config_path != '-':
     open(config_path, 'wb').write(b'invalid modified file')
     os.unlink(config_path)
-assert show('--print', 'startup') == original
-assert show('--print') == original
-assert show('--default') == show('--print', 'default')
+assert show('show', 'startup') == original
+assert show('show') == original
+assert show('show', 'default') == show('show', 'default')
 assert stat.S_IMODE(os.stat(os.environ['STATUSBAR_STATE']).st_mode) == 0o600
 subprocess.run([binary, 'set', 'a', 'MANUAL_OVERRIDE'], check=True)
-assert show('--print') == original
+assert show('show') == original
 subprocess.run([binary, 'config'], input=replacement, check=True)
 current_is(replacement)
-assert show('--print', 'startup') == original
-assert show('--print', 'current') == replacement
+assert show('show', 'startup') == original
+assert show('show', 'current') == replacement
 assert stat.S_IMODE(os.stat(os.environ['STATUSBAR_STATE']).st_mode) == 0o600
 # A correctly authenticated but malformed replacement must retain the snapshot.
 envelope = b'1;' + os.environ['STATUSBAR_SESSION_ID'].encode() + b';[broken\n'
 os.write(1, b'\x1b]3110;STATUSBAR;CONFIG;' + base64.b64encode(envelope) + b'\x1b\\')
 time.sleep(.1)
-assert show('--print') == replacement
-assert show('--print', 'startup') == original
+assert show('show') == replacement
+assert show('show', 'startup') == original
 # Restoring startup is a normal config replacement.
-subprocess.run([binary, 'config'], input=show('--print', 'startup'), check=True)
+subprocess.run([binary, 'config'], input=show('show', 'startup'), check=True)
 current_is(original)
 # Nested sessions have their own snapshots; the outer session is unaffected.
 nested_text = b'[line.a]\ntext = nested\n'
-code = "import subprocess,sys; r=subprocess.run([sys.argv[1],'config','--print','startup'],capture_output=True); assert r.returncode == 0 and r.stdout == bytes.fromhex(sys.argv[2])"
+code = "import subprocess,sys; r=subprocess.run([sys.argv[1],'config','show','startup'],capture_output=True); assert r.returncode == 0 and r.stdout == bytes.fromhex(sys.argv[2])"
 r = subprocess.run([binary, '--config', '-', '--', sys.executable, '-c', code, binary, nested_text.hex()], input=nested_text)
 assert r.returncode == 0
-assert show('--print') == original
+assert show('show') == original
 wrong = os.environ.copy()
 wrong['STATUSBAR_SESSION_ID'] = '0' * 32
-r = subprocess.run([binary, 'config', '--print'], env=wrong, capture_output=True)
+r = subprocess.run([binary, 'config', 'show'], env=wrong, capture_output=True)
 assert r.returncode != 0 and not r.stdout
 json.dump({k: os.environ[k] for k in ('STATUSBAR_STATE', 'STATUSBAR_SESSION_ID')}, open(metadata_path, 'w'))
 print('SNAPSHOTS_OK', flush=True)
@@ -1190,7 +1201,7 @@ print('SNAPSHOTS_OK', flush=True)
             with open(metadata_path) as metadata:
                 stale = json.load(metadata)
             assert not os.path.exists(stale["STATUSBAR_STATE"])
-            result = subprocess.run([binary, "config", "--print"], env={**clean_env, **stale}, capture_output=True)
+            result = subprocess.run([binary, "config", "show"], env={**clean_env, **stale}, capture_output=True)
             assert result.returncode != 0 and not result.stdout, result
     print("startup/current config snapshots preserve bytes, isolate sessions, and clean up")
 
@@ -1219,6 +1230,15 @@ def check_osc_config(binary):
             [replacement_path],
             ["-"],
             ["--load", replacement_path],
+            ["load"],
+            ["load", replacement_path, initial_path],
+            ["add"],
+            ["add", replacement_path, initial_path],
+            ["remove"],
+            ["rm", "a", "b"],
+            ["check"],
+            ["show", "path", "extra"],
+            ["list", "--json"],
         ]:
             result = subprocess.run([binary, "config", *args], capture_output=True)
             assert result.returncode == 2 and not result.stdout, result
@@ -1228,6 +1248,10 @@ def check_osc_config(binary):
         )
         assert no_session.returncode == 2 and not no_session.stdout
         assert b"not inside a compatible statusbar session" in no_session.stderr
+        for args in (["load", replacement_path], ["load", "-"], ["add", replacement_path], ["remove", "extra"], ["rm", "extra"]):
+            no_session = subprocess.run([binary, "config", *args], input=replacement.encode(), capture_output=True)
+            assert no_session.returncode == 2 and not no_session.stdout, no_session
+            assert b"not inside a compatible statusbar session" in no_session.stderr, no_session
         incompatible = subprocess.run(
             [binary, "config", replacement_path, "--path"],
             capture_output=True, check=False,
@@ -1252,7 +1276,7 @@ def check_osc_config(binary):
             assert rejected.returncode != 0 and not rejected.stdout
             assert b"stdin" in rejected.stderr, rejected
         ignored = subprocess.run(
-            [binary, "config", "--default"], input=b"[broken\n", capture_output=True,
+            [binary, "config", "show", "default"], input=b"[broken\n", capture_output=True,
         )
         assert ignored.returncode == 0 and ignored.stdout
         child = r'''
@@ -1262,6 +1286,8 @@ help_result = subprocess.run([binary, "config"], capture_output=True)
 explicit_help = subprocess.run([binary, "config", "--help"], capture_output=True)
 assert help_result.returncode == 0 and help_result.stdout == explicit_help.stdout, help_result
 assert b"EXAMPLES" in help_result.stdout and b"statusbar config < my.statusbar" in help_result.stdout
+for expected in (b"list, ls", b"remove, rm", b"show", b"check", b"load", b"add"):
+    assert expected in help_result.stdout, help_result
 def frame(config, token=None):
     token = token or os.environ["STATUSBAR_SESSION_ID"]
     envelope = b"1;" + token.encode() + b";" + config.encode()
@@ -1276,16 +1302,15 @@ for command in sys.stdin:
         emit(rejected, "0" * 32)
         print("__BAD__", flush=True)
     elif command == "LOAD":
-        with open(replacement, "rb") as source:
-            result = subprocess.run([binary, "config"], stdin=source, capture_output=True)
+        result = subprocess.run([binary, "config", "load", replacement], capture_output=True)
         assert not result.stdout and result.returncode == 0, result
         print(f"__LOAD__:{result.returncode}", flush=True)
     elif command == "STDIN":
-        result = subprocess.run([binary, "config"], input=b'[line.a]\ntext = FROM_STDIN\n', capture_output=True)
+        result = subprocess.run([binary, "config", "load", "-"], input=b'[line.a]\ntext = FROM_STDIN\n', capture_output=True)
         assert not result.stdout and result.returncode == 0, result
         print("__STDIN__", flush=True)
     elif command == "PIPE":
-        producer = subprocess.Popen([binary, "config", "--default"], stdout=subprocess.PIPE)
+        producer = subprocess.Popen([binary, "config", "show", "default"], stdout=subprocess.PIPE)
         result = subprocess.run([binary, "config"], stdin=producer.stdout, capture_output=True)
         producer.stdout.close()
         assert producer.wait() == 0 and result.returncode == 0 and not result.stdout, result
@@ -2021,7 +2046,7 @@ interval = 86400
 def check_config_remove(binary):
     child = CHILD_PRELUDE + r"""
 import json, base64
-def current(): return run('config', '--print')
+def current(): return run('config', 'show')
 def entries(): return json.loads(run('list', '--json'))['lines']
 def wait_for(check):
     deadline = time.monotonic() + 4
@@ -2040,39 +2065,46 @@ with tempfile.TemporaryDirectory() as folder:
                 '[line.keep.status]\ntext = #(value) #(command:keep.read)\n'
                 '[command.keep.read]\nrun = printf x >> ' + counter + '; sleep 1; printf KEPT\ninterval = 60\n'
                 '[line.unprefixed]\n')
-    run('config', '--add', input=fragment.encode())
+    run('config', 'add', '-', input=fragment.encode())
     wait_for(lambda: os.path.exists(counter))
     run('set', 'keep.status', 'VALUE', '--status', 'success')
     disk_fifo = run('bind', 'disk.usage')
     keep_fifo = run('bind', 'keep.status')
     run('push', 'disk.job', input=b'JOB\n')
     before = next(line for line in entries() if line['name'] == 'keep.status')
-    run('config', '--add', input=b'[line.dependent.row]\ndefault = #(command:disk.read)\n')
+    run('config', 'add', '-', input=b'[line.dependent.row]\ndefault = #(command:disk.read)\n')
     wait_for(lambda: '[line.dependent.row]' in current())
     snapshot = current()
-    run('config', '--remove', 'disk', code=2)
+    run('config', 'remove', 'disk', code=2)
     assert current() == snapshot and os.path.exists(disk_fifo)
-    run('config', '--remove', 'dependent')
+    run('config', 'remove', 'dependent')
     wait_for(lambda: '[line.dependent.row]' not in current())
-    run('config', '--add', input=b'[line.dependent.row]\nfailed = #[fg=disk.red]X\n')
+    assert '[line.dependent.row]' not in run('config', 'list', '--debug')
+    run('config', 'add', '-', input=b'[line.dependent.row]\nfailed = #[fg=disk.red]X\n')
     wait_for(lambda: 'fg=disk.red' in current())
-    run('config', '--remove', 'disk', code=2)
-    run('config', '--remove', 'dependent')
+    run('config', 'rm', 'disk', code=2)
+    run('config', 'rm', 'dependent')
     wait_for(lambda: '[line.dependent.row]' not in current())
     # Queue add/remove in one write; each must see the latest held config.
     os.write(1, b'\x1b7' + frame('ADD', '[line.new.one]\n[line.new.two]\n') + frame('REMOVE', 'new') + b'\x1b8')
     settle()
     assert '[line.new.' not in current()
-    run('config', '--remove', 'disk', input=b'ignored')
+    debug = run('config', 'ls', '--debug')
+    assert '[line.disk.usage]' in debug and '  disk.read #' in debug and '  disk.red = "red"' in debug, debug
+    run('config', 'remove', 'disk', input=b'ignored')
     wait_for(lambda: '[line.disk.usage]' not in current())
+    debug = run('config', 'list', '--debug')
+    assert '[line.disk.usage]' not in debug and 'disk.read' not in debug and 'disk.red' not in debug, debug
+    assert '[line.keep.status]' in debug, debug
     assert 'disk.read' not in current() and 'disk.red' not in current()
     assert not os.path.exists(disk_fifo) and os.path.exists(keep_fifo)
     assert next(line for line in entries() if line['name'] == 'keep.status') == before
     assert any(line['name'] == 'disk.job' for line in entries())
     time.sleep(1.1)
     assert open(counter).read() == 'x', 'surviving command restarted after index changed'
-    run('config', '--remove', 'missing', code=2)
-    for args in (('--remove', ''), ('--remove', 'a.b'), ('--add', '--remove', 'keep'), ('--add', 'old-prefix')):
+    run('config', 'remove', 'missing', code=2)
+    for args in (('remove', ''), ('remove', 'a.b'), ('rm', 'a.b'), ('remove', 'keep', 'extra'), ('remove',),
+                 ('--remove', 'keep'), ('add', '-', 'extra'), ('add',)):
         run('config', *args, input=b'[line.foo]', code=2)
     mark('REMOVE_OK')
 """
@@ -2086,7 +2118,7 @@ def check_config_add(binary):
     child = CHILD_PRELUDE + r'''
 import base64, json
 def current():
-    return run('config', '--print')
+    return run('config', 'show')
 def wait_for(predicate):
     deadline = time.monotonic() + 4
     while not predicate():
@@ -2095,7 +2127,7 @@ def wait_for(predicate):
 def frame(text):
     body = ('2;' + os.environ['STATUSBAR_SESSION_ID'] + ';' + text).encode()
     return b'\x1b]3110;STATUSBAR;ADD;' + base64.b64encode(body) + b'\x1b\\'
-startup = run('config', '--print', 'startup')
+startup = run('config', 'show', 'startup')
 run('set', 'base', 'kept', '--status', 'success')
 bound = run('bind', 'base')
 run('push', 'job', input=b'pushed\n')
@@ -2106,7 +2138,7 @@ with tempfile.TemporaryDirectory() as folder:
     fragment = ('[line.work.summary]\ntext = #(command:work.fetch) #(command:shared)\n'
                 '[command.work.fetch]\nrun = printf x >> ' + counter + '; sleep 1; printf WORK_DONE\ninterval = 60\n'
                 '[colors]\nwork.accent = blue\n')
-    run('config', '--add', input=fragment.encode())
+    run('config', 'add', '-', input=fragment.encode())
     wait_for(lambda: os.path.exists(counter))
     wait_for(lambda: '[line.work.summary]' in current())
     snapshot = current()
@@ -2115,14 +2147,24 @@ with tempfile.TemporaryDirectory() as folder:
                 '[line.work.summary]', '[command.work.fetch]\nrun = true',
                 '[colors]\nwork.accent = red', '[line.work.bad]\ntext = #(command:missing)',
                 'interval = 1\n[line.work.bad]', '[push]\ntext = bad', '# empty'):
-        run('config', '--add', input=bad.encode(), code=2)
+        run('config', 'add', '-', input=bad.encode(), code=2)
         assert current() == snapshot
-    for args in (('--add', 'bad-prefix'), ('--add', 'work', '--print'), ('--add', 'work', 'unexpected')):
+    for args in (('--add',), ('add',), ('add', '-', '--print'), ('add', '-', 'unexpected')):
         run('config', *args, input=b'[line.work.other]', code=2)
+    # A failed full replacement leaves the current config unchanged too.
+    bad_path = os.path.join(folder, 'bad.statusbar')
+    with open(bad_path, 'w') as bad_file:
+        bad_file.write('[line.a]\ntext = #(nope)\n')
+    run('config', 'load', bad_path, code=2)
+    run('config', 'add', os.path.join(folder, 'missing.statusbar'), code=1)
+    assert current() == snapshot
     # Command-only and color-only fragments need no dummy line.
-    run('config', '--add', input=b'[command.extra.fetch]\nrun = printf EXTRA\ninterval = 60\n')
+    extra_path = os.path.join(folder, 'extra.statusbar')
+    with open(extra_path, 'w') as extra_file:
+        extra_file.write('[command.extra.fetch]\nrun = printf EXTRA\ninterval = 60\n')
+    run('config', 'add', extra_path)
     wait_for(lambda: '[command.extra.fetch]' in current())
-    run('config', '--add', input=b'[colors]\nextra.accent = green\n')
+    run('config', 'add', '-', input=b'[colors]\nextra.accent = green\n')
     wait_for(lambda: 'extra.accent = green' in current())
     # Requests in one write cannot lose each other's additions, including
     # while the terminal cursor is saved. Include a stale conflicting request.
@@ -2132,7 +2174,7 @@ with tempfile.TemporaryDirectory() as folder:
     wait_for(lambda: '[line.two.row]' in current())
     assert '[line.one.row]' in current() and 'text = BAD' not in current()
     # References to existing commands/colors are allowed.
-    run('config', '--add', input=b'[line.three.row]\ntext = #[fg=extra.accent]#(command:extra.fetch)\n')
+    run('config', 'add', '-', input=b'[line.three.row]\ntext = #[fg=extra.accent]#(command:extra.fetch)\n')
     wait_for(lambda: '[line.three.row]' in current())
     time.sleep(1.1)
     assert open(counter).read() == 'x', 'an existing command was restarted'
@@ -2143,7 +2185,7 @@ with tempfile.TemporaryDirectory() as folder:
     os.write(1, frame('[line.clash.row]\n[command.clash.run]\nrun = true\n'))
     settle()
     assert current() == snapshot
-    assert run('config', '--print', 'startup') == startup
+    assert run('config', 'show', 'startup') == startup
     assert os.path.exists(bound)
     after = json.loads(run('list', '--json'))
     assert after['lines'][0] == before['lines'][0], (before, after)
@@ -2155,18 +2197,18 @@ with tempfile.TemporaryDirectory() as folder:
     module = ('# <module> <<module>>\n[line.alpha.row]\ntext = #[fg=alpha.accent]#(command:alpha.fetch)\n'
               '[command.alpha.fetch]\nrun = printf "%s" "literal <module> <<module>>"\ninterval = 60\n'
               '[colors]\nalpha.accent = blue\n')
-    run('config', '--add', input=module.encode())
+    run('config', 'add', '-', input=module.encode())
     wait_for(lambda: '[line.alpha.row]' in current())
     snapshot = current()
     assert module.rstrip('\n') in snapshot  # run() strips trailing output whitespace.
-    run('config', '--add', input=module.encode(), code=2)
+    run('config', 'add', '-', input=module.encode(), code=2)
     os.write(1, frame(module))
     settle()
     assert current() == snapshot
-    run('config', '--add', input=module.encode(), code=2)
+    run('config', 'add', '-', input=module.encode(), code=2)
     assert current() == snapshot
     # Dotted names work through the line protocol and as FIFO basenames.
-    assert 'alpha line.alpha.row command.alpha.fetch' in run('config', '--list')
+    assert 'alpha line.alpha.row command.alpha.fetch' in run('config', 'list')
     run('set', 'alpha.row', 'dotted-value', '--status', 'success')
     pipe = run('bind', 'alpha.row')
     assert os.path.basename(pipe) == 'alpha.row'
@@ -2191,11 +2233,11 @@ with tempfile.TemporaryDirectory() as folder:
     # Accumulated configs can exceed the single-message limit. The parser's
     # total limit is still enforced without changing the live snapshot.
     for suffix in ('a', 'b', 'c'):
-        run('config', '--add', input=('[line.large.' + suffix + ']\n#' + 'x' * 15000).encode())
+        run('config', 'add', '-', input=('[line.large.' + suffix + ']\n#' + 'x' * 15000).encode())
         wait_for(lambda: '[line.large.' + suffix + ']' in current())
     assert len(current()) > 24523
     snapshot = current()
-    run('config', '--add', input=('[line.large.tooBig]\n#' + 'x' * 22000).encode(), code=2)
+    run('config', 'add', '-', input=('[line.large.tooBig]\n#' + 'x' * 22000).encode(), code=2)
     assert current() == snapshot
     mark('CONFIG_ADD_OK')
 '''
@@ -2205,7 +2247,7 @@ with tempfile.TemporaryDirectory() as folder:
     visible = plain(data)
     assert b'WORK_DONE SHARED' in visible and b'BASE[still-kept|success]' in visible, visible[-5000:]
     assert b'literal <module> <<module>>' in visible, visible[-5000:]
-    print('config --add validates definitions, merges atomically, keeps running commands and line state')
+    print('config add validates definitions, merges atomically, keeps running commands and line state')
 
 
 def check_reload_lines(binary):
@@ -2292,7 +2334,7 @@ def check_startup_recovery(binary):
         env["XDG_CONFIG_HOME"] = xdg
         code, data = capture_pty([binary, "--", "/bin/sh", "-c", child], env=env)
         assert code == 5 and not any(b"statusbar:" in row for row in painted(data)), painted(data)
-        assert subprocess.run([binary, "config", "--path"], env=env, capture_output=True).stdout == b"built-in\n"
+        assert subprocess.run([binary, "config", "show", "path"], env=env, capture_output=True).stdout == b"built-in\n"
         legacy = os.path.join(directory, "config")
         with open(legacy, "w") as file:
             file.write("[line.1]\nleft = LEGACY\n")
@@ -2305,7 +2347,7 @@ def check_startup_recovery(binary):
         code, data = capture_pty([binary, "--", "/bin/sh", "-c", child], env=env)
         assert code == 5 and b"NEW_DEFAULT" in plain(data), data[-1500:]
         assert not any(b"old config" in row for row in painted(data)), painted(data)
-        result = subprocess.run([binary, "config", "--path"], env=env, capture_output=True)
+        result = subprocess.run([binary, "config", "show", "path"], env=env, capture_output=True)
         assert result.stdout == os.fsencode(current) + b"\n", result
 
         # A valid replacement removes the warning; an invalid one keeps it.

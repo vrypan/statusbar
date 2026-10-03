@@ -124,6 +124,8 @@ pub const Config = struct {
 
     /// List line and command names by prefix, without executing commands.
     pub const list = @import("config_list.zig").list;
+    /// Describe the parsed config for debugging, without executing commands.
+    pub const debug = @import("config_debug.zig").write;
 
     pub fn deinit(self: *Config) void {
         self.arena.deinit();
