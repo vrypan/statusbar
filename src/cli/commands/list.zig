@@ -7,6 +7,14 @@ const snapshot = @import("session").line_snapshot;
 const environment = @import("platform").environment;
 
 pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
+    return list(arena, io, command, stdout, stderr, command.enabled("pushed"));
+}
+
+pub fn runTemporary(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
+    return list(arena, io, command, stdout, stderr, true);
+}
+
+fn list(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer, temporary_only: bool) !u8 {
     const state_path = environment.get("STATUSBAR_STATE") orelse return notInSession(stderr, command);
     if (environment.get("STATUSBAR_SESSION_ID") == null) return notInSession(stderr, command);
     var session: common.Session = undefined;
@@ -24,7 +32,7 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     };
     defer parsed.deinit();
     var entries = parsed.value.lines;
-    if (command.enabled("pushed")) {
+    if (temporary_only) {
         var start: usize = 0;
         while (start < entries.len and entries[start].kind == .configured) : (start += 1) {}
         entries = entries[start..];

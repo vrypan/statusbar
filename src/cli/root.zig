@@ -14,6 +14,7 @@ pub const commands = struct {
     pub const push = @import("commands/push.zig");
     pub const pop = @import("commands/pop.zig");
     pub const list = @import("commands/list.zig");
+    pub const temp = @import("commands/temp.zig");
     pub const bind = @import("commands/bind.zig");
     pub const init = @import("commands/init.zig");
     pub const config = @import("commands/config.zig");
@@ -31,6 +32,7 @@ test {
     _ = commands.push;
     _ = commands.pop;
     _ = commands.list;
+    _ = commands.temp;
     _ = commands.bind;
     _ = commands.init;
     _ = commands.config;

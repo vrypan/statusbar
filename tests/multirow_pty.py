@@ -1626,12 +1626,21 @@ def listing(*args):
     assert set(value) == {'version', 'lines'} and value['version'] == 1, value
     return value['lines']
 
+def temporary(*args):
+    value = json.loads(run('temp', 'ls', '--json', *args))
+    assert set(value) == {'version', 'lines'} and value['version'] == 1, value
+    return value['lines']
+
 initial = listing()
 assert [x['name'] for x in initial] == ['base', 'empty', 'hidden'], initial
 assert [x['visible'] for x in initial] == [True, True, False], initial
 assert all(x['value'] is None and x['fifo'] is None for x in initial), initial
 assert listing('--pushed') == []
 assert listing('--pushed', '--short') == []
+assert temporary() == []
+assert temporary('--short') == []
+assert run('temp', 'ls') == run('list', '--pushed')
+assert run('temp', 'list', '--short') == run('list', '--pushed', '--short')
 assert run('list', '--pushed', '--short').split() == ['ID', 'NAME', 'STATUS', 'VALUE']
 assert run('list', '--pushed').split() == ['ID', 'NAME', 'KIND', 'STATUS', 'VISIBLE', 'FIFO', 'VALUE']
 run('set', 'empty', '')
@@ -1659,6 +1668,8 @@ pushed = listing('--pushed')
 assert [x['id'] for x in pushed] == [int(unnamed), int(unnamed) + 1], pushed
 assert [x['name'] for x in pushed] == [None, 'job'], pushed
 assert all(x['kind'] == 'pushed' and x['status'] == 'done' and not x['visible'] for x in pushed)
+assert temporary() == pushed
+assert run('temp', 'list', '--json') == run('temp', 'ls', '--json')
 # Bindings are discovered by stable line ID, including hidden and unnamed lines.
 base_fifo = run('bind', 'base')
 hidden_fifo = run('bind', 'hidden')
@@ -1667,6 +1678,9 @@ bound = listing()
 assert [x['fifo'] for x in bound] == [base_fifo, None, hidden_fifo, unnamed_fifo, None], bound
 assert base_fifo in run('list') and hidden_fifo in run('list')
 assert listing('--pushed')[0]['fifo'] == unnamed_fifo
+assert temporary()[0]['fifo'] == unnamed_fifo
+assert temporary('--short') == listing('--pushed', '--short')
+assert run('temp', 'ls', '--short') == run('list', '--pushed', '--short')
 assert listing('--pushed', '--short') == [{key: x[key] for key in short_fields} for x in bound if x['kind'] == 'pushed']
 short_pushed = run('list', '--short', '--pushed').splitlines()
 assert short_pushed[0].split() == ['ID', 'NAME', 'STATUS', 'VALUE']
@@ -1681,12 +1695,14 @@ assert [x['id'] for x in reordered] == [initial[2]['id'], initial[0]['id'], init
 assert reordered[0]['visible'] and not reordered[2]['visible']
 assert reordered[0]['value'] == updated[2]['value']
 assert [x['fifo'] for x in reordered[:3]] == [hidden_fifo, base_fifo, None]
+assert temporary() == listing('--pushed')
 run('bind', '--unbind', 'hidden')
 assert listing()[0]['fifo'] is None
-pushed_fifo = run('push', 'fifo-job', '--fifo')
+pushed_fifo = run('temp', 'add', 'fifo-job', '--status', 'running', '--fifo')
 assert listing('--pushed')[-1]['fifo'] == pushed_fifo
 assert pushed_fifo in run('list', '--pushed')
-run('pop', 'fifo-job')
+assert pushed_fifo in run('temp', 'ls')
+run('temp', 'rm', 'fifo-job')
 assert all(x['fifo'] != pushed_fifo for x in listing())
 # A snapshot must fit more than a datagram and preserve maximum-length values.
 run('pop', '--all')
@@ -1695,6 +1711,7 @@ for n in range(24):
     run('push', 'large-%d' % n, input=long_value.encode())
 large = listing('--pushed')
 assert len(large) == 24 and all(x['value'] == long_value for x in large), large
+assert temporary() == large
 # Both filters share the atomic source snapshot and cannot affect other readers.
 with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
     futures = [pool.submit(listing, *(['--pushed'] if n % 2 else [])) for n in range(16)]
@@ -1708,19 +1725,30 @@ assert stat.S_IMODE(os.stat(snapshot_path).st_mode) == 0o600
 before = os.stat(snapshot_path).st_mtime_ns
 wrong = os.environ.copy(); wrong['STATUSBAR_SESSION_ID'] = '0' * 32
 run('list', '--json', env=wrong, code=1)
+run('temp', 'ls', '--json', env=wrong, code=1)
 assert os.stat(snapshot_path).st_mtime_ns == before
 outside = os.environ.copy(); outside.pop('STATUSBAR_SESSION_ID'); outside.pop('STATUSBAR_STATE')
 run('list', '--json', env=outside, code=2)
+run('temp', 'ls', '--json', env=outside, code=2)
+run('temp', 'add', 'new', '--fifo', env=outside, code=2)
+run('temp', 'rm', '--all', env=outside, code=2)
+assert 'temp' in run('temp', env=outside)
 for variable in ('STATUSBAR_SESSION_ID', 'STATUSBAR_STATE'):
     partial = os.environ.copy(); partial.pop(variable)
     r = subprocess.run([b, 'list'], env=partial, capture_output=True, timeout=6)
     assert r.returncode == 2 and not r.stdout and b'requires a running statusbar session' in r.stderr, r
+    r = subprocess.run([b, 'temp', 'list'], env=partial, capture_output=True, timeout=6)
+    assert r.returncode == 2 and not r.stdout and b'requires a running statusbar session' in r.stderr, r
 stale = os.environ.copy(); stale['STATUSBAR_STATE'] += '-missing'
 run('list', '--json', env=stale, code=1)
+run('temp', 'ls', '--json', env=stale, code=1)
 run('list', 'extra', code=2)
 run('list', '--unknown', code=2)
+for args in (('ls', 'extra'), ('ls', '--pushed'), ('ls', '--unknown'), ('unknown',)):
+    run('temp', *args, code=2)
 run('pop', '--all')
 assert listing('--pushed') == []
+assert temporary() == []
 print('SNAPSHOT_PATH=' + snapshot_path, flush=True)
 print('LIST_OK', flush=True)
 """
@@ -1733,7 +1761,7 @@ print('LIST_OK', flush=True)
     print('line listing, JSON, filtering, hidden rows, concurrent snapshots, and cleanup passed')
 
 
-def check_push_pop(binary):
+def check_push_pop(binary, temporary=False):
     child = CHILD_PRELUDE + r'''
 from subprocess import PIPE, Popen
 first = run('push', input=b'partial\rfirst final\n')
@@ -1829,6 +1857,14 @@ assert run('push', input=b'new after clear') == '20'
 assert run('pop', '-a') == ''
 print('PUSH_POP_OK', flush=True)
 '''
+    if temporary:
+        child = child.replace("run('push'", "run('temp', 'add'")
+        child = child.replace("[b, 'push'", "[b, 'temp', 'add'")
+        child = child.replace("run('pop'", "run('temp', 'rm'")
+        child = child.replace("[b, 'pop'", "[b, 'temp', 'rm'")
+        # Exercise both spellings of removal, including the no-name case.
+        child = child.replace("run('temp', 'rm', 'named')", "run('temp', 'remove', 'named')")
+        child = child.replace("run('temp', 'rm')", "run('temp', 'remove')")
     config = '[line.base]\ntext = configured\n[push]\ntext = "#[fg=#123456]> #[default]#(value)#(fill: )#[fg=#abcdef,bold]<#(name)>#[default]"\n'
     code, data = run_session(binary, config, child, timeout=25)
     assert code == 0 and b'PUSH_POP_OK' in data, data[-2500:]
@@ -1842,7 +1878,8 @@ print('PUSH_POP_OK', flush=True)
     assert b'STALE UPDATE' not in plain(data), data[-2000:]
     assert any(row.startswith(b'> width=68') and row.endswith(b'<download>') for row in rows), rows[-8:]
     assert any(b'99.9%' in row and row.endswith(b'<11>') for row in rows), rows[-8:]
-    print('push/pop names, IDs, command width, reloads, retired producers, pop --all, and authentication passed')
+    label = 'temp add/rm' if temporary else 'push/pop'
+    print(label + ' names, IDs, command width, reloads, retired producers, remove-all, and authentication passed')
 
 
 def check_fifo(binary):
@@ -2564,6 +2601,7 @@ def main():
     check_background_push_tty_output(binary)
     check_hidden_push_without_paint(binary)
     check_push_pop(binary)
+    check_push_pop(binary, temporary=True)
     check_list(binary)
     check_fifo(binary)
     check_fifo_signal_cleanup(binary)

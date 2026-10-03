@@ -6,6 +6,9 @@
 //!     statusbar push [NAME] [--status STATE] [--fifo | -- COMMAND...]
 //!     statusbar pop [NAME | --all]
 //!     statusbar list [--pushed] [--short] [--json]
+//!     statusbar temp list [--short] [--json]
+//!     statusbar temp add [NAME] [--status STATE] [--fifo | -- COMMAND...]
+//!     statusbar temp remove [NAME | --all]
 //!     statusbar bind [-u] NAME
 //!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME] [--no-plus]
 //!     statusbar config [show [SOURCE] | check FILE | load FILE | add FILE | list [--json [--all]] | remove PREFIX]
@@ -178,6 +181,105 @@ const config_application = zecli.comptimeValidated(.{
 
 pub const ConfigCommandName = zecli.CommandEnum(config_application);
 
+const list_output_flags = [_]zecli.FlagSpec{
+    .{ .name = "short", .description = "Show only ID, name, status and value, including in JSON" },
+    .{ .name = "json", .description = "Print a versioned JSON snapshot" },
+};
+
+const temp_add_flags = [_]zecli.FlagSpec{
+    .{ .name = "fifo", .description = "Create the line with a FIFO and print its path" },
+    .{ .name = "status", .value = .string, .value_name = "STATE", .description = "Set the initial status (default: running)", .choices = &status_names },
+};
+
+const temp_add_arguments = [_]zecli.ArgumentSpec{
+    .{ .name = "NAME", .description = "Name for the new line; omit to use its numeric ID" },
+};
+
+const temp_remove_flags = [_]zecli.FlagSpec{
+    .{ .name = "all", .short = 'a', .description = "Remove all temporary lines" },
+};
+
+const temp_remove_arguments = [_]zecli.ArgumentSpec{
+    .{ .name = "NAME", .description = "Temporary line name or ID; omit to remove the latest" },
+};
+
+const list_output_help =
+    \\JSON contains version and lines. Each line has id, name (null if
+    \\unnamed), kind, status, visible, fifo (path or null) and value. Value is the raw override,
+    \\not rendered text: null means no override, while "" is explicitly empty.
+    \\The table escapes controls and shows <default> for no override.
+    \\--short keeps only id, name, status and value in either output format.
+++ "\n";
+
+const temp_application = zecli.comptimeValidated(.{
+    .name = "temp",
+    .description = "Manage temporary lines in the current session",
+    .usage = "temp COMMAND [ARGS]",
+    .commands = &.{
+        .{
+            .name = "list",
+            .aliases = &.{"ls"},
+            .description = "List temporary lines",
+            .usage = "temp list [--short] [--json]",
+            .flags = &list_output_flags,
+            .extra_help =
+            \\Lists temporary lines in display order, including
+            \\hidden and completed lines. Requires a running statusbar session.
+            \\
+            ++ list_output_help,
+            .examples = &.{ "temp ls", "temp list --short", "temp ls --json" },
+        },
+        .{
+            .name = "add",
+            .description = "Add a temporary line, optionally running a command",
+            .usage = "temp add [NAME] [--status STATE] [--fifo | -- COMMAND [ARG...]]",
+            .flags = &temp_add_flags,
+            .arguments = &temp_add_arguments,
+            .extra_help =
+            \\Adds a line below configured lines, using the [push] templates.
+            \\With terminal stdin and no command or FIFO, creates an empty line,
+            \\prints its name (or numeric ID), and returns. Update it with set.
+            \\Read stdin from a pipe or file, or run a command after --. Each new
+            \\line of output replaces the value; the last one stays visible.
+            \\Command stdout and stderr are streamed into the line. Background
+            \\commands receive /dev/null instead of terminal stdin, while piped
+            \\or redirected input is preserved. COLUMNS reflects the available width.
+            \\--status sets the initial status in every mode (default: running).
+            \\
+            \\When input ends, the status becomes done for stdin, or success or
+            \\failed from the command's result. Prints the line's name or ID at
+            \\completion, except when backgrounded with stdout on the terminal.
+            \\Command mode exits with the command's status. With --fifo, prints
+            \\the FIFO path immediately; closing a writer keeps the value and status.
+            \\Remove the line with `statusbar temp rm NAME`.
+            ++ "\n",
+            .examples = &.{
+                "temp add build -- make",
+                "tail -n 0 -f app.log | statusbar temp add log &",
+                "temp add download --status running --fifo",
+            },
+        },
+        .{
+            .name = "remove",
+            .aliases = &.{"rm"},
+            .description = "Remove temporary lines",
+            .usage = "temp remove [NAME | --all]",
+            .flags = &temp_remove_flags,
+            .arguments = &temp_remove_arguments,
+            .extra_help =
+            \\Removes a temporary line and its FIFO. Omit NAME to remove the
+            \\latest temporary line. Configured lines cannot be removed here.
+            \\Removing a line does not stop the command producing its output.
+            \\--all (-a) succeeds even when there are no temporary lines.
+            ++ "\n",
+            .examples = &.{ "temp rm build", "temp remove 7", "temp rm", "temp rm --all" },
+        },
+    },
+    .examples = &.{ "temp add build -- make", "temp ls", "temp rm build" },
+});
+
+pub const TempCommandName = zecli.CommandEnum(temp_application);
+
 const commands = [_]zecli.CommandSpec{
     .{
         .name = "run",
@@ -248,11 +350,8 @@ const commands = [_]zecli.CommandSpec{
         .name = "push",
         .description = "Add a line, optionally streaming text into it",
         .usage = "statusbar push [NAME] [--status STATE] [--fifo | -- COMMAND [ARG...]]",
-        .flags = &.{
-            .{ .name = "fifo", .description = "Create the line with a FIFO and print its path" },
-            .{ .name = "status", .value = .string, .value_name = "STATE", .description = "Set the initial status (default: running)", .choices = &status_names },
-        },
-        .arguments = &.{.{ .name = "NAME", .description = "Name for the new line; omit to use its numeric ID" }},
+        .flags = &temp_add_flags,
+        .arguments = &temp_add_arguments,
         .extra_help =
         \\Adds a line below the configured ones, using the [push] templates.
         \\With terminal stdin and no command or FIFO, creates an empty line,
@@ -284,8 +383,8 @@ const commands = [_]zecli.CommandSpec{
         .name = "pop",
         .description = "Remove pushed lines",
         .usage = "statusbar pop [NAME | --all]",
-        .flags = &.{.{ .name = "all", .short = 'a', .description = "Remove all pushed lines" }},
-        .arguments = &.{.{ .name = "NAME", .description = "Pushed line name or ID; omit to remove the latest" }},
+        .flags = &temp_remove_flags,
+        .arguments = &temp_remove_arguments,
         .extra_help =
         \\Removes a pushed line and its FIFO. Configured lines cannot be popped.
         \\Removing a line does not stop the command producing its output.
@@ -297,23 +396,17 @@ const commands = [_]zecli.CommandSpec{
         .name = "list",
         .description = "List the current session's lines",
         .usage = "statusbar list [--pushed] [--short] [--json]",
-        .flags = &.{
+        .flags = &([_]zecli.FlagSpec{
             .{ .name = "pushed", .description = "Show only pushed lines" },
-            .{ .name = "short", .description = "Show only ID, name, status and value, including in JSON" },
-            .{ .name = "json", .description = "Print a versioned JSON snapshot" },
-        },
+        } ++ list_output_flags),
         .extra_help =
         \\Lists configured and pushed lines in display order, including hidden
         \\lines. Requires a live statusbar session. --pushed filters the result.
         \\
-        \\JSON contains version and lines. Each line has id, name (null if
-        \\unnamed), kind, status, visible, fifo (path or null) and value. Value is the raw override,
-        \\not rendered text: null means no override, while "" is explicitly empty.
-        \\The table escapes controls and shows <default> for no override.
-        \\--short keeps only id, name, status and value in either output format.
-        ++ "\n",
+        ++ list_output_help,
         .examples = &.{ "statusbar list", "statusbar list --short", "statusbar list --pushed --short --json" },
     },
+    zecli.mount("temp", temp_application),
     .{
         .name = "bind",
         .description = "Create or remove a line's FIFO",
@@ -452,6 +545,7 @@ test "run is the default command" {
         .{ &.{ "set", "prompt" }, "set" },
         .{ &.{ "bind", "prompt" }, "bind" },
         .{ &.{ "list", "--pushed", "--json" }, "list" },
+        .{ &.{ "temp", "ls", "--json" }, "temp" },
         .{ &.{ "run", "-c", "my.statusbar" }, "run" },
         .{ &.{"--help"}, "--help" },
         .{ &.{"-V"}, "-V" },
