@@ -1,12 +1,12 @@
 //! Namespaces for additive config fragments. A dot separates the prefix
-//! from the local name. Prefixes use letters, digits and underscores.
+//! from the local name. Prefixes use letters, digits, underscores and hyphens.
 const std = @import("std");
 
 pub const max_len = 62;
 
 pub fn valid(prefix: []const u8) bool {
     if (prefix.len == 0 or prefix.len > max_len) return false;
-    for (prefix) |c| if (!std.ascii.isAlphanumeric(c) and c != '_') return false;
+    for (prefix) |c| if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') return false;
     return true;
 }
 

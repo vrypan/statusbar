@@ -16,9 +16,10 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     const defaults = command.enabled("default");
     const path = command.enabled("path");
     const check_file = command.getValue([]const u8, "check");
-    const add = command.getValue([]const u8, "add");
-    if (@as(u8, @intFromBool(print)) + @as(u8, @intFromBool(list)) + @as(u8, @intFromBool(defaults)) + @as(u8, @intFromBool(path)) + @as(u8, @intFromBool(check_file != null)) + @as(u8, @intFromBool(add != null)) > 1)
-        return common.usageError(stderr, command, "choose one of --print, --list, --default, --path, --check, or --add");
+    const add = command.enabled("add");
+    const remove = command.getValue([]const u8, "remove");
+    if (@as(u8, @intFromBool(print)) + @as(u8, @intFromBool(list)) + @as(u8, @intFromBool(defaults)) + @as(u8, @intFromBool(path)) + @as(u8, @intFromBool(check_file != null)) + @as(u8, @intFromBool(add)) + @as(u8, @intFromBool(remove != null)) > 1)
+        return common.usageError(stderr, command, "choose one of --print, --list, --default, --path, --check, --add, or --remove");
     if (check_file) |file| {
         if (args.len > 0) return common.usageError(stderr, command, "--check takes a file after the flag and no other arguments");
         const text = Io.Dir.cwd().readFileAlloc(io, file, arena, .limited(config.max_config)) catch |err| {
@@ -29,13 +30,18 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         return config_send.validateText(arena, text, file, stderr);
     }
     if (args.len > 0 and !print and !list) return common.usageError(stderr, command, "a config selection requires --print or --list");
-    if (add) |prefix| {
-        if (!@import("shared").config_prefix.valid(prefix)) return common.usageError(stderr, command, "--add prefix needs 1-62 letters, digits or underscores");
+    if (remove) |prefix| {
+        if (!@import("shared").config_prefix.valid(prefix)) return common.usageError(stderr, command, "--remove needs a prefix of 1-62 letters, digits, underscores or hyphens");
+        const token = @import("platform").environment.get("STATUSBAR_SESSION_ID") orelse
+            return common.usageError(stderr, command, "not inside a compatible statusbar session");
+        return config_send.sendEdit(arena, io, token, prefix, true, stderr);
+    }
+    if (add) {
         if (try Io.File.stdin().isTty(io)) return common.usageError(stderr, command, "--add reads a config fragment from stdin");
-        return sendConfig(arena, io, command, stderr, prefix);
+        return sendConfig(arena, io, command, stderr, true);
     }
     if (!print and !list and !path and !defaults) {
-        if (!(try Io.File.stdin().isTty(io))) return sendConfig(arena, io, command, stderr, null);
+        if (!(try Io.File.stdin().isTty(io))) return sendConfig(arena, io, command, stderr, false);
         try cli.printCommandHelp(arena, help_output, command.spec);
         try stdout.flush();
         return 0;
@@ -101,7 +107,7 @@ fn show(arena: std.mem.Allocator, text: []const u8, list: bool, stdout: *Io.Writ
     return 0;
 }
 
-fn sendConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer, prefix: ?[]const u8) !u8 {
+fn sendConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer, add: bool) !u8 {
     const protocol = @import("terminal").config_protocol;
     const token = @import("platform").environment.get("STATUSBAR_SESSION_ID") orelse
         return common.usageError(stderr, command, "not inside a compatible statusbar session");
@@ -114,6 +120,6 @@ fn sendConfig(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, s
         return 1;
     };
     if (text.len == 0) return common.usageError(stderr, command, "stdin contains no config");
-    if (prefix) |name| return config_send.sendAddition(arena, io, token, name, text, stderr);
+    if (add) return config_send.sendEdit(arena, io, token, text, false, stderr);
     return config_send.sendText(arena, io, token, text, "stdin", stderr);
 }

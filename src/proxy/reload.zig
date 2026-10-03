@@ -26,7 +26,7 @@ fn replace(self: *Proxy, text: []const u8, now_ms: i64, diag: *config.Diagnostic
     errdefer candidate.deinit();
     candidate.renderer.palette = self.runtime.renderer.palette;
     candidate.renderer.palette_revision = self.runtime.renderer.palette_revision;
-    if (additive) candidate.source.commands.copyExisting(&self.runtime.source.commands);
+    if (additive) candidate.source.commands.copyExisting(&self.runtime.source.commands, candidate.cfg, self.runtime.cfg);
     for (candidate.removed.items) |id| {
         if (self.fifos.findLine(id)) |index| if (!self.fifos.items.items[index].ownedPath()) return error.FifoPathReplaced;
     }
@@ -56,7 +56,7 @@ fn replace(self: *Proxy, text: []const u8, now_ms: i64, diag: *config.Diagnostic
         self.requestPaint(now_ms);
         return err;
     };
-    if (additive) candidate.source.commands.adoptExisting(&self.runtime.source.commands);
+    if (additive) candidate.source.commands.adoptExisting(&self.runtime.source.commands, candidate.cfg, self.runtime.cfg);
     candidate.commitLines(self.lines);
     std.mem.swap(Runtime, self.runtime, &candidate);
     self.runtime.source.lines = self.lines;
@@ -87,16 +87,16 @@ pub fn applyConfigRequest(self: *Proxy, payload: []const u8, now_ms: i64) bool {
     var owned: ?[]u8 = null;
     defer if (owned) |text| self.gpa.free(text);
     var additive = false;
-    const text = if (request.prefix) |prefix| merged: {
+    const text = if (request.kind != .replace) merged: {
         const current = if (self.held_config_len) |len| self.held_config[0..len] else self.runtime.owned_text orelse self.session_state.startup;
         var diag: config.Diagnostic = .{};
-        owned = @import("model").config_add.merge(self.gpa, current, prefix, request.text, &diag) catch |err| {
-            if (self.log) |log| log.write("OSC config addition rejected: {t}, line={d}", .{ err, diag.line });
+        owned = (if (request.kind == .add) @import("model").config_add.merge(self.gpa, current, request.text, &diag) else @import("model").config_remove.remove(self.gpa, current, request.text, &diag)) catch |err| {
+            if (self.log) |log| log.write("OSC config edit rejected: {t}, line={d}", .{ err, diag.line });
             return false;
         };
         // Reject invalid additions before replacing a previously held update.
         var checked = config.parse(self.gpa, owned.?, &diag) catch |err| {
-            if (self.log) |log| log.write("OSC config addition rejected: {t}, line={d}", .{ err, diag.line });
+            if (self.log) |log| log.write("OSC config edit rejected: {t}, line={d}", .{ err, diag.line });
             return false;
         };
         defer checked.deinit();
@@ -106,13 +106,13 @@ pub fn applyConfigRequest(self: *Proxy, payload: []const u8, now_ms: i64) bool {
             kept_pushed += 1;
             if (line.explicitName()) |name| for (checked.lines) |spec| {
                 if (std.mem.eql(u8, name, spec.name)) {
-                    if (self.log) |log| log.write("OSC config addition rejected: NameTaken", .{});
+                    if (self.log) |log| log.write("OSC config edit rejected: NameTaken", .{});
                     return false;
                 }
             };
         }
         if (checked.lines.len + kept_pushed > config.max_lines) {
-            if (self.log) |log| log.write("OSC config addition rejected: RowLimit", .{});
+            if (self.log) |log| log.write("OSC config edit rejected: RowLimit", .{});
             return false;
         }
         additive = self.held_config_len == null or self.held_config_additive;
@@ -205,7 +205,7 @@ test "held additions accumulate and invalid additions keep earlier requests" {
     proxy.held_config_len = base.len;
     proxy.held_config_additive = true;
     for ([_][]const u8{ "[line.extra.one]", "[line.extra.two]" }) |text| {
-        const frame = try config_protocol.encodeAdd(std.testing.allocator, &proxy.session_token, "extra", text);
+        const frame = try config_protocol.encodeAdd(std.testing.allocator, &proxy.session_token, text);
         defer std.testing.allocator.free(frame);
         try std.testing.expect(!proxy.applyConfigRequest(frame[2 + config_protocol.namespace.len .. frame.len - 2], 0));
         try std.testing.expect(proxy.held_config_additive);
@@ -215,7 +215,7 @@ test "held additions accumulate and invalid additions keep earlier requests" {
     try std.testing.expect(std.mem.indexOf(u8, before, "extra.one") != null);
     try std.testing.expect(std.mem.indexOf(u8, before, "extra.two") != null);
     for ([_][]const u8{ "[line.extra.one]", "[line.extra.clash]" }) |text| {
-        const bad = try config_protocol.encodeAdd(std.testing.allocator, &proxy.session_token, "extra", text);
+        const bad = try config_protocol.encodeAdd(std.testing.allocator, &proxy.session_token, text);
         defer std.testing.allocator.free(bad);
         try std.testing.expect(!proxy.applyConfigRequest(bad[2 + config_protocol.namespace.len .. bad.len - 2], 0));
         try std.testing.expectEqualStrings(before, proxy.held_config[0..proxy.held_config_len.?]);

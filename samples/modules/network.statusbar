@@ -1,5 +1,5 @@
 # Module: network. macOS; route, netstat, awk. Samples the default IPv4 interface for one second.
-# Load: statusbar config --add network < network.statusbar
+# Load: statusbar config --add < network.statusbar
 
 [line.network.status]
 default = " #[fg=colour5]net#[default] #(command:network.status)#[default]#(fill: ) "

@@ -6,6 +6,10 @@ order they were added.
 
 ## Unreleased
 
+- Make `config --add` accept mixed prefixes and unprefixed definitions without
+  a name argument; add `config --remove PREFIX` with dependency checks and
+  preservation of surviving lines, bindings and command processes
+
 - Make bundled module displays defaults, so `set` and FIFO values override
   them and `set --reset` restores their live content
 - Use `module.name` for module lines, commands and colors; update `config --add`,
@@ -15,12 +19,12 @@ order they were added.
   and command names grouped by module prefix
 - Add `list [--pushed] [--short] [--json]` to inspect session lines, including hidden
   lines, with stable IDs, statuses, raw override values and bound FIFO paths
-- Add `config --add PREFIX` for atomic additions of prefixed lines, commands,
+- Add `config --add` for atomic additions of lines, commands,
   and colors, preserving existing line state and running commands
 - Bundle a library of ten modules using terminal-native colors, with setup
   instructions, platform requirements, and checks for theme composition
 - Use static names in module sources; imports preserve source text without
-  placeholder substitution, and `--add` checks the declared prefix
+  placeholder substitution
 
 ## v0.5.1
 

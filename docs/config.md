@@ -159,12 +159,12 @@ limit and [the protocol](osc-3110.md) for its terminal sequence.
 
 ## Add to the running config
 
-Use `--add PREFIX` to add a module containing new lines, commands, and colors.
+Use `--add` to add a module containing new lines, commands, and colors.
 The [module library](../samples/modules/README.md) has ready-made modules with
 native terminal colors. A module is a config fragment, for example:
 
 ```sh
-statusbar config --add extra <<'EOF'
+statusbar config --add <<'EOF'
 [line.extra.load]
 text = "#[fg=extra.accent]#(command:extra.load)#[default]"
 
@@ -177,14 +177,10 @@ extra.accent = colour4
 EOF
 ```
 
-Every new line, command, and color name must start with `PREFIX.` and have a
-nonempty suffix. Prefixes use 1–62 letters, digits, or underscores; the dot
-separates the prefix from the rest of the name. Names are defined explicitly
-in the source: the example defines `extra.load` and `extra.accent`.
-`--add extra` checks that prefix; it does not rename or substitute anything.
-You can add more definitions with the same prefix later, provided their names
-are new. To create a second instance, copy the module and change its names
-and references together.
+A fragment can contain several prefixes or unprefixed definitions. Names must
+be unique within each kind: a line and a command can both be called `disk.usage`,
+but two lines cannot share that name. Later imports may extend an existing
+prefix. There are no module declarations, registration or import-time names.
 
 The source text is preserved, including command scripts and comments. The
 combined config must fit the 64 KiB limit. Modules that contain a line and
@@ -211,6 +207,31 @@ Like replacement, sending an addition does not wait for an acknowledgement.
 The CLI checks a snapshot first to report errors; the session checks again
 when applying the request. Inspect `config --print current` afterward. See
 [the protocol](osc-3110.md) for limits and concurrent writes.
+
+## Remove a prefix
+
+```sh
+statusbar config --remove disk
+```
+
+This removes configured `disk.*` lines, commands and colors, regardless of
+which file added them. It does not match `diskette.*`, an unprefixed `disk`, or
+pushed jobs named `disk.*`. Prefixes use 1–62 letters, digits, underscores or
+hyphens. The first dot separates the prefix from the rest of a name.
+
+Removal rejects references from remaining templates to removed commands or
+colors (including defaults, status variants, push templates and the global
+style). References produced dynamically by a command are not inspected.
+An unknown prefix or removal of the last configured line is also rejected.
+The running session checks its latest configuration before applying the edit.
+
+Surviving line IDs, values, statuses, FIFOs and unchanged command processes
+are preserved. Removed configured lines lose their FIFO bindings; removed
+commands are stopped. Pushed lines remain. Removal ignores stdin and prints
+nothing when submitted. Like `--add`, the OSC request is asynchronous: inspect
+`config --list` or `config --print current` afterward. A concurrent change can
+cause the session to reject an edit after CLI preflight succeeded.
+
 
 ## Syntax
 

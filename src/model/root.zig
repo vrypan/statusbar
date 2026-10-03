@@ -3,6 +3,7 @@
 
 pub const command_outputs = @import("command_outputs.zig");
 pub const config = @import("config.zig");
+pub const config_remove = @import("config_remove.zig");
 pub const config_add = @import("config_add.zig");
 pub const config_sections = @import("config_sections.zig");
 pub const config_statements = @import("config_statements.zig");
@@ -21,6 +22,7 @@ test {
     _ = config;
     _ = @import("config_list.zig");
     _ = config_add;
+    _ = config_remove;
     _ = config_sections;
     _ = config_statements;
     _ = datetime;

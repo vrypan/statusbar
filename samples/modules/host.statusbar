@@ -1,5 +1,5 @@
 # Module: host. macOS/Linux; whoami and hostname.
-# Load: statusbar config --add host < host.statusbar
+# Load: statusbar config --add < host.statusbar
 
 [line.host.identity]
 default = " #[fg=colour5]host#[default] #[fg=colour4,bold]#(command:host.identity)#[default]#(fill: ) "

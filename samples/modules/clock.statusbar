@@ -1,5 +1,5 @@
 # Module: clock. macOS/Linux; no external commands.
-# Load: statusbar config --add clock < clock.statusbar
+# Load: statusbar config --add < clock.statusbar
 
 [line.clock.time]
 default = " #[fg=colour5]clock#[default] #(datetime:%a %d %b)#(fill: )#[fg=colour4,bold]#(datetime:%H:%M:%S)#[default] "

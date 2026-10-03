@@ -20,10 +20,10 @@ pub fn sendText(arena: std.mem.Allocator, io: Io, token: []const u8, text: []con
 
 /// Preflight against a snapshot for useful CLI diagnostics. Send only the
 /// fragment: the running session merges again against its latest config.
-pub fn sendAddition(arena: std.mem.Allocator, io: Io, token: []const u8, prefix: []const u8, text: []const u8, stderr: *Io.Writer) !u8 {
+pub fn sendEdit(arena: std.mem.Allocator, io: Io, token: []const u8, text: []const u8, remove: bool, stderr: *Io.Writer) !u8 {
     const state = @import("session").session_state;
     const path = @import("platform").environment.get("STATUSBAR_STATE") orelse {
-        try stderr.writeAll("statusbar: --add requires a running statusbar session\n");
+        try stderr.writeAll("statusbar: config edits require a running statusbar session\n");
         try stderr.flush();
         return 2;
     };
@@ -34,7 +34,7 @@ pub fn sendAddition(arena: std.mem.Allocator, io: Io, token: []const u8, prefix:
     };
     defer arena.free(current);
     var diag: config.Diagnostic = .{};
-    const merged = @import("model").config_add.merge(arena, current, prefix, text, &diag) catch |err| {
+    const merged = (if (remove) @import("model").config_remove.remove(arena, current, text, &diag) else @import("model").config_add.merge(arena, current, text, &diag)) catch |err| {
         if (err == error.OutOfMemory) return err;
         try stderr.print("statusbar: stdin:{d}: {s}\n", .{ diag.line, diag.message });
         try stderr.flush();
@@ -43,7 +43,8 @@ pub fn sendAddition(arena: std.mem.Allocator, io: Io, token: []const u8, prefix:
     defer arena.free(merged);
     const validation = try validateText(arena, merged, "combined config", stderr);
     if (validation != 0) return validation;
-    const frame = @import("terminal").config_protocol.encodeAdd(arena, token, prefix, text) catch |err| {
+    const protocol = @import("terminal").config_protocol;
+    const frame = (if (remove) protocol.encodeRemove(arena, token, text) else protocol.encodeAdd(arena, token, text)) catch |err| {
         try stderr.print("statusbar: cannot encode config addition: {t}\n", .{err});
         try stderr.flush();
         return 1;

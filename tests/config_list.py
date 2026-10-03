@@ -26,7 +26,7 @@ assert "line.prompt" in run("--list", "default")
 run("--list", code=2)
 run("--list", "invalid", code=2)
 run("--list", "default", "extra", code=2)
-for option in ("--print", "--default", "--path", "--check=file", "--add=x"):
+for option in ("--print", "--default", "--path", "--check=file", "--add", "--remove=x"):
     run("--list", option, code=2)
 
 with tempfile.TemporaryDirectory(prefix="statusbar-config-list-") as directory:

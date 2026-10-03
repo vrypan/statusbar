@@ -29,7 +29,8 @@ const config_flags = [_]zecli.FlagSpec{
     .{ .name = "default", .description = "Same as --print default" },
     .{ .name = "path", .description = "Print the config path for a new session" },
     .{ .name = "check", .value = .string, .value_name = "FILE", .description = "Validate a config file without starting a session", .completion = .files },
-    .{ .name = "add", .value = .string, .value_name = "PREFIX", .description = "Add prefixed lines, commands and colors from stdin" },
+    .{ .name = "add", .description = "Add new lines, commands and colors from stdin" },
+    .{ .name = "remove", .value = .string, .value_name = "PREFIX", .description = "Remove configured PREFIX.* lines, commands and colors" },
 };
 
 const status_names = [_][]const u8{ "normal", "running", "done", "success", "failed" };
@@ -228,17 +229,17 @@ const commands = [_]zecli.CommandSpec{
     .{
         .name = "config",
         .description = "View configuration or load a new layout",
-        .usage = "statusbar config [--print [default|startup|current] | --list [default|startup|current] | --default | --path | --check FILE | --add PREFIX]",
+        .usage = "statusbar config [--print [default|startup|current] | --list [default|startup|current] | --default | --path | --check FILE | --add | --remove PREFIX]",
         .flags = &config_flags,
         .arguments = &.{.{ .name = "SOURCE", .description = "Config to show with --print or --list: default, startup, or current", .completion = .{ .values = &.{ "default", "startup", "current" } } }},
         .double_dash = .positionals,
         .extra_help =
         \\To change the running bar, pass a complete config file as input. The
         \\new layout can change the number of rows without restarting your shell.
-        \\--add PREFIX adds a fragment instead. New line, command and color names
-        \\must start with PREFIX.; existing names and global settings are rejected.
-        \\Prefixes use 1-62 letters, digits or underscores (no hyphens).
-        \\Names are defined in the source; --add checks the prefix without renaming.
+        \\--add merges new line, command and color definitions from stdin.
+        \\Names must be unique within each kind. Prefixes are a naming convention.
+        \\--remove PREFIX removes PREFIX.* definitions, rejecting dependencies
+        \\from remaining definitions. Global settings require full replacement.
         \\
         \\Printing startup or current requires a running session. Both preserve
         \\the config text and exclude values and statuses set at runtime.
@@ -268,7 +269,8 @@ const commands = [_]zecli.CommandSpec{
             "statusbar config --print",
             "statusbar config --list",
             "statusbar config --list default",
-            "statusbar config --add extra < extra.statusbar",
+            "statusbar config --add < extra.statusbar",
+            "statusbar config --remove extra",
             "statusbar config --print startup > original.statusbar",
             "statusbar config --print current > active.statusbar",
             "statusbar config --default > my.statusbar",

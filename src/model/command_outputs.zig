@@ -51,27 +51,33 @@ pub const CommandOutputs = struct {
         if (self.environment) |*owner| owner.deinit();
     }
 
-    /// An addition keeps old command indices. Copy their visible results
+    fn findPrevious(cfg: *const config.Config, wanted: config.Command, interval: i64) ?usize {
+        for (cfg.commandList(), 0..) |spec, index| if (std.mem.eql(u8, spec.name, wanted.name) and std.mem.eql(u8, spec.run, wanted.run) and cfg.commandInterval(index) == interval) return index;
+        return null;
+    }
+
+    /// Match surviving commands by name and copy their visible results
     /// while preparing the candidate, without changing the live generation.
-    pub fn copyExisting(self: *CommandOutputs, old: *const CommandOutputs) void {
-        std.debug.assert(self.commands.len >= old.commands.len);
-        for (0..old.commands.len) |n| {
-            @memcpy(self.outputs[n][0..old.lens[n]], old.output(n));
-            self.lens[n] = old.lens[n];
-            self.seen[n] = old.seen[n];
+    pub fn copyExisting(self: *CommandOutputs, old: *const CommandOutputs, cfg: *const config.Config, previous: *const config.Config) void {
+        for (cfg.commandList(), 0..) |spec, n| {
+            const p = findPrevious(previous, spec, cfg.commandInterval(n)) orelse continue;
+            @memcpy(self.outputs[n][0..old.lens[p]], old.output(p));
+            self.lens[n] = old.lens[p];
+            self.seen[n] = old.seen[p];
         }
     }
 
     /// Called only once the addition can commit. Move the running processes
     /// and schedules, but keep each generation's own exec and source strings:
     /// exec borrows that generation's environment block.
-    pub fn adoptExisting(self: *CommandOutputs, old: *CommandOutputs) void {
-        std.debug.assert(self.commands.len >= old.commands.len);
-        for (old.commands, 0..) |*previous, n| {
+    pub fn adoptExisting(self: *CommandOutputs, old: *CommandOutputs, cfg: *const config.Config, previous: *const config.Config) void {
+        for (cfg.commandList(), 0..) |spec, n| {
+            const p = findPrevious(previous, spec, cfg.commandInterval(n)) orelse continue;
+            const prior = &old.commands[p];
             const next = &self.commands[n];
-            std.mem.swap(status.Command, next, previous);
-            std.mem.swap(?@import("platform").sys.Exec, &next.exec, &previous.exec);
-            std.mem.swap([]const u8, &next.shell_command, &previous.shell_command);
+            std.mem.swap(status.Command, next, prior);
+            std.mem.swap(?@import("platform").sys.Exec, &next.exec, &prior.exec);
+            std.mem.swap([]const u8, &next.shell_command, &prior.shell_command);
         }
     }
 

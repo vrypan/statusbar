@@ -11,7 +11,8 @@ statusbar pop                               # remove the newest temporary line
 statusbar pop --all                         # remove all temporary lines
 statusbar list --pushed                     # inspect temporary lines
 statusbar config < another.statusbar        # change the running layout
-statusbar config --add extra < extra.statusbar # add prefixed definitions
+statusbar config --add < extra.statusbar # add new definitions
+statusbar config --remove extra         # remove extra.* definitions
 ```
 
 Run `statusbar --help` for the command list, or
@@ -28,7 +29,7 @@ statusbar pop [NAME | --all]
 statusbar list [--pushed] [--short] [--json]
 statusbar bind [-u | --unbind] NAME
 statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]
-statusbar config [--print [default|startup|current] | --list [default|startup|current] | --default | --path | --check FILE | --add PREFIX]
+statusbar config [--print [default|startup|current] | --list [default|startup|current] | --default | --path | --check FILE | --add | --remove PREFIX]
 statusbar completion <bash|zsh|fish>
 ```
 
@@ -164,11 +165,13 @@ reads and validates the complete config until EOF, then sends its contents to
 the current statusbar session. Empty input is an error. Printing flags ignore
 stdin. Replacement prints nothing on success.
 
-`--add PREFIX` instead reads a fragment of new lines, commands, and colors
-from stdin. Names are written explicitly in the source and must start with
-`PREFIX.`. Imports preserve the source text. It rejects existing names
+`--add` instead reads a fragment of new lines, commands, and colors
+from stdin. Names are written explicitly in the source; mixed prefixes and
+unprefixed definitions are allowed. Imports preserve the source text. It rejects existing names
 and global settings, and preserves existing command processes and schedules.
-Use it separately from the other config options. See
+Use `--remove PREFIX` to remove configured `PREFIX.*` lines, commands and
+colors. Removal checks dependencies and keeps pushed lines. Use each edit
+separately from the other config options. See
 [adding to the running config](config.md#add-to-the-running-config).
 
 ```sh
@@ -176,7 +179,7 @@ statusbar config --print current > saved.statusbar
 statusbar config --print startup | statusbar config
 cat my.statusbar | statusbar config
 statusbar config < my.statusbar
-statusbar config --add extra < extra.statusbar
+statusbar config --add < extra.statusbar
 statusbar config --default | statusbar config
 ```
 

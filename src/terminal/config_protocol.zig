@@ -28,11 +28,13 @@ pub fn encode(allocator: std.mem.Allocator, token: []const u8, text: []const u8)
     return encodePayload(allocator, token, operation, text);
 }
 
-pub fn encodeAdd(allocator: std.mem.Allocator, token: []const u8, prefix: []const u8, text: []const u8) ![]u8 {
+pub fn encodeAdd(allocator: std.mem.Allocator, token: []const u8, text: []const u8) ![]u8 {
+    return encodePayload(allocator, token, add_operation, text);
+}
+
+pub fn encodeRemove(allocator: std.mem.Allocator, token: []const u8, prefix: []const u8) ![]u8 {
     if (!prefix_names.valid(prefix)) return error.InvalidPrefix;
-    const body = try std.fmt.allocPrint(allocator, "{s};{s}", .{ prefix, text });
-    defer allocator.free(body);
-    return encodePayload(allocator, token, add_operation, body);
+    return encodePayload(allocator, token, "REMOVE;", prefix);
 }
 
 fn encodePayload(allocator: std.mem.Allocator, token: []const u8, op: []const u8, text: []const u8) ![]u8 {
@@ -52,7 +54,7 @@ fn encodePayload(allocator: std.mem.Allocator, token: []const u8, op: []const u8
     pos += op.len;
     var envelope = try allocator.alloc(u8, decoded_len);
     defer allocator.free(envelope);
-    @memcpy(envelope[0..2], "1;");
+    @memcpy(envelope[0..2], if (std.mem.eql(u8, op, add_operation)) "2;" else "1;");
     @memcpy(envelope[2..][0..token_len], token);
     envelope[2 + token_len] = ';';
     @memcpy(envelope[envelope_overhead..], text);
@@ -65,50 +67,61 @@ fn encodePayload(allocator: std.mem.Allocator, token: []const u8, op: []const u8
 /// Decodes the bytes after `3110;STATUSBAR;`. The returned config aliases out.
 pub fn decode(out: []u8, payload: []const u8, expected_token: []const u8) ![]const u8 {
     const request = try decodeRequest(out, payload, expected_token);
-    if (request.prefix != null) return error.UnknownOperation;
+    if (request.kind != .replace) return error.UnknownOperation;
     return request.text;
 }
 
-pub const Request = struct { prefix: ?[]const u8 = null, text: []const u8 };
+pub const Request = struct { kind: enum { replace, add, remove } = .replace, text: []const u8 };
 
 pub fn decodeRequest(out: []u8, payload: []const u8, expected_token: []const u8) !Request {
     if (!validToken(expected_token)) return error.InvalidToken;
     const add = std.mem.startsWith(u8, payload, add_operation);
-    if (!add and !std.mem.startsWith(u8, payload, operation)) return error.UnknownOperation;
-    const encoded = payload[if (add) add_operation.len else operation.len..];
+    const remove = std.mem.startsWith(u8, payload, "REMOVE;");
+    if (!add and !remove and !std.mem.startsWith(u8, payload, operation)) return error.UnknownOperation;
+    const encoded = payload[if (add) add_operation.len else if (remove) 7 else operation.len..];
     const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(encoded) catch return error.InvalidEncoding;
     if (decoded_len < envelope_overhead or decoded_len > out.len) return error.InvalidEncoding;
     std.base64.standard.Decoder.decode(out[0..decoded_len], encoded) catch return error.InvalidEncoding;
     const decoded = out[0..decoded_len];
-    if (!std.mem.startsWith(u8, decoded, "1;")) return error.UnsupportedVersion;
+    if (!std.mem.startsWith(u8, decoded, if (add) "2;" else "1;")) return error.UnsupportedVersion;
     if (decoded[2 + token_len] != ';') return error.InvalidEnvelope;
     const token = decoded[2 .. 2 + token_len];
     if (!validToken(token) or !std.crypto.timing_safe.eql([token_len]u8, token[0..token_len].*, expected_token[0..token_len].*)) return error.AuthenticationFailed;
     const text = decoded[envelope_overhead..];
     if (text.len > max_config) return error.ConfigTooLarge;
-    if (!add) return .{ .text = text };
-    const separator = std.mem.indexOfScalar(u8, text, ';') orelse return error.InvalidEnvelope;
-    const prefix = text[0..separator];
-    if (!prefix_names.valid(prefix)) return error.InvalidPrefix;
-    return .{ .prefix = prefix, .text = text[separator + 1 ..] };
+    if (remove and !prefix_names.valid(text)) return error.InvalidPrefix;
+    return .{ .kind = if (add) .add else if (remove) .remove else .replace, .text = text };
 }
 
-test "add requests authenticate the prefix and fragment and respect the frame bound" {
+test "add requests authenticate the fragment and respect the frame bound" {
     const token = "0123456789abcdef0123456789abcdef";
     const text = "[line.weather-summary]\ntext = semi; Καλημέρα\n";
-    const frame = try encodeAdd(std.testing.allocator, token, "weather", text);
+    const frame = try encodeAdd(std.testing.allocator, token, text);
     defer std.testing.allocator.free(frame);
     var out: [max_config + envelope_overhead]u8 = undefined;
     const payload = frame[2 + namespace.len .. frame.len - 2];
     const request = try decodeRequest(&out, payload, token);
-    try std.testing.expectEqualStrings("weather", request.prefix.?);
+    try std.testing.expectEqual(.add, request.kind);
     try std.testing.expectEqualStrings(text, request.text);
     try std.testing.expectError(error.AuthenticationFailed, decodeRequest(&out, payload, "fedcba9876543210fedcba9876543210"));
-    try std.testing.expectError(error.InvalidPrefix, encodeAdd(std.testing.allocator, token, "weather-nested", text));
-    const largest = try encodeAdd(std.testing.allocator, token, "x", "a" ** (max_config - 2));
+    const largest = try encodeAdd(std.testing.allocator, token, "a" ** max_config);
     defer std.testing.allocator.free(largest);
     try std.testing.expect(largest.len - 4 <= max_osc);
-    try std.testing.expectError(error.ConfigTooLarge, encodeAdd(std.testing.allocator, token, "x", "a" ** (max_config - 1)));
+    try std.testing.expectError(error.ConfigTooLarge, encodeAdd(std.testing.allocator, token, "a" ** (max_config + 1)));
+}
+
+test "remove requests authenticate the prefix and reject malformed prefixes" {
+    const token = "0123456789abcdef0123456789abcdef";
+    const frame = try encodeRemove(std.testing.allocator, token, "disk");
+    defer std.testing.allocator.free(frame);
+    var out: [max_config + envelope_overhead]u8 = undefined;
+    const payload = frame[2 + namespace.len .. frame.len - 2];
+    const request = try decodeRequest(&out, payload, token);
+    try std.testing.expectEqual(.remove, request.kind);
+    try std.testing.expectEqualStrings("disk", request.text);
+    try std.testing.expectError(error.UnknownOperation, decode(&out, payload, token));
+    try std.testing.expectError(error.AuthenticationFailed, decodeRequest(&out, payload, "fedcba9876543210fedcba9876543210"));
+    try std.testing.expectError(error.InvalidPrefix, encodeRemove(std.testing.allocator, token, "disk."));
 }
 
 test "config protocol round trips arbitrary config bytes" {

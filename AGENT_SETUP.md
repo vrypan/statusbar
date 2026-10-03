@@ -59,7 +59,7 @@ Locate bundled themes:
 The bundled module library provides individual features with native colors.
 Find it beside the themes directory (`share/statusbar/modules` for installed
 builds, or `modules/` in release archives). Read its `README.md` for platforms
-and dependencies. Add selected modules with `statusbar config --add PREFIX`
+and dependencies. Add selected modules with `statusbar config --add`
 or copy their definitions into a draft config. Modules use static names such
 as `disk.usage`; keep their names, references and command intervals together.
 Modules are separate from complete

@@ -91,11 +91,12 @@ to your current theme:
 
 ```sh
 # Inside a statusbar session, from the repository directory:
-statusbar config --add disk < samples/modules/disk.statusbar
+statusbar config --add < samples/modules/disk.statusbar
 ```
 
-Module files define static names such as `disk.usage`. The name passed to
-`--add` must match their prefix; imports preserve the source text.
+Module files define static names such as `disk.usage`; imports preserve the
+source text. Modules are just prefixed config definitions. Use
+`statusbar config --remove disk` to remove the `disk.*` group.
 
 Builds install the library under `share/statusbar/modules`; release archives
 include a `modules/` directory. The library guide lists requirements,

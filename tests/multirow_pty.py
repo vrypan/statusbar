@@ -2018,6 +2018,70 @@ interval = 86400
     print('push spinner animation, stable command width, completion, and command pacing passed')
 
 
+def check_config_remove(binary):
+    child = CHILD_PRELUDE + r"""
+import json, base64
+def current(): return run('config', '--print')
+def entries(): return json.loads(run('list', '--json'))['lines']
+def wait_for(check):
+    deadline = time.monotonic() + 4
+    while not check():
+        assert time.monotonic() < deadline
+        time.sleep(.02)
+def frame(op, text):
+    version = '2' if op == 'ADD' else '1'
+    body = (version + ';' + os.environ['STATUSBAR_SESSION_ID'] + ';' + text).encode()
+    return b'\x1b]3110;STATUSBAR;' + op.encode() + b';' + base64.b64encode(body) + b'\x1b\\'
+with tempfile.TemporaryDirectory() as folder:
+    counter = os.path.join(folder, 'counter')
+    fragment = ('[line.disk.usage]\ntext = #(command:disk.read)\n'
+                '[command.disk.read]\nrun = printf DISK\ninterval = 60\n'
+                '[colors]\ndisk.red = red\n'
+                '[line.keep.status]\ntext = #(value) #(command:keep.read)\n'
+                '[command.keep.read]\nrun = printf x >> ' + counter + '; sleep 1; printf KEPT\ninterval = 60\n'
+                '[line.unprefixed]\n')
+    run('config', '--add', input=fragment.encode())
+    wait_for(lambda: os.path.exists(counter))
+    run('set', 'keep.status', 'VALUE', '--status', 'success')
+    disk_fifo = run('bind', 'disk.usage')
+    keep_fifo = run('bind', 'keep.status')
+    run('push', 'disk.job', input=b'JOB\n')
+    before = next(line for line in entries() if line['name'] == 'keep.status')
+    run('config', '--add', input=b'[line.dependent.row]\ndefault = #(command:disk.read)\n')
+    wait_for(lambda: '[line.dependent.row]' in current())
+    snapshot = current()
+    run('config', '--remove', 'disk', code=2)
+    assert current() == snapshot and os.path.exists(disk_fifo)
+    run('config', '--remove', 'dependent')
+    wait_for(lambda: '[line.dependent.row]' not in current())
+    run('config', '--add', input=b'[line.dependent.row]\nfailed = #[fg=disk.red]X\n')
+    wait_for(lambda: 'fg=disk.red' in current())
+    run('config', '--remove', 'disk', code=2)
+    run('config', '--remove', 'dependent')
+    wait_for(lambda: '[line.dependent.row]' not in current())
+    # Queue add/remove in one write; each must see the latest held config.
+    os.write(1, b'\x1b7' + frame('ADD', '[line.new.one]\n[line.new.two]\n') + frame('REMOVE', 'new') + b'\x1b8')
+    settle()
+    assert '[line.new.' not in current()
+    run('config', '--remove', 'disk', input=b'ignored')
+    wait_for(lambda: '[line.disk.usage]' not in current())
+    assert 'disk.read' not in current() and 'disk.red' not in current()
+    assert not os.path.exists(disk_fifo) and os.path.exists(keep_fifo)
+    assert next(line for line in entries() if line['name'] == 'keep.status') == before
+    assert any(line['name'] == 'disk.job' for line in entries())
+    time.sleep(1.1)
+    assert open(counter).read() == 'x', 'surviving command restarted after index changed'
+    run('config', '--remove', 'missing', code=2)
+    for args in (('--remove', ''), ('--remove', 'a.b'), ('--add', '--remove', 'keep'), ('--add', 'old-prefix')):
+        run('config', *args, input=b'[line.foo]', code=2)
+    mark('REMOVE_OK')
+"""
+    code, data = run_session(binary, '[line.base]\n', child, timeout=20)
+    assert code == 0 and b'REMOVE_OK' in data, data[-5000:]
+    assert b'KEPT' in plain(data), data[-5000:]
+    print('config removal checks dependencies, preserves surviving commands/state, removes FIFOs and composes held edits')
+
+
 def check_config_add(binary):
     child = CHILD_PRELUDE + r'''
 import base64, json
@@ -2028,8 +2092,8 @@ def wait_for(predicate):
     while not predicate():
         assert time.monotonic() < deadline, 'timed out waiting for addition'
         time.sleep(.02)
-def frame(prefix, text):
-    body = ('1;' + os.environ['STATUSBAR_SESSION_ID'] + ';' + prefix + ';' + text).encode()
+def frame(text):
+    body = ('2;' + os.environ['STATUSBAR_SESSION_ID'] + ';' + text).encode()
     return b'\x1b]3110;STATUSBAR;ADD;' + base64.b64encode(body) + b'\x1b\\'
 startup = run('config', '--print', 'startup')
 run('set', 'base', 'kept', '--status', 'success')
@@ -2042,34 +2106,33 @@ with tempfile.TemporaryDirectory() as folder:
     fragment = ('[line.work.summary]\ntext = #(command:work.fetch) #(command:shared)\n'
                 '[command.work.fetch]\nrun = printf x >> ' + counter + '; sleep 1; printf WORK_DONE\ninterval = 60\n'
                 '[colors]\nwork.accent = blue\n')
-    run('config', '--add', 'work', input=fragment.encode())
+    run('config', '--add', input=fragment.encode())
     wait_for(lambda: os.path.exists(counter))
     wait_for(lambda: '[line.work.summary]' in current())
     snapshot = current()
     # CLI preflight failures must not change the current config.
-    for bad in ('[line.other]', '[command.other]\nrun = true', '[colors]\nwrong = red',
+    for bad in (
                 '[line.work.summary]', '[command.work.fetch]\nrun = true',
                 '[colors]\nwork.accent = red', '[line.work.bad]\ntext = #(command:missing)',
                 'interval = 1\n[line.work.bad]', '[push]\ntext = bad', '# empty'):
-        run('config', '--add', 'work', input=bad.encode(), code=2)
+        run('config', '--add', input=bad.encode(), code=2)
         assert current() == snapshot
     for args in (('--add', 'bad-prefix'), ('--add', 'work', '--print'), ('--add', 'work', 'unexpected')):
         run('config', *args, input=b'[line.work.other]', code=2)
     # Command-only and color-only fragments need no dummy line.
-    run('config', '--add', 'extra', input=b'[command.extra.fetch]\nrun = printf EXTRA\ninterval = 60\n')
+    run('config', '--add', input=b'[command.extra.fetch]\nrun = printf EXTRA\ninterval = 60\n')
     wait_for(lambda: '[command.extra.fetch]' in current())
-    run('config', '--add', 'extra', input=b'[colors]\nextra.accent = green\n')
+    run('config', '--add', input=b'[colors]\nextra.accent = green\n')
     wait_for(lambda: 'extra.accent = green' in current())
     # Requests in one write cannot lose each other's additions, including
     # while the terminal cursor is saved. Include a stale conflicting request.
-    os.write(1, b'\x1b7' + frame('one', '[line.one.row]\ntext = ONE\n') +
-             frame('two', '[line.two.row]\ntext = TWO\n') +
-             frame('work', '[line.work.summary]\ntext = BAD\n') + b'\x1b8')
+    os.write(1, b'\x1b7' + frame('[line.one.row]\ntext = ONE\n') +
+             frame('[line.two.row]\ntext = TWO\n') +
+             frame('[line.work.summary]\ntext = BAD\n') + b'\x1b8')
     wait_for(lambda: '[line.two.row]' in current())
     assert '[line.one.row]' in current() and 'text = BAD' not in current()
-    # References to existing commands/colors are allowed; the prefix is
-    # required for definitions only.
-    run('config', '--add', 'three', input=b'[line.three.row]\ntext = #[fg=extra.accent]#(command:extra.fetch)\n')
+    # References to existing commands/colors are allowed.
+    run('config', '--add', input=b'[line.three.row]\ntext = #[fg=extra.accent]#(command:extra.fetch)\n')
     wait_for(lambda: '[line.three.row]' in current())
     time.sleep(1.1)
     assert open(counter).read() == 'x', 'an existing command was restarted'
@@ -2077,7 +2140,7 @@ with tempfile.TemporaryDirectory() as folder:
     # definitions, even when the sender bypasses CLI validation.
     run('push', 'clash.row', input=b'temporary\n')
     snapshot = current()
-    os.write(1, frame('clash', '[line.clash.row]\n[command.clash.run]\nrun = true\n'))
+    os.write(1, frame('[line.clash.row]\n[command.clash.run]\nrun = true\n'))
     settle()
     assert current() == snapshot
     assert run('config', '--print', 'startup') == startup
@@ -2092,15 +2155,15 @@ with tempfile.TemporaryDirectory() as folder:
     module = ('# <module> <<module>>\n[line.alpha.row]\ntext = #[fg=alpha.accent]#(command:alpha.fetch)\n'
               '[command.alpha.fetch]\nrun = printf "%s" "literal <module> <<module>>"\ninterval = 60\n'
               '[colors]\nalpha.accent = blue\n')
-    run('config', '--add', 'alpha', input=module.encode())
+    run('config', '--add', input=module.encode())
     wait_for(lambda: '[line.alpha.row]' in current())
     snapshot = current()
     assert module.rstrip('\n') in snapshot  # run() strips trailing output whitespace.
-    run('config', '--add', 'beta', input=module.encode(), code=2)
-    os.write(1, frame('beta', module))
+    run('config', '--add', input=module.encode(), code=2)
+    os.write(1, frame(module))
     settle()
     assert current() == snapshot
-    run('config', '--add', 'alpha', input=module.encode(), code=2)
+    run('config', '--add', input=module.encode(), code=2)
     assert current() == snapshot
     # Dotted names work through the line protocol and as FIFO basenames.
     assert 'alpha line.alpha.row command.alpha.fetch' in run('config', '--list')
@@ -2128,11 +2191,11 @@ with tempfile.TemporaryDirectory() as folder:
     # Accumulated configs can exceed the single-message limit. The parser's
     # total limit is still enforced without changing the live snapshot.
     for suffix in ('a', 'b', 'c'):
-        run('config', '--add', 'large', input=('[line.large.' + suffix + ']\n#' + 'x' * 15000).encode())
+        run('config', '--add', input=('[line.large.' + suffix + ']\n#' + 'x' * 15000).encode())
         wait_for(lambda: '[line.large.' + suffix + ']' in current())
     assert len(current()) > 24523
     snapshot = current()
-    run('config', '--add', 'large', input=('[line.large.tooBig]\n#' + 'x' * 22000).encode(), code=2)
+    run('config', '--add', input=('[line.large.tooBig]\n#' + 'x' * 22000).encode(), code=2)
     assert current() == snapshot
     mark('CONFIG_ADD_OK')
 '''
@@ -2142,7 +2205,7 @@ with tempfile.TemporaryDirectory() as folder:
     visible = plain(data)
     assert b'WORK_DONE SHARED' in visible and b'BASE[still-kept|success]' in visible, visible[-5000:]
     assert b'literal <module> <<module>>' in visible, visible[-5000:]
-    print('config --add validates prefixes, merges atomically, keeps running commands and line state')
+    print('config --add validates definitions, merges atomically, keeps running commands and line state')
 
 
 def check_reload_lines(binary):
@@ -2359,6 +2422,7 @@ def main():
     check_push_spinner(binary)
     check_reload_lines(binary)
     check_config_add(binary)
+    check_config_remove(binary)
     config = """\
 [line.one]
 text = "one#(fill:-)"

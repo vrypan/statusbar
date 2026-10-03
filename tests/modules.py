@@ -192,7 +192,7 @@ def main():
 import json, pathlib
 library = pathlib.Path(sys.argv[2])
 for path in sorted(library.glob('*.statusbar')):
-    run('config', '--add', path.stem, input=path.read_bytes())
+    run('config', '--add', input=path.read_bytes())
     settle()
 deadline = time.monotonic() + 5
 while True:
@@ -203,8 +203,8 @@ assert len(lines) == len(list(library.glob('*.statusbar'))) + 1 and all(line['vi
 assert {line['name'].split('.')[0] for line in lines[1:]} == {path.stem for path in library.glob('*.statusbar')}, lines
 snapshot = run('config', '--print')
 assert '<module>' not in snapshot, snapshot
-run('config', '--add', 'clock', input=(library / 'clock.statusbar').read_bytes(), code=2)
-run('config', '--add', 'other', input=(library / 'clock.statusbar').read_bytes(), code=2)
+run('config', '--add', input=(library / 'clock.statusbar').read_bytes(), code=2)
+run('config', '--add', input=(library / 'clock.statusbar').read_bytes(), code=2)
 assert run('config', '--print') == snapshot
 time.sleep(2)
 for line in lines[1:]:

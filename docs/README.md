@@ -182,7 +182,7 @@ The [module library](../samples/modules/README.md) contains ready-made features
 with native terminal colors. Add one inside a running session:
 
 ```sh
-statusbar config --add disk < samples/modules/disk.statusbar
+statusbar config --add < samples/modules/disk.statusbar
 ```
 
 This adds the module's line and commands to the current layout. Existing
