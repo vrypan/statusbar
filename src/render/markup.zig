@@ -15,6 +15,7 @@
 //! attribute that is not understood is ignored rather than printed.
 
 const std = @import("std");
+const styled = @import("styled_text.zig");
 
 pub const Color = struct {
     name: []const u8,
@@ -44,6 +45,18 @@ pub fn expandMapped(text: []const u8, out: []u8, palette: Palette, offsets: []us
     while (i < text.len) {
         if (offsets.len > 0) {
             while (mapped <= i) : (mapped += 1) offsets[mapped] = w.end;
+        }
+        // ANSI payloads are opaque to markup. The styled parser decides
+        // which sequences are safe to retain after expansion.
+        if (text[i] == 0x1b) {
+            const end = styled.escape(text, i).end;
+            const before = w.end;
+            w.writeAll(text[i..end]) catch {
+                w.end = before;
+                break;
+            };
+            i = end;
+            continue;
         }
         if (text[i] == '#' and i + 1 < text.len) {
             if (text[i + 1] == '#') {
@@ -82,6 +95,25 @@ test "mapped expansion clamps boundaries inside tokens and truncated output" {
     try std.testing.expectEqual(@as(usize, 7), offsets[10]);
     try std.testing.expectEqualStrings("a", expandMapped(input, output[0..3], .{}, &offsets));
     for (offsets[1..]) |offset| try std.testing.expectEqual(@as(usize, 1), offset);
+}
+
+test "OSC payloads stay opaque while surrounding markup expands" {
+    for ([_][]const u8{ "\x07", "\x1b\\" }) |terminator| {
+        var input_buffer: [256]u8 = undefined;
+        const osc = try std.fmt.bufPrint(&input_buffer, "\x1b]8;id=###[bold];https://example.test/###[fg=red]{s}", .{terminator});
+        var raw_buffer: [512]u8 = undefined;
+        const raw = try std.fmt.bufPrint(&raw_buffer, "#[bold]{s}link#[default]", .{osc});
+        var expected_buffer: [512]u8 = undefined;
+        const expected = try std.fmt.bufPrint(&expected_buffer, "\x1b[1m{s}link\x1b[0m", .{osc});
+        var output: [512]u8 = undefined;
+        var offsets: [513]usize = undefined;
+        try std.testing.expectEqualStrings(expected, expandMapped(raw, &output, .{}, offsets[0 .. raw.len + 1]));
+        // No mapped boundary splits an escape payload.
+        try std.testing.expectEqual(@as(usize, 4), offsets[7]);
+        for (offsets[8 .. 7 + osc.len + 1]) |offset| try std.testing.expectEqual(4 + osc.len, offset);
+        try std.testing.expectEqualStrings("\x1b[1m", expandMapped(raw, output[0 .. 4 + osc.len - 1], .{}, offsets[0 .. raw.len + 1]));
+        for (offsets[7 .. raw.len + 1]) |offset| try std.testing.expectEqual(@as(usize, 4), offset);
+    }
 }
 
 fn writeStyle(w: *std.Io.Writer, spec: []const u8, palette: Palette) !void {

@@ -172,6 +172,21 @@ fn rowBytes(batch: []const u8) []const u8 {
     return batch[start..std.mem.lastIndexOf(u8, batch, "\x1b]8;;").?];
 }
 
+test "hyperlink hashes and apparent markup survive rendering without changing visible style" {
+    var content = try Content.init(std.testing.allocator, 1);
+    defer content.deinit();
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try r.resize(1, 20);
+    const link = "\x1b]8;id=###[bold];https://example.test/###[fg=red]\x1b\\";
+    const bytes = try paintLine(&r, &content, link ++ "link\x1b]8;;\x1b\\plain");
+    try std.testing.expect(std.mem.indexOf(u8, bytes, link) != null);
+    try std.testing.expect(!r.rows[0].desired.cells.items[0].style.bold);
+    try std.testing.expectEqual(cells.Style{}, r.rows[0].desired.cells.items[0].style);
+    try std.testing.expectEqualStrings("https://example.test/###[fg=red]", r.rows[0].desired.cells.items[0].uri.get(r.rows[0].desired.data.items));
+    try std.testing.expectEqual(@as(usize, 0), r.rows[0].desired.cells.items[4].uri.get(r.rows[0].desired.data.items).len);
+}
+
 test "an ordinary update writes only the columns that changed" {
     var content = try Content.init(std.testing.allocator, 1);
     defer content.deinit();
