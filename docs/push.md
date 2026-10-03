@@ -26,12 +26,24 @@ To watch a log, keep the pipeline running in the background:
 tail -n 0 -f app.log | statusbar push applog &
 ```
 
-With the built-in config, the line shows its latest text on the left and its
-name on the right:
+With the built-in config, the line shows a status indicator, its name, its
+latest value and a dotted fill.
 
-```text
-Server ready                                                         [applog]
+## Run a command in the background with `+`
+
+The Zsh and Fish [shell integrations](usage.md#background-shortcut) define
+this shortcut inside statusbar sessions:
+
+```sh
++ make test
++ +build make test
 ```
+
+The first uses the line name `make`; the second uses `build`. Both return to
+your prompt immediately and leave the line showing the command's result.
+Remove it with `statusbar pop NAME`. Choose a different name for each
+concurrent job. Add `--no-plus` to your `statusbar init` command to opt out.
+An existing `+` function or alias is preserved.
 
 ## Names and IDs
 

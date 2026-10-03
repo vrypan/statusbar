@@ -5,6 +5,7 @@ import base64
 import fcntl
 import json
 import os
+from pathlib import Path
 import pty
 import re
 import select
@@ -477,6 +478,89 @@ def check_init_invocation(binary):
     print("shell init preserves upgrade-safe invocation paths")
 
 
+def check_plus(binary):
+    env = clean_env()
+    env['STATUSBAR_STATE'] = '/session-indicator'
+    flags = ['--starship=false', '--report-cwd=false']
+    for shell in ('zsh', 'fish'):
+        def generate(*extra, executable=binary, environment=env):
+            return subprocess.run([executable, 'init', shell, *flags, *extra],
+                                  env=environment, text=True, capture_output=True, check=True).stdout
+
+        assert generate('--no-plus') == ''
+        assert generate(environment=clean_env()) == ''
+        completion = subprocess.check_output([binary, 'completion', shell], text=True)
+        assert 'no-plus' in completion
+        executable = shutil.which(shell)
+        if not executable:
+            print(f'plus: {shell} not installed; skipped')
+            continue
+        shell_args = [executable, '-f' if shell == 'zsh' else '-N', '-c']
+        with tempfile.TemporaryDirectory(prefix="statusbar plus '") as directory:
+            stable = Path(directory) / 'statusbar'
+            stable.symlink_to(binary)
+            source = generate(executable=str(stable))
+            # Replace the invocation path with an argv recorder after generation.
+            stable.unlink()
+            stable.write_text(f'#!{sys.executable}\nimport json, os, sys\n'
+                              'with open(os.environ["PLUS_RECORD"], "w") as f: json.dump(sys.argv[1:], f)\n')
+            stable.chmod(0o755)
+            record = Path(directory) / 'record.json'
+            test_env = {**env, 'PLUS_RECORD': str(record)}
+            cases = [
+                ('+ make test', ['push', 'make', '--', 'make', 'test']),
+                ('+ +build make "two words" "" "--flag"',
+                 ['push', 'build', '--', 'make', 'two words', '', '--flag']),
+                ('+ /bin/echo "a;$(ignored)*"',
+                 ['push', 'echo', '--', '/bin/echo', 'a;$(ignored)*']),
+                ('+ -- +command arg', ['push', '+command', '--', '+command', 'arg']),
+                ('+ +build -- /bin/echo done', ['push', 'build', '--', '/bin/echo', 'done']),
+            ]
+            # Single quotes keep the literal command-substitution text in both shells.
+            cases[2] = ("+ /bin/echo 'a;$(ignored)*'", cases[2][1])
+            for invocation, expected in cases:
+                result = subprocess.run(shell_args + [source + '\n' + source + '\n' + invocation + '\nwait'],
+                                        env=test_env, text=True, capture_output=True)
+                assert result.returncode == 0, (shell, result)
+                assert json.loads(record.read_text()) == expected, (shell, record.read_text())
+            for invocation in ('+', '+ +build', '+ +', '+ --', "+ ''"):
+                record.unlink(missing_ok=True)
+                result = subprocess.run(shell_args + [source + '\n' + invocation],
+                                        env=test_env, text=True, capture_output=True)
+                assert result.returncode == 2 and 'Usage: +' in result.stderr, (shell, result)
+                assert not record.exists()
+            definitions = (["function '+' { print ORIGINAL; }", "alias -- +='print ORIGINAL'"]
+                           if shell == 'zsh' else
+                           ['function +; echo ORIGINAL; end', "alias + 'echo ORIGINAL'"])
+            for definition in definitions:
+                result = subprocess.run(shell_args + [definition + '\n' + source + "\neval '+'"],
+                                        env=test_env, text=True, capture_output=True)
+                assert result.returncode == 0 and result.stdout.strip() == 'ORIGINAL', (shell, result)
+
+        # Verify actual background execution, names, values and completion statuses.
+        child = CHILD_PRELUDE + r'''
+import json
+shell, flag = sys.argv[2:]
+source = run('init', shell, '--starship=false', '--report-cwd=false')
+script = source + "\n+ +build /bin/sh -c 'sleep .1; printf success'\nwait\n"
+subprocess.run([shell, flag, '-c', script], check=True)
+lines = json.loads(run('list', '--pushed', '--json'))['lines']
+assert len(lines) == 1 and lines[0]['name'] == 'build', lines
+assert lines[0]['status'] == 'success' and lines[0]['value'] == 'success', lines
+run('pop', 'build')
+script = source + "\n+ /bin/sh -c 'printf failure; exit 7'\nwait\n"
+subprocess.run([shell, flag, '-c', script])
+lines = json.loads(run('list', '--pushed', '--json'))['lines']
+assert len(lines) == 1 and lines[0]['name'] == 'sh', lines
+assert lines[0]['status'] == 'failed' and lines[0]['value'] == 'failure', lines
+mark('PLUS_OK')
+'''
+        code, data = run_session(binary, '[line.base]\n', child,
+                                          shell, shell_args[1], env=clean_env())
+        assert code == 0 and b'PLUS_OK' in data, data[-3000:]
+        print(f'plus: {shell} arguments, opt-out, preservation and live background jobs passed')
+
+
 def check_stdin_config(binary):
     config = "interval = 0.1\nstyle = fg=blue\n[line.one]\ntext = PIPE_ONE\n[line.two]\ntext = #(command:two)\n[command.two]\nrun = printf PIPE_TWO\n"
     q = shlex.quote
@@ -747,7 +831,7 @@ def check_init_features(binary):
     env = os.environ.copy()
     env["STATUSBAR_STATE"] = "/statusbar-session-indicator"
     for shell in ("zsh", "fish"):
-        for flags in (("--starship=false", "--report-cwd=false"),):
+        for flags in (("--starship=false", "--report-cwd=false", "--no-plus"),):
             result = subprocess.run([binary, "init", shell, *flags], env=env, capture_output=True)
             assert result.returncode == 0 and result.stdout == b"", result
         for flags in (("--starship=false", "--starship-line=prompt"), ("--report-cwd=wrong",), ("--starship-slot=3",)):
@@ -2439,6 +2523,7 @@ def main():
     check_set(binary)
     check_default_templates(binary)
     check_init_invocation(binary)
+    check_plus(binary)
     check_stdin_config(binary)
     check_startup_recovery(binary)
     check_osc7_titles(binary)

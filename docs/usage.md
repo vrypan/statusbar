@@ -28,7 +28,7 @@ statusbar push [NAME] [--status STATE] --fifo
 statusbar pop [NAME | --all]
 statusbar list [--pushed] [--short] [--json]
 statusbar bind [-u | --unbind] NAME
-statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]
+statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME] [--no-plus]
 statusbar config show [current|startup|default|path]
 statusbar config check FILE
 statusbar config load FILE
@@ -123,22 +123,47 @@ behavior, and cleanup.
 
 `statusbar init zsh` or `statusbar init fish` prints shell integration that
 reports the working directory with OSC 7 and moves Starship's prompt details
-into the line named `prompt` when Starship is available. Both features default to `true`. Zsh
+into the line named `prompt` when Starship is available. Both features default
+to `true`; init also defines the `+` shortcut. Zsh
 uses `eval "$(statusbar init zsh)"`; Fish uses `statusbar init fish | source`
 after Starship's own initialization. Nushell can source
 [the sample integration](../samples/statusbar.nu); see [starship.md](starship.md).
 
-Use `--starship=false` for directory reporting alone, or `--report-cwd=false`
+Use `--starship=false` to keep your prompt, or `--report-cwd=false`
 if another integration already reports directories. `--starship-line NAME`
 selects another line; it cannot be combined with `--starship=false`. The hook
 updates the line at every prompt, so it starts using the line if a loaded
 configuration adds it and leaves the full prompt in the terminal while the
 line is absent. Directory reporting works independently, even with one statusbar
-line. Disabling both features prints nothing, as does running `init` outside a
-statusbar session.
+line. Disabling both features still defines `+`; add `--no-plus` to disable
+all three. Outside a statusbar session, `init` prints nothing.
 
 Reports are sent to the controlling terminal when the directory changes and
 before each prompt. Repeating initialization does not duplicate these hooks.
+
+### Background shortcut
+
+Zsh and Fish initialization defines `+ [+NAME] COMMAND [ARG...]`:
+
+```sh
++ make test          # background line named make
++ +build make test   # background line named build
+statusbar pop build  # remove the line afterward
+```
+
+Without `+NAME`, the line name is the command's basename (`/usr/bin/make`
+becomes `make`). The shortcut runs `statusbar push NAME -- COMMAND ... &`.
+The line records success or failure when the command finishes; the shortcut
+returns immediately. Names must be valid line names and unique in the session.
+It runs executable commands, not shell aliases or functions. For a pipeline,
+pass an explicit shell command, for example `+ +count sh -c 'ls | wc -l'`.
+Use `+ -- COMMAND` if the command name itself begins with `+`.
+
+Add `--no-plus` to `statusbar init zsh` or `statusbar init fish` to skip the
+shortcut. Existing `+` commands, aliases and functions are preserved. The flag
+skips definition; it does not remove a function already loaded in your shell.
+To replace a personal `+` function with this one, remove its startup definition
+and open a new session.
 
 ## `config`
 

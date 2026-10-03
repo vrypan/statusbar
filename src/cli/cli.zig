@@ -7,7 +7,7 @@
 //!     statusbar pop [NAME | --all]
 //!     statusbar list [--pushed] [--short] [--json]
 //!     statusbar bind [-u] NAME
-//!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]
+//!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME] [--no-plus]
 //!     statusbar config [show [SOURCE] | check FILE | load FILE | add FILE | list [--debug] | remove PREFIX]
 //!     statusbar completion <bash|zsh|fish>
 
@@ -324,12 +324,13 @@ const commands = [_]zecli.CommandSpec{
     },
     .{
         .name = "init",
-        .description = "Print shell setup for Starship and directory titles",
-        .usage = "statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]",
+        .description = "Print shell setup for Starship, directory titles and +",
+        .usage = "statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME] [--no-plus]",
         .arguments = &.{
             .{ .name = "SHELL", .description = "Shell to configure: zsh or fish", .required = true, .completion = .{ .values = &.{ "zsh", "fish" } } },
         },
         .flags = &.{
+            .{ .name = "no-plus", .description = "Do not define the + background command shortcut" },
             .{ .name = "starship", .value = .bool_required, .description = "Move Starship prompt details into the bar (default: true)" },
             .{ .name = "report-cwd", .value = .bool_required, .description = "Report the working directory for the terminal title (default: true)" },
             .{ .name = "starship-line", .value = .string, .value_name = "NAME", .description = "Line for Starship prompt text (default: prompt)" },
@@ -343,7 +344,11 @@ const commands = [_]zecli.CommandSpec{
         \\the final prompt line stays in the terminal. If that line is absent,
         \\the full prompt stays in the terminal. Use --starship-line to choose another.
         \\
-        \\Use --starship=false for directory titles alone, or --report-cwd=false
+        \\The + shortcut runs commands in background statusbar lines:
+        \\+ make test names the line make; + +build make test names it build.
+        \\An existing + command is preserved. Use --no-plus to skip this shortcut.
+        \\
+        \\Use --starship=false to keep your prompt, or --report-cwd=false
         \\if another integration already reports your directory.
         \\Outside a statusbar session, prints nothing, so the setup line is safe
         \\to keep in your regular shell config.

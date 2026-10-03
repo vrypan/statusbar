@@ -21,7 +21,9 @@ eval "$(statusbar init zsh)"
 Initialization also reports your working directory with OSC 7, allowing
 statusbar to update the terminal title. Add `--report-cwd=false` if another
 integration already reports it. Both features default to enabled; use
-`--starship=false` to keep only directory reporting.
+`--starship=false` to keep your existing prompt. Initialization also defines
+the [`+` background shortcut](usage.md#background-shortcut); add `--no-plus`
+to skip it.
 
 By default the prompt details become the value of the line named `prompt`;
 the built-in config and the shipped themes have one. Select another line

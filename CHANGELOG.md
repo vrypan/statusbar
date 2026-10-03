@@ -25,6 +25,9 @@ order they were added.
   instructions, platform requirements, and checks for theme composition
 - Use static names in module sources; imports preserve source text without
   placeholder substitution
+- Define `+ [+NAME] COMMAND` in Zsh and Fish integration for background
+  statusbar jobs; preserve existing `+` commands and offer `init --no-plus`
+  to skip the shortcut
 
 ## v0.5.1
 

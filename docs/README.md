@@ -103,6 +103,10 @@ when you don't give one, so you can remove it later with `statusbar pop NAME`.
 Use `statusbar pop` without a name to remove the newest line. See
 [temporary lines](push.md) for pipes, logs, progress bars, and styling.
 
+With Zsh or Fish integration enabled, `+ make` starts a background line named
+`make`; `+ +build make` names it `build`. See the
+[`+` shortcut](usage.md#background-shortcut) for setup and options.
+
 For output from commands that only know how to write to a file, create a
 [FIFO](bind.md): `statusbar push build --fifo` creates a line and prints a
 pipe path, and `statusbar bind cwd` gives an existing line one.

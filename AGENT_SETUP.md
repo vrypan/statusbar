@@ -202,8 +202,11 @@ Choose the flags for the user's setup:
 - Add `--report-cwd=false` if the terminal's integration already emits OSC 7
   working-directory reports **inside the statusbar child shell**. This
   includes Ghostty with working shell integration; see the next section.
-  Otherwise keep reporting enabled. If both features are disabled, `init`
-  prints nothing.
+  Otherwise keep reporting enabled.
+- `init` also defines `+ [+NAME] COMMAND` for background jobs, unless `+`
+  already exists. Add `--no-plus` to skip it. Keep personal shortcuts unless
+  the user wants to replace them. Disabling Starship, directory reporting and
+  `+` together makes `init` print nothing.
 
 Directory reporting lets statusbar update the terminal title. It does not
 change the working directory of configured commands. Verify reporting in a
