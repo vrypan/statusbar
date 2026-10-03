@@ -31,17 +31,17 @@ text = ""
 
 # Starship fills this line's value.
 [line.prompt]
-text = "#[fg=text]#(value)#(fill: )#[fg=pill] (load #(command:load))#[default,fg=text]"
+text = "#[fg=text]#(value)#(fill: )#[fg=pill] (load #(command:system.load))#[default,fg=text]"
 
 # Dim the dotted fills while keeping the text at normal brightness.
-[line.hn]
-text = "#[fg=pill,dim]#[track]#[fg=text,nodim,bold]*#[nobold] #(command:hn)#[notrack]#[default,fg=pill,dim]#(fill:·)#[fg=muted,nodim] (HackerNews)"
+[line.hn.top]
+text = "#[fg=pill,dim]#[track]#[fg=text,nodim,bold]*#[nobold] #(command:hn.top)#[notrack]#[default,fg=pill,dim]#(fill:·)#[fg=muted,nodim] (HackerNews)"
 
-[line.github]
-text = "#[fg=pill,dim]#[track]#[fg=text,nodim,bold]*#[nobold] #(command:gh-notification)#[notrack] #[default,fg=pill,dim]#(fill:·)#[fg=muted,nodim] (GitHub)"
+[line.gh.notifications]
+text = "#[fg=pill,dim]#[track]#[fg=text,nodim,bold]*#[nobold] #(command:gh.notifications)#[notrack] #[default,fg=pill,dim]#(fill:·)#[fg=muted,nodim] (GitHub)"
 
-[line.now]
-text = "#[fg=pill,dim]#[fg=text,nodim,bold]*#[nobold] Now #[default,fg=pill,dim]#(fill:·) #[fg=muted,nodim] #(command:weather) #(datetime:%a %d %H:%M:%S)"
+[line.system.now]
+text = "#[fg=pill,dim]#[fg=text,nodim,bold]*#[nobold] Now #[default,fg=pill,dim]#(fill:·) #[fg=muted,nodim] #(command:system.weather) #(datetime:%a %d %H:%M:%S)"
 
 # Lines created by `statusbar push`.
 [push]
@@ -51,7 +51,7 @@ done = "#[fg=text]#[fg=muted]· #[fg=text,bold]#(name)#[default,fg=text] › #(v
 success = "#[fg=text]#[fg=success]✔#[fg=muted] #[fg=text,bold]#(name)#[default,fg=text] › #(value)#(fill: )"
 failed = "#[fg=text]#[fg=failure]✗#[fg=muted] #[fg=text,bold]#(name)#[default,fg=text] › #(value)#(fill: )#[fg=failure]failed#[default,fg=text]"
 
-[command.hn]
+[command.hn.top]
 run = |
   id=$(curl -fsSL https://hacker-news.firebaseio.com/v0/topstories.json | jq -r '.[0]') || exit
   json=$(curl -fsSL https://hacker-news.firebaseio.com/v0/item/$id.json) || exit
@@ -59,7 +59,7 @@ run = |
   printf '\033]8;;https://news.ycombinator.com/item?id=%s\033\\%s\033]8;;\033\\' "$id" "$title"
 interval = 60
 
-[command.gh-notification]
+[command.gh.notifications]
 run = |
   notification=$(GH_NO_UPDATE_NOTIFIER=1 gh api notifications --cache 60s | jq -c '.[0]') || { printf 'GitHub unavailable'; exit; }
   case $notification in ''|null) printf 'Zero Inbox'; exit;; esac
@@ -73,10 +73,10 @@ run = |
   printf '\033]8;;%s\033\\%s\033]8;;\033\\' "$url" "$title"
 interval = 60
 
-[command.load]
+[command.system.load]
 run = uptime | awk -F'load averages?: ' '{ split($2, a, /[, ]+/); print a[1] }'
 interval = 10
 
-[command.weather]
+[command.system.weather]
 run = curl https://wttr.in/\?format="%c%t+%m"
 interval = 300

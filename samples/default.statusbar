@@ -32,7 +32,8 @@ pulses = 2
 #   #(name) #(status)   its name and status (normal, running, done, ...)
 #   #(fill:─)           repeat ─ across the free width; text after it is
 #                       right-aligned. Without a fill, text is left-aligned.
-#   #(command:load)     first line of [command.load]'s output
+#   #(command:system.load)
+#                       first line of [command.system.load]'s output
 #   #(datetime:%H:%M)   local time via strftime(3); %% is a literal %
 #   #(terminal:cols)    outer terminal columns (also rows, content_rows)
 #   #[...]              style: fg=, bg=, bold, italics, default, ...
@@ -52,8 +53,8 @@ text = "#[fg=rule]#(fill:─)"
 # your shell instead: `statusbar set prompt TEXT`.
 # Until a value is set, show user/host/load. `set prompt --reset` restores it.
 [line.prompt]
-default = "#[fg=dim]#(command:user)@#[default]#[fg=accent,bold]#(command:host)#[default]"
-default .= " #[fg=dim]· load#[default] #[track]#(command:load)#[notrack]"
+default = "#[fg=dim]#(command:system.user)@#[default]#[fg=accent,bold]#(command:system.host)#[default]"
+default .= " #[fg=dim]· load#[default] #[track]#(command:system.load)#[notrack]"
 text = "#[default] #(value)"
 # Reset value styles before filling the gap and drawing the date and clock.
 text .= "#[default]#(fill: )"
@@ -67,15 +68,15 @@ done = "#[fg=dim]#(value)#(fill: )done [#(name)]"
 success = "#[fg=dim]#(value)#(fill: )#[fg=green]✓#[fg=dim] [#(name)]"
 failed = "#[fg=dim]#(value)#(fill: )#[fg=red]✗#[fg=dim] [#(name)]"
 
-[command.user]
+[command.system.user]
 run      = whoami
 interval = 3600
 
-[command.host]
+[command.system.host]
 run      = hostname -s
 interval = 3600
 
 # The 1-minute load average, on macOS and Linux.
-[command.load]
+[command.system.load]
 run      = uptime | awk -F'load averages?: ' '{ split($2, a, /[, ]+/); print a[1] }'
 interval = 10

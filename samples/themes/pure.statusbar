@@ -14,11 +14,11 @@ text = "#[fg=muted]#(fill:─)"
 
 # Show user/host/load until Starship or `set prompt` supplies a value.
 [line.prompt]
-default = "#[fg=muted]#(command:user)@#[fg=blue,bold]#(command:host)#[default]  #[fg=muted]load #[default]#(command:load)"
+default = "#[fg=muted]#(command:system.user)@#[fg=blue,bold]#(command:system.host)#[default]  #[fg=muted]load #[default]#(command:system.load)"
 text = "#[default] #(value)"
 # Reset value styles before filling the gap and drawing the right side.
 text .= "#[default]#(fill: )"
-text .= "#[fg=muted]#(command:weather)  #(datetime:%a %d)  #[fg=accent,bold]#(datetime:%H:%M:%S)#[default] "
+text .= "#[fg=muted]#(command:system.weather)  #(datetime:%a %d)  #[fg=accent,bold]#(datetime:%H:%M:%S)#[default] "
 
 # Lines created by `statusbar push`.
 [push]
@@ -28,18 +28,18 @@ done = "#[fg=muted]· #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(
 success = "#[fg=success]✔#[fg=muted] #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )"
 failed = "#[fg=failure]✗#[fg=muted] #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )#[fg=failure]failed#[default]"
 
-[command.user]
+[command.system.user]
 run = whoami
 interval = 3600
 
-[command.host]
+[command.system.host]
 run = hostname -s
 interval = 3600
 
-[command.load]
+[command.system.load]
 run = uptime | awk -F'load averages?: ' '{ split($2, a, /[, ]+/); print a[1] }'
 interval = 10
 
-[command.weather]
+[command.system.weather]
 run = curl https://wttr.in/\?format="%c%t+%m"
 interval = 300
