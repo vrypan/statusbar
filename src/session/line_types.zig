@@ -1,12 +1,13 @@
-//! Dependency-free vocabulary for named lines: status, names, targets and
-//! value operations. Shared by the config parser, the session store, the
-//! control protocol and the CLI.
+//! Vocabulary for named lines: status, names, targets and value
+//! operations. Shared by the config parser, the session store, the control
+//! protocol and the CLI.
 const std = @import("std");
+const names = @import("shared").names;
 
 /// The longest value a line accepts, after normalization.
 pub const max_value = 1024;
 /// The longest explicit line name. Names double as FIFO basenames.
-pub const max_name = 64;
+pub const max_name = names.max_name;
 
 pub const Status = enum {
     normal,
@@ -20,10 +21,6 @@ pub const Status = enum {
     }
 };
 
-fn nameByte(byte: u8) bool {
-    return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '-';
-}
-
 fn allDigits(text: []const u8) bool {
     for (text) |byte| if (!std.ascii.isDigit(byte)) return false;
     return true;
@@ -34,10 +31,7 @@ fn allDigits(text: []const u8) bool {
 pub fn validName(name: []const u8) bool {
     if (name.len == 0 or name.len > max_name or allDigits(name)) return false;
     var segments = std.mem.splitScalar(u8, name, '.');
-    while (segments.next()) |segment| {
-        if (segment.len == 0) return false;
-        for (segment) |byte| if (!nameByte(byte)) return false;
-    }
+    while (segments.next()) |segment| if (!names.validSegment(segment)) return false;
     return true;
 }
 

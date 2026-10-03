@@ -2,13 +2,13 @@
 //! its first dot. They group definitions for listing and removal.
 //! Prefixes use letters, digits, underscores and hyphens.
 const std = @import("std");
+const names = @import("names.zig");
 
-pub const max_len = 62;
+/// Leaves room for the dot and a one-byte local name.
+pub const max_len = names.max_name - 2;
 
 pub fn valid(prefix: []const u8) bool {
-    if (prefix.len == 0 or prefix.len > max_len) return false;
-    for (prefix) |c| if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') return false;
-    return true;
+    return prefix.len <= max_len and names.validSegment(prefix);
 }
 
 pub fn contains(prefix: []const u8, name: []const u8) bool {

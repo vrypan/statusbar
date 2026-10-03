@@ -21,7 +21,7 @@ pub fn validBasename(name: []const u8) bool {
 
 pub const Binding = struct {
     io: std.Io,
-    name: [64]u8 = undefined,
+    name: [@import("line_types.zig").max_name]u8 = undefined,
     name_len: usize,
     path: [256:0]u8 = undefined,
     path_len: usize,
