@@ -109,8 +109,8 @@ pub const Content = struct {
         const target = &self.lines[n];
         const changed = !std.mem.eql(u8, kept, target.text()) or !std.mem.eql(u8, pattern, target.pattern()) or !Meta.eql(target.meta, retained);
         if (!changed) return false;
-        target.bytes.clearRetainingCapacity();
         try target.bytes.ensureTotalCapacity(self.allocator, kept.len + pattern.len);
+        target.bytes.clearRetainingCapacity();
         target.bytes.appendSliceAssumeCapacity(kept);
         target.bytes.appendSliceAssumeCapacity(pattern);
         target.text_len = kept.len;
@@ -142,4 +142,22 @@ test "content bounds overlong markup and reports changes" {
     try content.remap(3, &.{ 1, null, 0 });
     try std.testing.expectEqualStrings("one", content.line(2));
     try std.testing.expectEqual(@as(usize, 0), content.line(1).len);
+}
+
+test "failed growth preserves text, pattern and metadata and allows a retry" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var content = try Content.init(failing.allocator(), 1);
+    defer content.deinit();
+    const before: Meta = .{ .split = 2, .identity = 7 };
+    _ = try content.set(0, "old", "-", before);
+    failing.fail_index = failing.alloc_index;
+    try std.testing.expectError(error.OutOfMemory, content.set(0, "x" ** 1000, ".", .{ .identity = 8 }));
+    try std.testing.expectEqualStrings("old", content.line(0));
+    try std.testing.expectEqualStrings("-", content.lines[0].pattern());
+    try std.testing.expect(Meta.eql(before, content.lines[0].meta));
+    failing.fail_index = std.math.maxInt(usize);
+    try std.testing.expect(try content.set(0, "x" ** 1000, ".", .{ .identity = 8 }));
+    try std.testing.expectEqualStrings("x" ** 1000, content.line(0));
+    try std.testing.expectEqualStrings(".", content.lines[0].pattern());
+    try std.testing.expectEqual(@as(u64, 8), content.lines[0].meta.identity);
 }

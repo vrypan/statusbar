@@ -162,7 +162,7 @@ pub const Source = struct {
 
     /// Rebuild geometry-dependent content before the caller composes its layout.
     /// Geometry establishes a baseline and does not enqueue a source event.
-    pub fn setTerminalSize(self: *Source, size: TerminalSize) void {
+    pub fn setTerminalSize(self: *Source, size: TerminalSize) !void {
         if (std.meta.eql(self.terminal, size)) return;
         self.terminal = size;
         var any = false;
@@ -170,7 +170,7 @@ pub const Source = struct {
             state.dirty = true;
             any = true;
         };
-        if (any) _ = self.rebuild();
+        if (any) _ = try self.rebuild();
     }
 
     pub fn refreshNow(self: *Source, now_ms: i64) void {
@@ -210,7 +210,7 @@ pub const Source = struct {
 
     /// Reads ready command output, runs due commands, and rebuilds the
     /// lines whose active template depends on what changed.
-    pub fn update(self: *Source, fds: []const posix.pollfd, now_ms: i64) Update {
+    pub fn update(self: *Source, fds: []const posix.pollfd, now_ms: i64) !Update {
         const read = self.commands.read(fds, now_ms);
         if (read.changed != 0) self.dirtyCommands(read.changed);
         if (self.clock_next_ms) |next| {
@@ -225,8 +225,8 @@ pub const Source = struct {
         }
         var result: Update = .{ .baseline = read.baseline };
         if (self.stale) {
+            result.content_changed = try self.rebuild();
             self.stale = false;
-            result.content_changed = self.rebuild();
         }
         return result;
     }
@@ -251,12 +251,12 @@ pub const Source = struct {
     }
 
     /// Formats dirty lines. Returns whether any content changed.
-    pub fn rebuild(self: *Source) bool {
+    pub fn rebuild(self: *Source) !bool {
+        errdefer self.stale = true;
         const time = datetime.now(self.io);
         var changed = false;
         for (self.states.items, 0..) |*state, index| {
             if (!state.dirty) continue;
-            state.dirty = false;
             self.rows_formatted += 1;
             const entry = self.line(index);
             const formatted = line_format.format(&self.buffer, self.template(index), .{
@@ -269,7 +269,8 @@ pub const Source = struct {
                 .spinner = &self.cfg.push.spinner,
                 .spinner_frame = self.spinner_frame,
             });
-            changed = (self.content.set(index, formatted.text, formatted.pattern, formatted.meta) catch true) or changed;
+            changed = (try self.content.set(index, formatted.text, formatted.pattern, formatted.meta)) or changed;
+            state.dirty = false;
         }
         return changed;
     }
@@ -295,7 +296,7 @@ pub const Source = struct {
 
     /// Advances the frame and reformats only the animated lines. Commands
     /// and the clock are not refreshed.
-    pub fn advanceSpinner(self: *Source, visible: usize, now_ms: i64) bool {
+    pub fn advanceSpinner(self: *Source, visible: usize, now_ms: i64) !bool {
         if (self.spinnerTimeout(visible, now_ms) != 0) return false;
         self.spinner_next_ms = now_ms + self.cfg.push.spinner_interval_ms;
         self.spinner_frame = (self.spinner_frame + 1) % self.cfg.push.spinner.len;
@@ -340,10 +341,10 @@ test "templates escape data and keep directives" {
     var f: Fixture = undefined;
     try f.init(std.testing.allocator, "[line.a]\ndefault = \"##(value) ##[bold]\"\ntext = \"#[fg=red]##[x] # #(value)\"\n");
     defer f.deinit();
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     try std.testing.expectEqualStrings("#[fg=red]##[x] ## ##(value) ##[bold]", f.source.content.line(0));
     f.set(0, .{ .value = .{ .replace = "\x1b[31mred\x1b]8;;https://example.com/#x\x1b\\link\x1b]8;;\x1b\\" } });
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     try std.testing.expectEqualStrings("#[fg=red]##[x] ## \x1b[31mred\x1b]8;;https://example.com/#x\x1b\\link\x1b]8;;\x1b\\", f.source.content.line(0));
 }
 
@@ -351,7 +352,7 @@ test "status templates select their own text, name and status" {
     var f: Fixture = undefined;
     try f.init(std.testing.allocator, "[line.build]\ntext = \"#(name) #(status) #(value)\"\ndone = \"D #(value)\"\nfailed = \"\"\n[push]\ntext = \"#(value)#(fill: )[#(name)]\"\n");
     defer f.deinit();
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     try std.testing.expectEqualStrings("build normal ", f.source.content.line(0));
     for ([_]struct { Status, []const u8 }{
         .{ .running, "build running v" },
@@ -361,12 +362,12 @@ test "status templates select their own text, name and status" {
         .{ .normal, "build normal v" },
     }) |case| {
         f.set(0, .{ .value = .{ .replace = "v" }, .status = case[0] });
-        _ = f.source.rebuild();
+        _ = try f.source.rebuild();
         try std.testing.expectEqualStrings(case[1], f.source.content.line(0));
     }
     const id = try f.lines.push(null, null);
     try f.source.syncLines();
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     try std.testing.expectEqualStrings("[2]", f.source.content.line(1)[f.source.content.lines[1].meta.split.?..]);
     try std.testing.expectEqual(content_mod.Keep.right, f.source.content.lines[1].meta.keep);
     try std.testing.expectEqual(id, f.source.content.lines[1].meta.identity);
@@ -377,14 +378,14 @@ test "value overrides never disable other expressions and only dependents reform
     var f: Fixture = undefined;
     try f.init(std.testing.allocator, "[line.a]\ntext = \"#(value) #(terminal:cols) #(command:c)\"\n[line.b]\ntext = static\n[command.c]\nrun = true\n");
     defer f.deinit();
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     f.set(0, .{ .value = .{ .replace = "manual" } });
-    f.source.setTerminalSize(.{ .rows = 24, .cols = 80, .content_rows = 22 });
+    try f.source.setTerminalSize(.{ .rows = 24, .cols = 80, .content_rows = 22 });
     try std.testing.expectEqualStrings("manual 80 ", f.source.content.line(0));
     const formatted = f.source.rows_formatted;
     _ = f.source.commands.keep(0, "out\nignored");
     f.source.dirtyCommands(1);
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     try std.testing.expectEqualStrings("manual 80 out", f.source.content.line(0));
     try std.testing.expectEqual(formatted + 1, f.source.rows_formatted);
     _ = f.source.commands.keep(0, "out");
@@ -395,7 +396,7 @@ test "clock scheduling follows the active templates" {
     var f: Fixture = undefined;
     try f.init(std.testing.allocator, "[line.a]\ntext = \"100% #(datetime:%%)\"\ndone = \"#(datetime:%S)\"\n");
     defer f.deinit();
-    _ = f.source.update(&.{}, 0);
+    _ = try f.source.update(&.{}, 0);
     try std.testing.expectEqualStrings("100% %", f.source.content.line(0));
     try std.testing.expect(f.source.clock_next_ms == null);
     f.set(0, .{ .status = .done });
@@ -415,7 +416,7 @@ test "tracked regions need ready commands and suppress baseline results" {
     try std.testing.expect(!f.source.contentEligible(1, 0));
     try std.testing.expect(!f.source.contentEligible(0, 1));
     try std.testing.expect(!f.source.contentEligible(0, 2));
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     const meta = f.source.content.lines[0].meta;
     try std.testing.expectEqual(@as(usize, 1), meta.len);
     try std.testing.expectEqual(@as(?u32, 0), meta.split);
@@ -425,13 +426,13 @@ test "reset restores the default and empty overrides stay distinct" {
     var f: Fixture = undefined;
     try f.init(std.testing.allocator, "[line.a]\ndefault = Ready\n");
     defer f.deinit();
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     try std.testing.expectEqualStrings("Ready", f.source.content.line(0));
     f.set(0, .{ .value = .{ .replace = "" } });
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     try std.testing.expectEqualStrings("", f.source.content.line(0));
     f.set(0, .{ .value = .reset });
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     try std.testing.expectEqualStrings("Ready", f.source.content.line(0));
 }
 
@@ -452,26 +453,26 @@ test "expanded defaults update dependencies, preserve literal overrides and rese
     defer f.deinit();
     _ = f.source.commands.keep(0, "alice");
     _ = f.source.commands.keep(1, "host");
-    f.source.setTerminalSize(.{ .cols = 80 });
+    try f.source.setTerminalSize(.{ .cols = 80 });
     try std.testing.expectEqualStrings("[#[fg=red]alice@host#[default] 80]tail", f.source.content.line(0));
     try std.testing.expectEqual(@as(u16, 3), f.source.states.items[0].commands);
     _ = f.source.commands.keep(1, "other");
     f.source.dirtyCommands(2);
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     try std.testing.expectEqualStrings("[#[fg=red]alice@other#[default] 80]tail", f.source.content.line(0));
     f.set(0, .{ .value = .{ .replace = "#(command:host) #[bold]" } });
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     try std.testing.expectEqualStrings("[##(command:host) ##[bold]]tail", f.source.content.line(0));
     try std.testing.expectEqual(@as(u16, 0), f.source.states.items[0].commands);
     try std.testing.expect(!f.source.states.items[0].terminal);
     f.set(0, .{ .value = .{ .replace = "" } });
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     try std.testing.expectEqualStrings("[]tail", f.source.content.line(0));
     f.set(0, .{ .value = .reset, .status = .done });
-    f.source.setTerminalSize(.{ .cols = 90 });
+    try f.source.setTerminalSize(.{ .cols = 90 });
     try std.testing.expectEqualStrings("done #[fg=red]alice@other#[default] 90", f.source.content.line(0));
     f.set(0, .{ .status = .failed });
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     try std.testing.expectEqualStrings("hidden", f.source.content.line(0));
     try std.testing.expectEqual(@as(u16, 0), f.source.states.items[0].commands);
 }
@@ -486,7 +487,7 @@ test "default clock and tracking activate only while shown" {
         \\
     );
     defer f.deinit();
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     try std.testing.expect(f.source.clock_next_ms != null);
     const meta = f.source.content.lines[0].meta;
     try std.testing.expectEqual(@as(usize, 3), meta.len);
@@ -508,17 +509,17 @@ test "the spinner animates only visible running lines" {
     for (0..3) |_| _ = try f.lines.push(null, null);
     try f.source.syncLines();
     f.set(2, .{ .status = .done });
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     try std.testing.expectEqualStrings("a 2 ", f.source.content.line(1));
     try std.testing.expectEqual(@as(i64, 100), f.source.spinnerTimeout(3, 0));
-    try std.testing.expect(!f.source.advanceSpinner(3, 99));
+    try std.testing.expect(!try f.source.advanceSpinner(3, 99));
     const formatted = f.source.rows_formatted;
-    try std.testing.expect(f.source.advanceSpinner(3, 100));
+    try std.testing.expect(try f.source.advanceSpinner(3, 100));
     try std.testing.expectEqual(formatted + 1, f.source.rows_formatted);
     try std.testing.expectEqualStrings("界2 ", f.source.content.line(1));
     try std.testing.expectEqualStrings("done ", f.source.content.line(2));
     try std.testing.expectEqualStrings("cached", f.source.content.line(0));
-    try std.testing.expect(f.source.advanceSpinner(3, 200));
+    try std.testing.expect(try f.source.advanceSpinner(3, 200));
     try std.testing.expectEqualStrings("## 2 ", f.source.content.line(1));
     f.set(1, .{ .status = .success });
     try std.testing.expectEqual(@as(i64, -1), f.source.spinnerTimeout(3, 201));
@@ -530,16 +531,16 @@ test "syncing lines keeps content by identity" {
     var f: Fixture = undefined;
     try f.init(std.testing.allocator, "[line.a]\ntext = A\n[push]\ntext = \"#(value)\"\n");
     defer f.deinit();
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     _ = try f.lines.push(null, null);
     _ = try f.lines.push(null, null);
     try f.source.syncLines();
     f.set(2, .{ .value = .{ .replace = "second" } });
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     _ = f.lines.remove(1);
     try f.source.syncLines();
     const formatted = f.source.rows_formatted;
-    _ = f.source.rebuild();
+    _ = try f.source.rebuild();
     try std.testing.expectEqual(formatted, f.source.rows_formatted);
     try std.testing.expectEqualStrings("second", f.source.content.line(1));
 }
@@ -552,6 +553,26 @@ fn initAllocationScenario(gpa: std.mem.Allocator) !void {
 
 test "source initialization cleans every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, initAllocationScenario, .{});
+}
+
+test "failed rebuild keeps the old content and retries the dirty line" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var f: Fixture = undefined;
+    try f.init(failing.allocator(), "[line.a]\ntext = \"#(value)\"\n");
+    defer f.deinit();
+    f.set(0, .{ .value = .{ .replace = "old" } });
+    _ = try f.source.update(&.{}, 0);
+    try std.testing.expect(!f.source.stale and !f.source.states.items[0].dirty);
+    f.set(0, .{ .value = .{ .replace = "x" ** 1000 } });
+    failing.fail_index = failing.alloc_index;
+    try std.testing.expectError(error.OutOfMemory, f.source.update(&.{}, 1));
+    try std.testing.expectEqualStrings("old", f.source.content.line(0));
+    try std.testing.expect(f.source.stale and f.source.states.items[0].dirty);
+    try std.testing.expectEqual(@as(i64, 0), f.source.timeout(2));
+    failing.fail_index = std.math.maxInt(usize);
+    try std.testing.expect((try f.source.update(&.{}, 2)).content_changed);
+    try std.testing.expectEqualStrings("x" ** 1000, f.source.content.line(0));
+    try std.testing.expect(!f.source.stale and !f.source.states.items[0].dirty);
 }
 
 test "text access uses unexpanded templates and follows status variants" {

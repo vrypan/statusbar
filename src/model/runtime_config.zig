@@ -32,7 +32,7 @@ pub const Runtime = struct {
     pub fn initInitial(gpa: std.mem.Allocator, io: std.Io, cfg: *const config.Config, lines: *const Lines, visible: u16, cols: u16) !Runtime {
         var runtime = try init(gpa, io, cfg, lines, cols);
         errdefer runtime.deinit();
-        _ = runtime.source.rebuild();
+        _ = try runtime.source.rebuild();
         try runtime.renderer.resize(visible, cols);
         try runtime.renderer.relayout(&runtime.source.content, &runtime.look);
         return runtime;
@@ -134,7 +134,7 @@ test "a prepared replacement leaves the live store unchanged until committed" {
     defer candidate.deinit();
     try std.testing.expectEqualStrings("a", live.items.items[0].explicitName().?);
     try std.testing.expectEqualSlices(u64, &.{1}, candidate.removed.items);
-    _ = candidate.source.rebuild();
+    _ = try candidate.source.rebuild();
     try std.testing.expectEqualStrings("kept", candidate.source.content.line(0));
     candidate.commitLines(&live);
     try std.testing.expectEqualStrings("b", live.items.items[0].explicitName().?);

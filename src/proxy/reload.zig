@@ -40,7 +40,7 @@ fn replaceConfigRemoving(self: *Proxy, text: []const u8, now_ms: i64, diag: *con
     const total_lines = candidate.pending_lines.?.items.items.len;
     if (total_lines > config.max_lines) return error.RowLimit;
     const new_layout = Layout.of(outer, @intCast(total_lines));
-    candidate.source.setTerminalSize(.{ .rows = outer.row, .cols = outer.col, .content_rows = new_layout.child.row });
+    try candidate.source.setTerminalSize(.{ .rows = outer.row, .cols = outer.col, .content_rows = new_layout.child.row });
     try candidate.renderer.resize(new_layout.bar, new_layout.cols);
     try self.composeRows(&candidate, new_layout, true);
     self.makeRoomForGrowth(old_layout, new_layout);

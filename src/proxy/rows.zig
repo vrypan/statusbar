@@ -48,14 +48,14 @@ pub fn releaseRows(self: *Proxy) void {
 /// signature shared with a candidate runtime whose layout is not active yet.
 pub fn composeRows(self: *Proxy, runtime: *Runtime, _: Layout, invalidate: bool) !void {
     _ = self;
-    _ = runtime.source.rebuild();
+    _ = try runtime.source.rebuild();
     if (invalidate) try runtime.renderer.relayout(&runtime.source.content, &runtime.look) else try runtime.renderer.acceptContent(&runtime.source.content, &runtime.look);
 }
 
 /// A line's value or status changed. Its other rows are not reparsed.
 pub fn refreshLine(self: *Proxy, index: usize, now_ms: i64) !void {
     self.runtime.source.markLine(index);
-    _ = self.runtime.source.rebuild();
+    _ = try self.runtime.source.rebuild();
     try self.runtime.renderer.acceptContent(&self.runtime.source.content, &self.runtime.look);
     if (index < self.layout.bar) self.requestPaint(now_ms);
 }
@@ -79,12 +79,12 @@ fn resizeForLinesWithWinsize(self: *Proxy, now_ms: i64, outer: std.posix.winsize
     try self.runtime.renderer.resize(next.bar, next.cols);
     errdefer {
         self.layout = old;
-        self.runtime.source.setTerminalSize(previous_terminal);
+        self.runtime.source.setTerminalSize(previous_terminal) catch {};
         self.runtime.renderer.resize(old.bar, old.cols) catch {};
         self.output.screen.damaged = true;
         self.requestPaint(now_ms);
     }
-    self.runtime.source.setTerminalSize(.{ .rows = outer.row, .cols = outer.col, .content_rows = next.child.row });
+    try self.runtime.source.setTerminalSize(.{ .rows = outer.row, .cols = outer.col, .content_rows = next.child.row });
     try self.composeRows(self.runtime, next, true);
     self.makeRoomForGrowth(old, next);
     self.eraseRows(old);
@@ -196,7 +196,7 @@ test "hidden tail changes synchronize source without changing prepared rows" {
     const layout = Layout.of(outer, 3);
     var runtime = try Runtime.initInitial(gpa, std.testing.io, &cfg, &lines, layout.bar, layout.cols);
     defer runtime.deinit();
-    runtime.source.setTerminalSize(.{ .rows = outer.row, .cols = outer.col, .content_rows = layout.child.row });
+    try runtime.source.setTerminalSize(.{ .rows = outer.row, .cols = outer.col, .content_rows = layout.child.row });
     var proxy = schedulerProxy();
     proxy.runtime = &runtime;
     proxy.renderer = &runtime.renderer;
@@ -236,7 +236,7 @@ test "hidden tail changes synchronize source without changing prepared rows" {
     try resizeForLinesWithWinsize(&proxy, 203, outer);
     try std.testing.expectEqual(rows_ptr, runtime.renderer.rows.ptr);
     try std.testing.expectEqual(parsed, runtime.renderer.parsed_rows);
-    _ = runtime.source.rebuild();
+    _ = try runtime.source.rebuild();
     try runtime.renderer.acceptContent(&runtime.source.content, &runtime.look);
     try std.testing.expectEqual(@as(usize, 0), runtime.renderer.parsed_rows);
     try std.testing.expectEqual(budget_allocations, runtime.renderer.budget.allocations);

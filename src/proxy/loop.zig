@@ -202,7 +202,7 @@ pub fn pump(self: *Proxy, sig_r: sys.Fd, pid: posix.pid_t) !void {
         try self.publishFifos(now_ms);
 
         if (!runtime_replaced) {
-            const source_update = self.runtime.source.update(command_fds, now_ms);
+            const source_update = try self.runtime.source.update(command_fds, now_ms);
             if (source_update.content_changed) {
                 try self.composeRows(self.runtime, self.layout, false);
                 if (!self.runtime.silent_baseline) {
@@ -214,7 +214,7 @@ pub fn pump(self: *Proxy, sig_r: sys.Fd, pid: posix.pid_t) !void {
                 self.requestPaint(now_ms);
             }
         }
-        if (self.runtime.source.advanceSpinner(self.layout.bar, now_ms)) {
+        if (try self.runtime.source.advanceSpinner(self.layout.bar, now_ms)) {
             try self.runtime.renderer.acceptContent(&self.runtime.source.content, &self.runtime.look);
             self.requestPaint(now_ms);
         }
@@ -280,7 +280,7 @@ pub fn drainSignals(self: *Proxy, sig_r: sys.Fd, pid: posix.pid_t, now_ms: i64) 
     const ws = sys.getWinsize(stdin_fd) catch return;
     const width_changed = ws.col != self.layout.cols;
     self.layout = Layout.of(ws, @intCast(self.lines.items.items.len));
-    self.runtime.source.setTerminalSize(.{ .rows = ws.row, .cols = ws.col, .content_rows = self.layout.child.row });
+    try self.runtime.source.setTerminalSize(.{ .rows = ws.row, .cols = ws.col, .content_rows = self.layout.child.row });
     sys.setWinsize(self.master, &self.layout.child) catch {};
     self.output.screen.resize(self.layout.bar, self.layout.child.row);
     self.setInputGeometry(self.layout);
