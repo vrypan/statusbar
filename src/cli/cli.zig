@@ -143,7 +143,7 @@ const temp_remove_flags = [_]zecli.FlagSpec{
 };
 
 const temp_remove_arguments = [_]zecli.ArgumentSpec{
-    .{ .name = "NAME", .description = "Top-level name or temporary line ID; omit for the newest temporary line" },
+    .{ .name = "NAME", .description = "Top-level name or line ID; omit for the newest temporary line" },
 };
 
 const list_output_help =
@@ -256,7 +256,7 @@ const commands = [_]zecli.CommandSpec{
     .{
         .name = "remove",
         .aliases = &.{"rm"},
-        .description = "Remove a standalone line, group, or temporary line ID",
+        .description = "Remove a line by ID, standalone name, or group",
         .usage = "statusbar remove [NAME|ID] | statusbar remove --all",
         .flags = &temp_remove_flags,
         .arguments = &temp_remove_arguments,
@@ -265,7 +265,8 @@ const commands = [_]zecli.CommandSpec{
         \\Names remove a standalone line or a whole NAME.* group, including
         \\its commands, colors and temporary lines. Names cannot contain dots.
         \\A standalone name cannot coexist with a group of the same prefix.
-        \\Numeric IDs remove temporary lines only. With no target, removes
+        \\Numeric IDs select a standalone line or its whole first-segment group.
+        \\With no target, removes
         \\the newest temporary line. --all (-a) removes all temporary lines.
         \\Removing a line does not stop the command producing its output.
         \\--all succeeds even when there are no temporary lines.

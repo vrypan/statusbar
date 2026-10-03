@@ -1579,6 +1579,74 @@ time.sleep(.1)
     print('new at the last child row installs margins before output and keeps the cursor above the bar')
 
 
+def check_remove_configured_ids(binary):
+    child = CHILD_PRELUDE + r"""
+import json
+
+def entries(): return json.loads(run('ls', '--json'))['lines']
+def current(): return run('config', 'show')
+def line_id(name): return str(next(x['id'] for x in entries() if x['name'] == name))
+
+prompt_id, disk_id = line_id('prompt'), line_id('disk.usage')
+prompt_fifo = run('bind', 'prompt')
+disk_fifo = run('bind', 'disk.usage')
+run('update', 'disk.free', 'retained', '--status', 'success')
+run('new', 'disk.job', input=b'job')
+# Reordering changes display positions, while IDs still select the same lines.
+replacement = '[line.disk.free]\n[line.base]\n[line.prompt]\n[line.disk.usage]\ntext = #(command:disk.read)\n[command.disk.read]\nrun = true\n[colors]\ndisk.accent = red\n'
+run('config', 'load', '-', input=replacement.encode())
+settle()
+assert line_id('prompt') == prompt_id and line_id('disk.usage') == disk_id
+run('rm', prompt_id)
+assert not any(x['name'] == 'prompt' for x in entries())
+assert not os.path.exists(prompt_fifo)
+# Numeric removal selects the entire group and shares FIFO rollback protection.
+os.rename(disk_fifo, disk_fifo + '.saved')
+with open(disk_fifo, 'w') as f: f.write('replacement')
+saved, source = entries(), current()
+run('rm', disk_id, code=1)
+assert entries() == saved and current() == source
+os.unlink(disk_fifo); os.rename(disk_fifo + '.saved', disk_fifo)
+# Dependencies block numeric group removal just like name removal.
+run('config', 'import', '-', input=b'[line.dependent]\ntext = #(command:disk.read)\n')
+settle()
+saved, source = entries(), current()
+run('rm', disk_id, code=1)
+assert entries() == saved and current() == source
+run('rm', 'dependent')
+run('remove', disk_id)
+assert not os.path.exists(disk_fifo)
+assert '[line.disk.' not in current()
+assert '[command.disk.read]' not in current() and 'disk.accent' not in current()
+assert [x['name'] for x in entries()] == ['base']
+run('rm', disk_id, code=1)
+# A temporary group member's ID also selects the whole mixed group.
+run('config', 'import', '-', input=b'[line.disk.free]\n[command.disk.read]\nrun = true\n')
+settle()
+run('new', 'disk.job', input=b'job')
+disk_fifo = run('bind', 'disk.free')
+job_fifo = run('bind', 'disk.job')
+run('rm', line_id('disk.job'))
+assert [x['name'] for x in entries()] == ['base']
+assert not os.path.exists(disk_fifo) and not os.path.exists(job_fifo)
+assert '[command.disk.read]' not in current()
+# Groups containing only temporary lines behave the same way.
+run('new', 'tasks.first', input=b'first')
+run('new', 'tasks.second', input=b'second')
+run('rm', line_id('tasks.first'))
+assert [x['name'] for x in entries()] == ['base']
+source = current()
+run('rm', line_id('base'), code=1)
+assert current() == source
+mark('CONFIGURED_IDS_OK')
+"""
+    config = ('[line.base]\n[line.prompt]\n[line.disk.usage]\n[line.disk.free]\n'
+              '[command.disk.read]\nrun = true\n[colors]\ndisk.accent = red\n')
+    code, data = run_session(binary, config, child, timeout=20)
+    assert code == 0 and b'CONFIGURED_IDS_OK' in data, data[-5000:]
+    print('IDs select standalone lines or whole groups, check dependencies, clean up FIFOs, and roll back failures')
+
+
 def check_background_job_exit(binary):
     # The job ignores SIGHUP and keeps the pty open after the shell exits.
     script = "(trap '' HUP; exec sleep 10) & printf LAST_WORDS; exit 3"
@@ -1810,7 +1878,7 @@ run('config', input=b'[line.base]\ntext = reloaded\n[line.extra]\ntext = new\n[p
 settle()
 run('rm', first)
 run('rm', first, code=1)
-run('rm', '1', code=1)
+run('rm', '99999', code=1)
 print('POPPED_FIRST', flush=True)
 # A removed producer can still finish, and its ID is never reused.
 p = Popen([b, 'new'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
@@ -2308,7 +2376,7 @@ for name in ('123.child', '123'):
     run('new', name, input=b'invalid', code=2)
 for target in ('disk.usage', 'tasks.first', '01', '0', '18446744073709551616'):
     run('rm', target, code=2)
-run('rm', '1', code=1)
+run('rm', '99999', code=1)
 run('rm', 'disk', '--all', code=2)
 run('rm', 'disk', 'tasks', code=2)
 run('rm', '--', 'disk', 'tasks', code=2)
@@ -2359,6 +2427,7 @@ assert '[line.standalone]' not in current()
 # Last configured line cannot be removed, even with temporary lines present.
 snapshot = current(); saved = entries()
 run('rm', 'base', code=1)
+run('rm', '1', code=1)
 assert current() == snapshot and entries() == saved
 run('rm', '-a')
 assert [x['name'] for x in entries()] == ['base']
@@ -2736,6 +2805,7 @@ def main():
     check_osc_config(binary)
     check_theme_growth(binary)
     check_new_at_bottom(binary)
+    check_remove_configured_ids(binary)
     check_background_job_exit(binary)
     check_background_push_tty_output(binary)
     check_hidden_push_without_paint(binary)

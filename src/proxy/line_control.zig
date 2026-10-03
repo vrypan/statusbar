@@ -158,7 +158,12 @@ fn popLine(self: *Proxy, target: ?line_types.Target, now_ms: i64) protocol.Reply
     };
     const index = if (target) |value| self.lines.find(value) orelse return reject("no such line") else self.lines.latestPushed() orelse return .empty;
     const line = self.lines.items.items[index];
-    if (line.kind != .temp) return reject("use the configured line's top-level name or group for removal");
+    if (line.explicitName()) |name| {
+        // Explicit IDs follow the same group ownership as top-level names.
+        // With no target, keep removing only the newest temporary line.
+        if (line.kind == .configured or (target != null and std.mem.indexOfScalar(u8, name, '.') != null))
+            return @import("reload.zig").removeName(self, @import("shared").config_prefix.root(name), now_ms);
+    }
     if (self.fifos.findLine(line.id)) |binding| if (!self.fifos.items.items[binding].ownedPath()) return reject("FIFO path was replaced");
     _ = self.lines.remove(index);
     self.resizeForLines(now_ms) catch {
@@ -321,7 +326,7 @@ test "set changes only supplied attributes and rejects unknown targets" {
     try std.testing.expectEqualStrings("idle normal", content.line(0));
 }
 
-test "removal rejects final configured lines, configured IDs, dotted names and pending edits" {
+test "removal rejects final configured lines by name or ID, dotted names and pending edits" {
     var h: Harness = undefined;
     try h.init("[line.a]\n");
     defer h.deinit();
@@ -332,5 +337,7 @@ test "removal rejects final configured lines, configured IDs, dotted names and p
     h.proxy.held_config_len = 1;
     const reply = h.proxy.controlRequest(.{ .pop = .{ .name = "a" } }, "cli", 0);
     try std.testing.expect(reply == .rejected and std.mem.indexOf(u8, reply.rejected, "pending") != null);
+    const numeric = h.proxy.controlRequest(.{ .pop = .{ .id = 1 } }, "cli", 0);
+    try std.testing.expect(numeric == .rejected and std.mem.indexOf(u8, numeric.rejected, "pending") != null);
     try std.testing.expectEqual(@as(usize, 2), h.lines.items.items.len);
 }
