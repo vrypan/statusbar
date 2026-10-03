@@ -86,7 +86,7 @@ Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/gruvbox.statusbar -- zsh -f"
+Type "statusbar -c samples/themes/gruvbox-color.statusbar -- zsh -f"
 Sleep 300ms
 Enter
 Sleep 2200ms
@@ -96,7 +96,7 @@ Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/pastel-powerline.statusbar -- zsh -f"
+Type "statusbar -c samples/themes/pastel-powerline-color.statusbar -- zsh -f"
 Sleep 300ms
 Enter
 Sleep 2200ms
@@ -106,7 +106,7 @@ Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/pure.statusbar -- zsh -f"
+Type "statusbar -c samples/themes/pure-color.statusbar -- zsh -f"
 Sleep 300ms
 Enter
 Sleep 2200ms
@@ -116,7 +116,7 @@ Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/tokyo-night.statusbar -- zsh -f"
+Type "statusbar -c samples/themes/tokyo-night-color.statusbar -- zsh -f"
 Sleep 300ms
 Enter
 Sleep 2200ms
@@ -126,7 +126,7 @@ Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/multi-line.statusbar"
+Type "statusbar -c samples/themes/multi-line-color.statusbar"
 Sleep 300ms
 Enter
 Sleep 2200ms
