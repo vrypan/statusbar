@@ -33,13 +33,6 @@ This starts your usual shell with a status bar.
 
 Exit it to return to your original session.
 
-> [!WARNING]
-> **v0.5.0 breaks compatibility with older versions.**
->
-> You can use the AI method bellow to have an AI agent migrate your old
-> configuration, or visit [docs/migration.md](docs/migration.md) for
-> manual instructions.
-
 ## Configure using an AI agent
 
 You can use an AI agent to configure statusbar and make a personal theme.
@@ -91,12 +84,12 @@ to your current theme:
 
 ```sh
 # Inside a statusbar session, from the repository directory:
-statusbar config --add < samples/modules/disk.statusbar
+statusbar config add samples/modules/disk.statusbar
 ```
 
 Module files define static names such as `disk.usage`; imports preserve the
 source text. Modules are just prefixed config definitions. Use
-`statusbar config --remove disk` to remove the `disk.*` group.
+`statusbar config remove disk` to remove the `disk.*` group.
 
 Builds install the library under `share/statusbar/modules`; release archives
 include a `modules/` directory. The library guide lists requirements,
@@ -108,20 +101,19 @@ Edit your saved config, or create one from the built-in layout:
 
 ```sh
 mkdir -p ~/.config/statusbar
-statusbar config --default > ~/.config/statusbar/config.statusbar
+statusbar config show default > ~/.config/statusbar/config.statusbar
 ```
 
 After editing the file, apply it to the running session:
 
 ```sh
-statusbar config < ~/.config/statusbar/config.statusbar
+statusbar config check ~/.config/statusbar/config.statusbar
+statusbar config load ~/.config/statusbar/config.statusbar
 ```
 
 Each `[line.NAME]` section adds a named line with a template of text, dates,
 command output, and styles; `#(fill: )` pushes what follows to the right.
-[The guide](docs/README.md) starts with small examples. Upgrading from a
-config with `left`, `right` and `rule`? See the
-[migration guide](docs/migration.md).
+[The guide](docs/README.md) starts with small examples.
 
 Inside a statusbar session, scripts can change a line with
 `statusbar set prompt "Ready" --status success`. For live output,

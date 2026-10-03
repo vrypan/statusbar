@@ -10,9 +10,9 @@ statusbar push build -- make                # give a command a temporary line
 statusbar pop                               # remove the newest temporary line
 statusbar pop --all                         # remove all temporary lines
 statusbar list --pushed                     # inspect temporary lines
-statusbar config < another.statusbar        # change the running layout
-statusbar config --add < extra.statusbar # add new definitions
-statusbar config --remove extra         # remove extra.* definitions
+statusbar config load another.statusbar     # change the running layout
+statusbar config add extra.statusbar        # add new definitions
+statusbar config remove extra               # remove extra.* definitions
 ```
 
 Run `statusbar --help` for the command list, or
@@ -29,7 +29,13 @@ statusbar pop [NAME | --all]
 statusbar list [--pushed] [--short] [--json]
 statusbar bind [-u | --unbind] NAME
 statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME]
-statusbar config [--print [default|startup|current] | --list [default|startup|current] | --default | --path | --check FILE | --add | --remove PREFIX]
+statusbar config show [current|startup|default|path]
+statusbar config check FILE
+statusbar config load FILE
+statusbar config add FILE
+statusbar config list [--debug]     # alias: ls
+statusbar config remove PREFIX     # alias: rm
+statusbar config < FILE
 statusbar completion <bash|zsh|fish>
 ```
 
@@ -136,61 +142,65 @@ before each prompt. Repeating initialization does not duplicate these hooks.
 
 ## `config`
 
-Choose which configuration to print or inspect:
-
-| Option | Meaning |
-|--------|---------|
-| `--print default` | Built-in default config |
-| `--print startup` | Exact config originally loaded by this session |
-| `--print current` | Active config, including live replacements |
-| `--print` | Same as `--print current` |
-| `--list [default\|startup\|current]` | List line and command names by prefix; defaults to current |
-| `--default` | Alias for `--print default` |
-| `--path` | File a new session would load, or `built-in` |
-
-`startup` and `current` require a running session. `--print` preserves the original
-text, including comments, whitespace, and commands. `--list` instead shows the
-[parsed structure](config.md#inspect-the-parsed-configuration). Neither runs
-configured commands. Values and statuses set at runtime are excluded. The startup
-snapshot also works for `--config -` and remains unchanged when its source
-file is edited or removed. Nested sessions have separate snapshots.
-
-`--path` uses `$STATUSBAR_CONFIG`, then
-`$XDG_CONFIG_HOME/statusbar/config.statusbar` (or
-`~/.config/statusbar/config.statusbar` when `XDG_CONFIG_HOME` is unset). Use one
-display option at a time; `--path` cannot be combined with `--print`, `--list` or `--default`.
-
-With no flags and terminal stdin, shows help. With piped or redirected stdin,
-reads and validates the complete config until EOF, then sends its contents to
-the current statusbar session. Empty input is an error. Printing flags ignore
-stdin. Replacement prints nothing on success.
-
-`--add` instead reads a fragment of new lines, commands, and colors
-from stdin. Names are written explicitly in the source; mixed prefixes and
-unprefixed definitions are allowed. Imports preserve the source text. It rejects existing names
-and global settings, and preserves existing command processes and schedules.
-Use `--remove PREFIX` to remove configured `PREFIX.*` lines, commands and
-colors. Removal checks dependencies and keeps pushed lines. Use each edit
-separately from the other config options. See
-[adding to the running config](config.md#add-to-the-running-config).
-
-```sh
-statusbar config --print current > saved.statusbar
-statusbar config --print startup | statusbar config
-cat my.statusbar | statusbar config
-statusbar config < my.statusbar
-statusbar config --add < extra.statusbar
-statusbar config --default | statusbar config
-```
-
-To start a config of your own from the built-in one:
+Create a personal config, check it, then load it inside a statusbar session:
 
 ```sh
 mkdir -p ~/.config/statusbar
-statusbar config --default > ~/.config/statusbar/config.statusbar
+statusbar config show default > ~/.config/statusbar/config.statusbar
+# Edit the file, then:
+statusbar config check ~/.config/statusbar/config.statusbar
+statusbar config load ~/.config/statusbar/config.statusbar
 ```
 
-`--default` works outside a session and ignores existing config files.
+| Command | Meaning |
+| --- | --- |
+| `show [current]` | Print the active config, including live edits |
+| `show startup` | Print the config originally loaded by this session |
+| `show default` | Print the built-in config |
+| `show path` | Show the config path selected for a new session, or `built-in` |
+| `check FILE` | Validate a complete config without running its commands |
+| `load FILE` | Replace the running layout |
+| `add FILE` | Add new line, command and color definitions |
+| `list` / `ls` | List current line and command definitions by prefix |
+| `list --debug` | Show the whole parsed current config |
+| `remove PREFIX` / `rm PREFIX` | Remove configured `PREFIX.*` definitions |
+
+`FILE` is a filename, or `-` to read stdin. Bare `statusbar config` loads
+redirected input and shows help when run directly in a terminal:
+
+```sh
+statusbar config load my.statusbar
+statusbar config < my.statusbar
+statusbar config show startup | statusbar config load -
+statusbar config add extra.statusbar
+statusbar config list
+statusbar config remove extra
+statusbar config show current > saved.statusbar
+```
+
+`check`, `show default`, and `show path` work outside a session. All other
+operations require a running session. `show`, `list`, and `remove` ignore stdin.
+
+`show current` and `show startup` preserve source text, including comments
+and formatting, but exclude runtime values and statuses. The startup snapshot
+stays unchanged after live edits or changes to its source file, including when
+started with `--config -`. Nested sessions have separate snapshots.
+
+`list` inspects current configuration definitions; `list --debug` includes
+settings, colors, templates, defaults, commands, and push and highlight settings.
+The debug output is not a reloadable config. Neither form runs commands.
+Use [`statusbar list`](list.md) for live line values, statuses, and FIFO bindings.
+
+`show path` checks `$STATUSBAR_CONFIG`, then
+`$XDG_CONFIG_HOME/statusbar/config.statusbar` (normally
+`~/.config/statusbar/config.statusbar`). It does not recover a running
+session's `--config` argument or describe its current layout.
+
+`add` rejects duplicate names and global settings. `remove` rejects edits
+that leave dependencies unresolved or remove the last configured line.
+Both preserve surviving line state and command processes; `load` restarts
+configured commands. Live edits do not change the saved file. See
+[configuration](config.md#add-to-the-running-config) for details.
 
 ## `completion`
 

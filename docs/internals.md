@@ -48,7 +48,7 @@ shell
 - Lines are session-owned: configured lines in declaration order, then pushed
   lines in creation order. Each has a stable, never-reused ID, an optional
   name, a value and a status. A private local datagram socket authenticates
-  and acknowledges every line request (`set`, `push`, `pop`, `bind`); bounded
+  and acknowledges every line request (`set`, `push`, `pop`, `bind`, `list`); bounded
   stream updates display text literally. Streaming producers are tied to the
   line instance they created, so a retired or removed producer cannot change
   a later line with the same name. See [set.md](set.md#protocol).
@@ -58,12 +58,12 @@ shell
   on binding removal and normal shutdown. A binding belongs to a line ID and
   is named after the line. See [FIFOs](bind.md).
 - Exact OSC 3110 `STATUSBAR` messages are also taken out of the output stream.
-  A session token authenticates complete `CONFIG` replacement requests. The
+  A session token authenticates `CONFIG`, `ADD`, and `REMOVE` requests. The
   streaming parser stops at each request boundary so a config request and the
   output after it in one PTY read remain ordered. Foreign ELLO messages pass through. See
   [the protocol](osc-3110.md).
 - On a resize the child's pty follows the terminal. The visible line count is
-  the smaller of the configured count and the terminal height minus two.
+  the smaller of the total line count and the terminal height minus two.
   Hidden lines retain their values and statuses.
 - A config replacement request is parsed into a complete runtime generation,
   prepared against a reconciled copy of the lines, and swapped in with that
@@ -123,8 +123,7 @@ Command results retain why their process ran. First results and reruns requested
 by a terminal resize establish a new baseline silently; ordinary interval
 results and clock changes may start a region highlight after every command used
 in the line's active template has produced a first result. Step boundaries and expiry share one proxy
-poll deadline and one composition pass. Within-line selective writes are not
-implemented yet.
+poll deadline and one composition pass.
 
 The adaptive effect samples OKLab lightness at 30 ms intervals. It derives
 each pulse's phase from the absolute step modulo 40, without restarting the

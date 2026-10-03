@@ -55,7 +55,7 @@ Each visible line has three related states:
 
 Content updates replace relevant parts of the base. Animation ticks derive or
 update the desired appearance from the current base and effect state. Painting
-compares desired with painted, emits only necessary lines, then advances the
+compares desired with painted, emits only changed column spans, then advances the
 painted snapshot.
 
 Effects modify appearance, never the base. Each affected line is traversed once
@@ -220,8 +220,10 @@ queue of frames: only the newest desired frame matters.
 
 All changed lines for a frame are serialized into one output batch. The renderer
 may compose the entire visible statusbar in memory while emitting only lines
-whose desired cells differ from their painted cells. A frame opportunity does
-not imply a terminal write.
+whose desired cells differ from their painted cells. Each changed line is
+written from its first changed column through its last, widened to keep whole
+graphemes intact. Startup, resize, and damage repair repaint full lines.
+A frame opportunity does not imply a terminal write.
 
 This separation gives the model its main invariant:
 

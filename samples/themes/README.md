@@ -21,6 +21,12 @@ Pure, Tokyo Night, Gruvbox, and Pastel Powerline share a baseline of user,
 host, load, weather, and a clock. The multi-line sample also needs `jq` and
 an authenticated GitHub CLI; see its header for requirements.
 
+Commands in the default config and most themes use the `system.*` prefix.
+The multi-line theme also groups news under `hn.*` and notifications under
+`gh.*`. The Starship destination remains `prompt`. Use `statusbar config list`
+to inspect these groups. Removing a prefix is rejected while another line
+still references its commands or colors.
+
 ## Native colors
 
 Native versions use `colour0` through `colour15` and `default`, so their
@@ -111,7 +117,7 @@ Replace the filename to compare alternatives. Exit the child shell to return.
 To load a native layout inside an existing statusbar session:
 
 ```sh
-statusbar config < ./samples/themes/tokyo-night-native.statusbar
+statusbar config load ./samples/themes/tokyo-night-native.statusbar
 ```
 
 If your shell enables statusbar's Starship integration, Starship's details

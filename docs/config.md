@@ -12,9 +12,6 @@ left, the time on the right, and `#(fill: )` repeating a space between them.
 Run `statusbar` to use the built-in config, or save this example as
 `~/.config/statusbar/config.statusbar` to use it instead.
 
-Coming from an older config with `[line.1]`, `left`, `right` and `rule`? See
-the [migration guide](migration.md).
-
 ## Add colors and a command
 
 ```ini
@@ -56,18 +53,13 @@ Shipped configs and themes use the `.statusbar` extension. An explicit path
 works with any name.
 
 If the default file is missing, statusbar uses its built-in config:
-[`samples/default.statusbar`](../samples/default.statusbar). The old default
-file, `statusbar/config`, is never loaded. When only that file exists,
-statusbar starts with the built-in config and shows a line asking you to
-migrate it.
+[`samples/default.statusbar`](../samples/default.statusbar).
 
 A config that cannot be used never keeps your shell from starting. If the
 selected file is missing or unreadable, or if it is invalid, statusbar prints
 the problem, starts the built-in config, and adds a failed line with the
-diagnostic, such as
-`statusbar: line 4: left, right and rule were removed in ~/.config/...`. This
-applies to `--config`, `$STATUSBAR_CONFIG`, stdin and the default path alike,
-so statusbar is safe to use as a login shell. Your file is left untouched. Fix
+diagnostic. This applies to `--config`, `$STATUSBAR_CONFIG`, stdin and the
+default path alike. Your file is left untouched. Fix
 it, then load it with `statusbar config < FILE`; a successful replacement
 removes the warning line.
 
@@ -75,59 +67,55 @@ The built-in config is commented. Start from it:
 
 ```sh
 mkdir -p ~/.config/statusbar
-statusbar config --default > ~/.config/statusbar/config.statusbar
+statusbar config show default > ~/.config/statusbar/config.statusbar
 ```
 
 Validate a draft file without starting a session or running its configured
 commands:
 
 ```sh
-statusbar config --check ~/.config/statusbar/config.statusbar
+statusbar config check ~/.config/statusbar/config.statusbar
 ```
 
 A valid file produces no output and exits 0. A syntax error exits 2 with its
 file and line; a file that cannot be read exits 1. This checks config syntax;
 check command dependencies and the layout in a session afterward.
 
-`statusbar config --print` prints the running session's active config. Use
-`--print startup` for its original config, or `--print default` (also
-`--default`) for the built-in config. `--path` shows the file a new session
-would load; see [usage.md](usage.md#config).
+`statusbar config show` prints the active config. Use `show startup` for the
+original session config, `show default` for the built-in config, or `show path`
+for the config path selected for a new session. See [usage](usage.md#config).
 
 For generated configs and here-documents, see
 [reading a config from stdin](usage.md#generate-a-config-on-the-fly).
 
 ## Inspect the parsed configuration
 
+Inside a session:
+
 ```sh
-statusbar config --list          # current session config
-statusbar config --list startup  # original session config
-statusbar config --list default  # built-in config; no session needed
+statusbar config list            # line and command names by prefix
+statusbar config ls              # the same listing
+statusbar config list --debug    # settings and parsed definitions too
 ```
 
-`--list` parses the selected config snapshot and calls `Config.list()` on the
-result. It shows only line and command names, grouped by module prefix:
+The compact listing groups names by the part before their first dot:
 
 ```text
-(no prefix) line.ornament line.prompt
-gh line.gh.stars command.gh.notifications command.gh.stars
+(no prefix) line.rule line.prompt
+system command.system.user command.system.host command.system.load
 ```
 
-The prefix is the part before the first dot. Names without a valid prefix and nonempty suffix go under
-`(no prefix)`. Groups are alphabetical, with unprefixed names first. Within each
-group, lines come before commands and keep their declaration order within each
-kind. Each group occupies one output line; entries use `line.NAME` or
-`command.NAME`. Colors, settings and template details are omitted.
-The report does not execute commands or change the session.
+Groups are alphabetical, with unprefixed names first. Lines come before
+commands and keep their declaration order within each kind. Each group
+occupies one output line. Colors and template details are omitted.
 
-Module names use a dot separator: `codex.usage` belongs to `codex`.
-Older hyphenated names remain valid ordinary names and are listed as unprefixed.
-To update an older module, write its static prefix in every definition and
-reference, for example `disk.usage`. Import-time placeholders are not supported.
+`--debug` includes global settings, colors, lines with compiled templates
+and defaults, commands, push templates, and highlight settings. It is for
+inspection, not a config you can reload. Both forms inspect only the current
+config, require a session, and do not run commands.
 
-This inspects configuration definitions. Use `statusbar list` for live line
-values, statuses, pushed jobs and FIFO bindings. Use `config --print` to retrieve
-the source text, including comments and original formatting.
+Use `statusbar list` for live values, statuses, pushed lines and FIFO bindings.
+Use `statusbar config show` for source text with comments and formatting.
 
 ## Replace the running config
 
@@ -135,7 +123,7 @@ Inside a session, you can replace the whole config. From the repository
 checkout, for example:
 
 ```sh
-statusbar config < ./samples/themes/tokyo-night.statusbar
+statusbar config load ./samples/themes/tokyo-night.statusbar
 ```
 
 Replacement is strict: an invalid config leaves the active statusbar unchanged.
@@ -159,12 +147,12 @@ limit and [the protocol](osc-3110.md) for its terminal sequence.
 
 ## Add to the running config
 
-Use `--add` to add a module containing new lines, commands, and colors.
+Use `config add FILE` to add a module containing new lines, commands, and colors.
 The [module library](../samples/modules/README.md) has ready-made modules with
 native terminal colors. A module is a config fragment, for example:
 
 ```sh
-statusbar config --add <<'EOF'
+statusbar config add - <<'EOF'
 [line.extra.load]
 text = "#[fg=extra.accent]#(command:extra.load)#[default]"
 
@@ -184,11 +172,11 @@ prefix. There are no module declarations, registration or import-time names.
 
 The source text is preserved, including command scripts and comments. The
 combined config must fit the 64 KiB limit. Modules that contain a line and
-all their dependencies can also be checked directly with `config --check`.
+all their dependencies can also be checked directly with `config check`.
 
 Fragments may refer to existing commands and colors. A fragment may also
 contain only commands or colors. Global settings, `[push]`, and `[highlight]`
-are not accepted by `--add`; use a complete replacement to change them.
+are not accepted by `config add`; use a complete replacement to change them.
 
 The running session merges each addition against its latest config and
 validates the complete result before applying it. Duplicate line, command,
@@ -198,20 +186,20 @@ after existing configured lines and before pushed lines. Existing line IDs,
 values, statuses, FIFO bindings, command processes, schedules, and cached
 output are preserved. Only new commands start immediately.
 
-`config --print current` includes the added source, including its comments.
+`config show current` includes the added source, including its comments.
 The startup snapshot and saved file stay unchanged; save the current config
 explicitly to reuse it in later sessions. Prefixes group related definitions
-without wrapper markup. There is no group-removal command yet.
+without wrapper markup; use `config remove PREFIX` to remove a group.
 
 Like replacement, sending an addition does not wait for an acknowledgement.
 The CLI checks a snapshot first to report errors; the session checks again
-when applying the request. Inspect `config --print current` afterward. See
+when applying the request. Inspect `config show current` afterward. See
 [the protocol](osc-3110.md) for limits and concurrent writes.
 
 ## Remove a prefix
 
 ```sh
-statusbar config --remove disk
+statusbar config remove disk
 ```
 
 This removes configured `disk.*` lines, commands and colors, regardless of
@@ -220,16 +208,17 @@ pushed jobs named `disk.*`. Prefixes use 1–62 letters, digits, underscores or
 hyphens. The first dot separates the prefix from the rest of a name.
 
 Removal rejects references from remaining templates to removed commands or
-colors (including defaults, status variants, push templates and the global
-style). References produced dynamically by a command are not inspected.
+colors (including defaults even when a line does not use `#(value)`,
+status variants, push templates and the global style). References produced
+dynamically by a command are not inspected.
 An unknown prefix or removal of the last configured line is also rejected.
 The running session checks its latest configuration before applying the edit.
 
 Surviving line IDs, values, statuses, FIFOs and unchanged command processes
 are preserved. Removed configured lines lose their FIFO bindings; removed
 commands are stopped. Pushed lines remain. Removal ignores stdin and prints
-nothing when submitted. Like `--add`, the OSC request is asynchronous: inspect
-`config --list` or `config --print current` afterward. A concurrent change can
+nothing when submitted. Like `config add`, the OSC request is asynchronous: inspect
+`config list` or `config show current` afterward. A concurrent change can
 cause the session to reject an edit after CLI preflight succeeded.
 
 
@@ -300,11 +289,11 @@ OSC 8 hyperlinks still work.
 Until a value is set, `#(value)` expands the line's `default` template, or
 shows nothing if `default` is omitted. The fallback can include styles,
 commands, dates, environment variables, and terminal properties. For example,
-using the configured `dim` and `accent` colors and `user` and `host` commands:
+using the built-in config's `dim` and `accent` colors and `system.*` commands:
 
 ```ini
 [line.prompt]
-default = "#[fg=dim]#(command:user)@#[default]#[fg=accent,bold]#(command:host)#[default]"
+default = "#[fg=dim]#(command:system.user)@#[default]#[fg=accent,bold]#(command:system.host)#[default]"
 text = "#(value)#(fill: )"
 ```
 
@@ -606,8 +595,8 @@ Typed values such as `interval` still need one valid value.
 ```ini
 [command.example]
 run = |
-  first-command || exit
-  second-command
+  printf 'Host: '
+  hostname -s
 interval = 60
 ```
 

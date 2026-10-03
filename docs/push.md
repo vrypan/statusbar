@@ -142,7 +142,7 @@ change any line.
 
 Pushed lines survive a replacement of the running config, keeping their
 values and statuses; the new `[push]` templates apply. `statusbar config
---print current` prints only config text. As with configured lines, lines
+show current` prints only config text. As with configured lines, lines
 that do not fit a short terminal remain stored and reappear when there is
 room, so a push may succeed while its line is hidden.
 

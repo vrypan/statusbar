@@ -2,7 +2,7 @@
 
 Modules add a small feature to your running statusbar. Each file contains one
 line and its commands with static names such as `disk.usage`. Load a module
-with `statusbar config --add < FILE`. A module is simply a group of config
+with `statusbar config add FILE`. A module is simply a group of config
 definitions sharing a prefix; no declaration or registration is needed.
 
 All modules use the terminal's native palette, keep the theme's background,
@@ -38,7 +38,7 @@ command into a shell if you need its full diagnostic output.
 
 ## Load a module
 
-First start a session with a version of statusbar supporting `config --add`.
+First start a statusbar session.
 Locate the library for your installation:
 
 | Installation | Module directory |
@@ -51,15 +51,15 @@ Locate the library for your installation:
 From the repository directory, inside the statusbar shell:
 
 ```sh
-statusbar config --add < samples/modules/disk.statusbar
-statusbar config --add < samples/modules/weather.statusbar
+statusbar config add samples/modules/disk.statusbar
+statusbar config add samples/modules/weather.statusbar
 ```
 
 For Homebrew:
 
 ```sh
 modules_dir="$(brew --prefix statusbar)/share/statusbar/modules"
-statusbar config --add < "$modules_dir/disk.statusbar"
+statusbar config add "$modules_dir/disk.statusbar"
 ```
 
 New lines appear in import order, above pushed lines. Importing the same
@@ -68,8 +68,21 @@ written explicitly in the file, such as `#(command:disk.usage)`.
 To create another instance, copy the file and change its names and references
 together before importing the copy.
 
-`config --add` checks and sends the module; the session checks it again before
-applying it. Inspect the bar and `statusbar config --print current` afterward.
+`config add FILE` checks and sends the module; the session checks it again before
+applying it. Inspect the bar and `statusbar config show current` afterward.
+
+## Inspect and remove modules
+
+```sh
+statusbar config list
+statusbar config remove disk
+```
+
+The listing groups configured line and command names by the part before their
+first dot. `remove disk` removes all configured `disk.*` lines, commands and
+colors. It rejects removal if remaining definitions depend on them, or if it
+would leave no configured line. Pushed lines stay. The short forms are
+`config ls` and `config rm disk`.
 
 ## Customize and save
 
@@ -83,8 +96,8 @@ statusbar set codex.usage --reset
 
 An explicitly empty value hides the content until reset. FIFO input also
 overrides the display. After editing a module already loaded in a session,
-update its definitions in `config --print current` and reload the complete
-config; `--add` rejects definitions that already exist.
+update its definitions in `config show current` and reload the complete
+config; `config add FILE` rejects definitions that already exist.
 
 Copy a module into your own directory before editing it; installed copies may
 be replaced by upgrades. Its header lists an example import and requirements.
@@ -104,7 +117,7 @@ be replaced by upgrades. Its header lists an example import and requirements.
   and an elapsed reset countdown shows `refreshing` until new quota data arrives.
 - **Refresh:** edit each command's `interval`. Network commands have explicit
   timeouts where supported; CPU and traffic readings take about one second.
-- **Layout:** modules use one row each. To combine features on one row, edit
+- **Layout:** modules use one line each. To combine features on one line, edit
   a complete config and reference their prefixed commands in the same `text`.
 
 CPU is a one-second sample. Memory comes from `top`'s rounded used-memory
@@ -117,17 +130,15 @@ desktop Macs. GitHub fetches one page of up to 100 notifications and displays
 Additions affect the current session. To save your assembled layout:
 
 ```sh
-statusbar config --print current > my.statusbar
-statusbar config --check my.statusbar
+statusbar config show current > my.statusbar
+statusbar config check my.statusbar
 ```
 
 Start a later session with `statusbar --config my.statusbar`, or copy the
 file to your chosen startup config location. To edit definitions, update the
-saved complete config and reload it with `statusbar config < my.statusbar`.
-To remove a group, use `statusbar config --remove disk`; remaining definitions
-must not depend on its commands or colors. Its configured lines and FIFOs are
-removed, while pushed lines stay. Adding or removing definitions preserves
-unchanged command processes; replacing the complete config restarts them.
+saved complete config and reload it with `statusbar config load my.statusbar`.
+Adding or removing definitions preserves unchanged command processes;
+replacing the complete config restarts them.
 
 There is a limit of 16 configured commands and 32 named colors per config.
 The supplied modules use at most one command each and no named colors, so
@@ -153,12 +164,12 @@ interval = 3600
 host.accent = colour4
 ```
 
-Import with `--add`; the source defines `host.summary`, `host.fetch`,
+Import with `config add FILE`; the source defines `host.summary`, `host.fetch`,
 and `host.accent`. The import checks name uniqueness and preserves the source as
-written. Fragments may contain multiple prefixes or unprefixed definitions. There are no import-time placeholders. Snapshots from
-`config --print current` can be saved, checked with `--check`, and loaded as
-complete configs. Each bundled module can also be checked directly with
-`statusbar config --check samples/modules/host.statusbar`.
+written. Fragments may contain multiple prefixes or unprefixed definitions.
+Snapshots from `config show current` can be saved, checked with
+`config check FILE`, and loaded as complete configs. Each bundled module can also be checked directly with
+`statusbar config check samples/modules/host.statusbar`.
 
 Module prefixes use letters, digits, underscores and hyphens. Set command intervals
 explicitly, use `colour0`–`colour15` or terminal color names, and finish styles

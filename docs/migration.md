@@ -16,14 +16,14 @@ starts as usual. Convert it, save it under the new name, validate the draft,
 then load it without restarting:
 
 ```sh
-statusbar config --check ~/.config/statusbar/config.statusbar
+statusbar config check ~/.config/statusbar/config.statusbar
 statusbar config < ~/.config/statusbar/config.statusbar
 ```
 
 A valid replacement removes the warning line. Any config that cannot be used
 at startup, including one named by `--config` or `$STATUSBAR_CONFIG`, is
 handled the same way: the built-in config and a warning, never a shell that
-fails to start. `statusbar config --path` shows the file a new session loads.
+fails to start. `statusbar config show path` shows the file a new session loads.
 
 Shipped themes and samples now end in `.statusbar`; `--config` accepts any
 file name.

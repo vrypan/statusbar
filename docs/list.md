@@ -25,6 +25,9 @@ backslashes in values are escaped so they cannot change the terminal or
 create extra table rows. Long values are not clipped to the terminal width.
 Use JSON for scripts rather than parsing the table.
 
+For configuration definitions grouped by prefix, use
+[`statusbar config list`](config.md#inspect-the-parsed-configuration).
+
 ## JSON format
 
 ```json

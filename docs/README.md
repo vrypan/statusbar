@@ -28,7 +28,7 @@ Create a starting config, then edit it:
 
 ```sh
 mkdir -p ~/.config/statusbar
-statusbar config --default > ~/.config/statusbar/config.statusbar
+statusbar config show default > ~/.config/statusbar/config.statusbar
 statusbar
 ```
 
@@ -52,8 +52,7 @@ interval = 60
 `#(datetime:%H:%M)` shows the current time. `#(command:host)` shows the first
 output line of `[command.host]`. Commands without an `interval` run every five
 seconds. You can add colors, draw rules such as `#(fill:─)`, and give lines
-backgrounds; see [configuration](config.md). If you have a config from an
-earlier version, see the [migration guide](migration.md).
+backgrounds; see [configuration](config.md).
 
 statusbar keeps at least two terminal rows for your shell. Configured statusbar lines
 that do not fit are hidden until the window grows.
@@ -182,12 +181,23 @@ The [module library](../samples/modules/README.md) contains ready-made features
 with native terminal colors. Add one inside a running session:
 
 ```sh
-statusbar config --add < samples/modules/disk.statusbar
+statusbar config add samples/modules/disk.statusbar
 ```
 
 This adds the module's line and commands to the current layout. Existing
-lines and commands keep running. See the library for installation paths,
-platform requirements, and how to customize and save your modules.
+lines and commands keep running. Inspect your definitions, remove a module,
+or save your assembled layout:
+
+```sh
+statusbar config list
+statusbar config show current > ~/.config/statusbar/config.statusbar
+# To remove the module from the running session:
+statusbar config remove disk
+```
+
+Removing `disk` removes its `disk.*` definitions. Each module's names are
+written in its file. See the library for installation paths, requirements,
+and customization.
 
 ## Load another config
 
@@ -195,8 +205,8 @@ Inside a running statusbar session, send a config to `statusbar config` to
 replace the whole layout. From the repository checkout, for example:
 
 ```sh
-statusbar config < ./samples/themes/tokyo-night.statusbar
-statusbar config --default | statusbar config
+statusbar config load ./samples/themes/tokyo-night.statusbar
+statusbar config show default | statusbar config
 ```
 
 Statusbar checks the new config before applying it. If it is invalid, the
@@ -241,9 +251,9 @@ The default effect makes two pulses over 2.4 seconds. Set `pulses = 1` or
 - [How I use statusbar](how-i-use-statusbar.md) — a minimal everyday statusbar and a richer optional layout.
 - [Usage](usage.md) — commands, options, completions, generated configs, and environment.
 - [Configuration](config.md) — lines, templates, fill, statuses, commands, change highlights, colors, and markup.
-- [Migrating from slots](migration.md) — converting configs, scripts and hooks from earlier versions.
 - [Changing a line](set.md) — values, statuses, and the control protocol.
 - [Pushing lines](push.md) — stream output into a new line and remove it.
+- [Listing lines](list.md) — inspect live values, statuses and FIFO bindings.
 - [FIFOs](bind.md) — redirect output to a pushed or configured line.
 - [Starship](starship.md) — prompt integration and customization.
 - [Display and animation model](display-model.md) — content updates, animation

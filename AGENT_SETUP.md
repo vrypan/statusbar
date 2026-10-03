@@ -26,7 +26,7 @@ is a separate setting: a terminal command affects that terminal's new tabs
 and windows; a shell startup block affects other terminals and sessions that
 read the same startup file too.
 
-Run `statusbar config --path` to find the config a new session would select,
+Run `statusbar config show path` to find the config a new session would select,
 or `built-in`. Selection follows this order:
 
 1. An explicit `statusbar --config PATH` launch option.
@@ -34,16 +34,13 @@ or `built-in`. Selection follows this order:
 3. `$XDG_CONFIG_HOME/statusbar/config.statusbar` if set; otherwise
    `~/.config/statusbar/config.statusbar`.
 
-`--path` does not recover a running session's `--config` argument. A missing
+`show path` does not recover a running session's `--config` argument. A missing
 file at the default location uses the built-in config. A config that cannot
 be read or parsed, including an explicit one, starts the built-in config with
-a warning line; the shell always starts. The pre-`.statusbar` default file
-(`statusbar/config`) is never loaded: if it exists, convert it with the
-[migration guide](https://github.com/vrypan/statusbar/blob/main/docs/migration.md)
-and save the result as `config.statusbar`. Run `statusbar config --check FILE`
+a warning line; the shell always starts. Run `statusbar config check FILE`
 to validate a draft outside a session without executing its commands. Inside a
-session, `statusbar config --print current` and
-`statusbar config --print startup` show the active and original configs.
+session, `statusbar config show current` and
+`statusbar config show startup` show the active and original configs.
 These snapshots exclude values and statuses set at runtime.
 
 Locate bundled themes:
@@ -59,16 +56,17 @@ Locate bundled themes:
 The bundled module library provides individual features with native colors.
 Find it beside the themes directory (`share/statusbar/modules` for installed
 builds, or `modules/` in release archives). Read its `README.md` for platforms
-and dependencies. Add selected modules with `statusbar config --add`
+and dependencies. Add selected modules with `statusbar config add FILE`
 or copy their definitions into a draft config. Modules use static names such
 as `disk.usage`; keep their names, references and command intervals together.
-Modules are separate from complete
-themes: add them with `--add`, then save `config --print current` to retain the
-assembled layout. Do not load optional network modules unless requested.
+Add fragments with `config add FILE`; load complete themes with
+`config load FILE`. Use `config list` to inspect prefixes and
+`config remove PREFIX` to remove a group. Save `config show current` to retain
+the assembled layout. Do not load optional network modules unless requested.
 
 Create a draft in a user-owned directory, for example
 `~/.config/statusbar/themes/my-theme.statusbar`, creating its parent if needed.
-Copy a suitable bundled theme or use `statusbar config --default` as a
+Copy a suitable bundled theme or use `statusbar config show default` as a
 starting point. Prefer a `-native.statusbar` sample for terminal palette colors.
 Installed themes may be replaced on upgrade, so customize the copy.
 
@@ -105,8 +103,7 @@ Keep these rules in mind:
   right-aligned, and a template that is only a fill draws a rule. The right
   side clips first on narrow terminals (`keep = right` reverses that). Give
   each shell hook its own line, shown with `#(value)`, so hooks never
-  overwrite each other. `left`, `right`, `rule`, and line `style` keys no
-  longer exist.
+  overwrite each other.
 - **Colors:** `colour0`–`colour15` follow the terminal's palette; `#rrggbb`
   fixes a color. `default` uses the terminal's foreground for `fg` and its
   background for `bg`. Use `[colors]` names in styles and markup. Ghostty's
@@ -331,18 +328,18 @@ Run live updates from a terminal connected to the intended statusbar session.
 If the agent's command runner has a separate terminal, ask the user to run
 the preview in the intended session. Report visual results only when observed.
 
-Save a copy of `statusbar config --print current` before replacing a live
+Save a copy of `statusbar config show current` before replacing a live
 layout. Then preview:
 
 ```sh
-statusbar config < ~/.config/statusbar/themes/my-theme.statusbar
+statusbar config load ~/.config/statusbar/themes/my-theme.statusbar
 ```
 
 Outside a session, launch `statusbar --config /absolute/path/to/my-theme.statusbar`
 in an interactive terminal. Both methods execute the draft's commands.
 The live command validates and sends the config; a zero exit status confirms
 sending, not that the session applied it. Check the bar and
-`statusbar config --print current` afterward. Invalid configs leave the
+`statusbar config show current` afterward. Invalid configs leave the
 active layout intact.
 
 Values set with `statusbar set` survive replacement for lines whose names
