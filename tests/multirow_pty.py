@@ -2103,7 +2103,7 @@ with tempfile.TemporaryDirectory() as folder:
     run('config', '--add', 'alpha', input=module.encode(), code=2)
     assert current() == snapshot
     # Dotted names work through the line protocol and as FIFO basenames.
-    assert 'alpha\n  Lines\n    alpha.row\n  Commands\n    alpha.fetch' in run('config', '--list')
+    assert 'alpha line.alpha.row command.alpha.fetch' in run('config', '--list')
     run('set', 'alpha.row', 'dotted-value', '--status', 'success')
     pipe = run('bind', 'alpha.row')
     assert os.path.basename(pipe) == 'alpha.row'

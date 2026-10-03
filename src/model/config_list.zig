@@ -38,13 +38,11 @@ pub fn list(cfg: *const config.Config, writer: *std.Io.Writer) !void {
         const new_group = index == 0 or !std.mem.eql(u8, entries[index - 1].prefix, entry.prefix);
         if (new_group) {
             if (index > 0) try writer.writeByte('\n');
-            try writer.print("{s}\n", .{if (entry.prefix.len == 0) "(no prefix)" else entry.prefix});
+            try writer.writeAll(if (entry.prefix.len == 0) "(no prefix)" else entry.prefix);
         }
-        if (new_group or entries[index - 1].kind != entry.kind) {
-            try writer.print("  {s}\n", .{if (entry.kind == .line) "Lines" else "Commands"});
-        }
-        try writer.print("    {s}\n", .{entry.name});
+        try writer.print(" {s}.{s}", .{ @tagName(entry.kind), entry.name });
     }
+    if (entries.len > 0) try writer.writeByte('\n');
 }
 
 test "group names by prefix with unprefixed names first and declaration order within each kind" {
@@ -69,28 +67,10 @@ test "group names by prefix with unprefixed names first and declaration order wi
     defer out.deinit();
     try cfg.list(&out.writer);
     try std.testing.expectEqualStrings(
-        \\(no prefix)
-        \\  Lines
-        \\    ornament
-        \\    prompt
-        \\  Commands
-        \\    host
-        \\
-        \\codex
-        \\  Lines
-        \\    codex.usage
-        \\    codex.extra.details
-        \\  Commands
-        \\    codex.usage
-        \\    codex.fetch
-        \\
-        \\weather
-        \\  Lines
-        \\    weather.now
-        \\
-        \\z_only
-        \\  Commands
-        \\    z_only.fetch
+        \\(no prefix) line.ornament line.prompt command.host
+        \\codex line.codex.usage line.codex.extra.details command.codex.usage command.codex.fetch
+        \\weather line.weather.now
+        \\z_only command.z_only.fetch
         \\
     , out.written());
 }

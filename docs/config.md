@@ -109,23 +109,15 @@ statusbar config --list default  # built-in config; no session needed
 result. It shows only line and command names, grouped by module prefix:
 
 ```text
-(no prefix)
-  Lines
-    ornament
-    prompt
-
-codex
-  Lines
-    codex.usage
-  Commands
-    codex.fetch
+(no prefix) line.ornament line.prompt
+gh line.gh.stars command.gh.notifications command.gh.stars
 ```
 
-The prefix is the part before the first dot, following the same naming rules
-as `--add PREFIX`. Names without a valid prefix and nonempty suffix go under
+The prefix is the part before the first dot. Names without a valid prefix and nonempty suffix go under
 `(no prefix)`. Groups are alphabetical, with unprefixed names first. Within each
-group, lines and commands are separate and keep their declaration order. Full
-names are retained; colors, settings and template details are omitted.
+group, lines come before commands and keep their declaration order within each
+kind. Each group occupies one output line; entries use `line.NAME` or
+`command.NAME`. Colors, settings and template details are omitted.
 The report does not execute commands or change the session.
 
 Module names use a dot separator: `codex.usage` belongs to `codex`.

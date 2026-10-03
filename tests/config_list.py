@@ -22,7 +22,7 @@ def run(*args, code=0):
     return result.stdout
 
 
-assert "  Lines\n" in run("--list", "default")
+assert "line.prompt" in run("--list", "default")
 run("--list", code=2)
 run("--list", "invalid", code=2)
 run("--list", "default", "extra", code=2)
@@ -45,8 +45,8 @@ with tempfile.TemporaryDirectory(prefix="statusbar-config-list-") as directory:
     )
     env.update(STATUSBAR_STATE=str(state), STATUSBAR_SESSION_ID=token)
     report = run("--list")
-    assert "    updated\n" in report and "test\n  Commands\n    test.run\n" in report
-    assert "    original\n" in run("--list", "startup")
+    assert "(no prefix) line.updated\n" in report and "test command.test.run\n" in report
+    assert "(no prefix) line.original\n" in run("--list", "startup")
     assert run("--print", "current") == current.decode()
     assert run("--print", "startup") == startup.decode()
     assert not marker.exists()
