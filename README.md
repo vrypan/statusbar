@@ -14,7 +14,7 @@ Install with Homebrew:
 brew install vrypan/tap/statusbar
 ```
 
-Or download the latest [release](releases/).
+Or download the latest [release](https://github.com/vrypan/statusbar/releases).
 
 Or build from source with Zig 0.16 on macOS or Linux:
 
