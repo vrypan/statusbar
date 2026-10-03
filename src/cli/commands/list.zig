@@ -7,14 +7,15 @@ const snapshot = @import("session").line_snapshot;
 const environment = @import("platform").environment;
 
 pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
-    if (environment.get("STATUSBAR_SESSION_ID") == null) return common.usageError(stderr, command, "list requires a running statusbar session");
+    const state_path = environment.get("STATUSBAR_STATE") orelse return notInSession(stderr, command);
+    if (environment.get("STATUSBAR_SESSION_ID") == null) return notInSession(stderr, command);
     var session: common.Session = undefined;
     if (!try session.open(io, stderr)) return 1;
     defer session.close();
     const reply = try session.request(stderr, .list) orelse return 1;
     if (reply != .path) return common.rejected(stderr, reply, "cannot list lines");
     var buffer: [160]u8 = undefined;
-    const path = try snapshot.filePath(&buffer, environment.get("STATUSBAR_STATE") orelse return 1);
+    const path = try snapshot.filePath(&buffer, state_path);
     if (!std.mem.eql(u8, path, reply.path)) return common.rejected(stderr, .ok, "invalid line snapshot path");
     const parsed = snapshot.read(arena, io, path, session.token) catch |err| {
         try stderr.print("statusbar: cannot read line snapshot: {t}\n", .{err});
@@ -51,6 +52,10 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     }
     try stdout.flush();
     return 0;
+}
+
+fn notInSession(stderr: *Io.Writer, command: *const zecli.Command) !u8 {
+    return common.usageError(stderr, command, "list requires a running statusbar session");
 }
 
 fn field(writer: *Io.Writer, bytes: []const u8, width: usize) !void {

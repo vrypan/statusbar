@@ -1612,6 +1612,10 @@ run('list', '--json', env=wrong, code=1)
 assert os.stat(snapshot_path).st_mtime_ns == before
 outside = os.environ.copy(); outside.pop('STATUSBAR_SESSION_ID'); outside.pop('STATUSBAR_STATE')
 run('list', '--json', env=outside, code=2)
+for variable in ('STATUSBAR_SESSION_ID', 'STATUSBAR_STATE'):
+    partial = os.environ.copy(); partial.pop(variable)
+    r = subprocess.run([b, 'list'], env=partial, capture_output=True, timeout=6)
+    assert r.returncode == 2 and not r.stdout and b'requires a running statusbar session' in r.stderr, r
 stale = os.environ.copy(); stale['STATUSBAR_STATE'] += '-missing'
 run('list', '--json', env=stale, code=1)
 run('list', 'extra', code=2)
