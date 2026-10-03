@@ -116,7 +116,7 @@ pub const Output = struct {
                         },
                         '7', '8' => {
                             sink.write(&.{ esc, b });
-                            self.screen.cursor_saved = b == '7';
+                            if (b == '7') self.screen.saveCursor() else self.screen.restoreCursor();
                             self.state = .ground;
                         },
                         // The first ESC was not followed by anything; hold

@@ -53,6 +53,7 @@ pub fn paint(self: *Proxy) !void {
     var region: std.Io.Writer = .fixed(&region_buf);
     self.output.screen.writeRegion(&WriterSink{ .w = &region });
     const bytes = try self.renderer.build(self.layout.barRow(), region.buffered(), self.output.screen.autowrap, self.output.screen.damaged);
+    if (bytes.len > 0) self.output.screen.borrowCursor();
     self.terminal.write(bytes);
     if (self.terminal.broken) return error.TerminalWriteFailed;
     self.renderer.commit();

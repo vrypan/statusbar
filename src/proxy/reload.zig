@@ -76,6 +76,7 @@ fn replaceConfigRemoving(self: *Proxy, text: []const u8, now_ms: i64, diag: *con
     self.output.screen.resize(new_layout.bar, new_layout.child.row);
     // DECSTBM homes the cursor. Install the new margins immediately,
     // preserving the corrected cursor before any following child bytes.
+    self.output.screen.borrowCursor();
     self.terminal.write("\x1b7");
     self.output.screen.writeRegion(&self.terminal);
     self.terminal.write("\x1b8");

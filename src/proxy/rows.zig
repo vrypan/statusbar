@@ -35,6 +35,7 @@ pub fn reserveRows(self: *Proxy, outer_rows: u16) !void {
 
 pub fn releaseRows(self: *Proxy) void {
     var buf: [32]u8 = undefined;
+    self.output.screen.borrowCursor();
     self.terminal.write("\x1b7\x1b[r");
     for (0..self.layout.bar) |n| {
         self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H\x1b[2K", .{self.layout.barRow() + n}) catch "");
@@ -93,6 +94,7 @@ fn resizeForLinesWithWinsize(self: *Proxy, now_ms: i64, outer: std.posix.winsize
     // Install the new scroll region before acknowledging line changes or
     // forwarding child output. DECSTBM homes the cursor, so preserve the
     // position corrected by makeRoomForGrowth. Painting may happen later.
+    self.output.screen.borrowCursor();
     self.terminal.write("\x1b7");
     self.output.screen.writeRegion(&self.terminal);
     self.terminal.write("\x1b8");
@@ -132,6 +134,7 @@ pub fn makeRoomForGrowth(self: *Proxy, old: Layout, new: Layout) void {
     const scroll = row -| new.child.row;
     var buf: [64]u8 = undefined;
     if (scroll > 0) {
+        self.output.screen.borrowCursor();
         self.terminal.write("\x1b7");
         self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H", .{old.child.row}) catch "");
         for (0..scroll) |_| self.terminal.write("\n");
@@ -143,6 +146,7 @@ pub fn makeRoomForGrowth(self: *Proxy, old: Layout, new: Layout) void {
 pub fn eraseRows(self: *Proxy, old: Layout) void {
     if (old.bar == 0) return;
     var buf: [32]u8 = undefined;
+    self.output.screen.borrowCursor();
     self.terminal.write("\x1b7\x1b[?7l");
     for (0..old.bar) |n| self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H\x1b[2K", .{old.barRow() + n}) catch "");
     self.terminal.write("\x1b8");

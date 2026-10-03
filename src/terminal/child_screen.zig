@@ -32,12 +32,43 @@ pub const Screen = struct {
     /// The child saved the cursor (DECSC or SCOSC) and has not restored it
     /// yet. A repaint borrows the same save slot, so it must wait.
     cursor_saved: bool = false,
+    /// DEC cursor state is separate on the primary and alternate screens.
+    /// DECAWM is not restored by DECRC in xterm-compatible terminals.
+    saved_cursors: [2]SavedCursor = @splat(.{}),
+    alternate: bool = false,
     /// DECAWM as the child last set it. The paint turns wrapping off and
     /// needs to know what to put back.
     autowrap: bool = true,
     /// SGR-Pixels mouse mode (1016): the terminal reports mouse positions
     /// in pixels, which `Input` must compare against the child's pixel height.
     sgr_pixels: bool = false,
+
+    const SavedCursor = struct { origin_mode: bool = false, outstanding: bool = false };
+
+    pub fn saveCursor(self: *Screen) void {
+        self.borrowCursor();
+        self.saved_cursors[@intFromBool(self.alternate)].outstanding = true;
+        self.cursor_saved = true;
+    }
+
+    pub fn restoreCursor(self: *Screen) void {
+        const saved = &self.saved_cursors[@intFromBool(self.alternate)];
+        self.origin_mode = saved.origin_mode;
+        saved.outstanding = false;
+        self.cursor_saved = false;
+    }
+
+    /// A proxy paint/resize overwrites the real save slot. Keep the saved
+    /// mode in sync without treating the proxy's save as a child request.
+    pub fn borrowCursor(self: *Screen) void {
+        self.saved_cursors[@intFromBool(self.alternate)].origin_mode = self.origin_mode;
+    }
+
+    fn switchScreen(self: *Screen, alternate: bool) void {
+        self.alternate = alternate;
+        self.cursor_saved = self.saved_cursors[@intFromBool(alternate)].outstanding;
+        self.damaged = true;
+    }
 
     /// Writes the child's margins, kept off the bar.
     pub fn writeRegion(self: *const Screen, sink: anytype) void {
@@ -64,6 +95,8 @@ pub const Screen = struct {
         self.autowrap = true;
         self.sgr_pixels = false;
         self.cursor_saved = false;
+        self.saved_cursors = @splat(.{});
+        self.alternate = false;
         self.top = 0;
         self.bottom = 0;
         self.damaged = true;
@@ -113,10 +146,10 @@ pub const Screen = struct {
                     return;
                 },
                 's' => if (c.count == 0) {
-                    self.cursor_saved = true;
+                    self.saveCursor();
                 },
                 'u' => if (c.count == 0) {
-                    self.cursor_saved = false;
+                    self.restoreCursor();
                 },
                 else => {},
             }
@@ -132,7 +165,17 @@ pub const Screen = struct {
                 7 => self.autowrap = final == 'h',
                 6 => self.origin_mode = final == 'h',
                 1016 => self.sgr_pixels = final == 'h',
-                47, 1047, 1049 => self.damaged = true,
+                47, 1047 => self.switchScreen(final == 'h'),
+                1048 => if (final == 'h') self.saveCursor() else self.restoreCursor(),
+                1049 => {
+                    if (final == 'h') {
+                        if (!self.alternate) self.saveCursor();
+                        self.switchScreen(true);
+                    } else {
+                        self.switchScreen(false);
+                        self.restoreCursor();
+                    }
+                },
                 else => {},
             };
         } else if (c.marker == 0 and std.mem.eql(u8, c.intermediates, "!") and final == 'p') {

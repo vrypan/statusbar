@@ -284,6 +284,56 @@ test "an unrestored cursor save is tracked" {
     }
 }
 
+test "cursor restore restores origin mode before absolute row translation" {
+    const cases = [_]struct { input: []const u8, expected: []const u8, origin: bool }{
+        .{ .input = "\x1b7\x1b[?6h\x1b8\x1b[99;4H", .expected = "\x1b7\x1b[?6h\x1b8\x1b[10;4H", .origin = false },
+        .{ .input = "\x1b[?6h\x1b7\x1b[?6l\x1b8\x1b[99;4H", .expected = "\x1b[?6h\x1b7\x1b[?6l\x1b8\x1b[99;4H", .origin = true },
+        .{ .input = "\x1b[s\x1b[?6h\x1b[u\x1b[99d", .expected = "\x1b[s\x1b[?6h\x1b[u\x1b[10d", .origin = false },
+        .{ .input = "\x1b[?6h\x1b[s\x1b[?6l\x1b[u\x1b[99d", .expected = "\x1b[?6h\x1b[s\x1b[?6l\x1b[u\x1b[99d", .origin = true },
+        .{ .input = "\x1b[?6h\x1b8\x1b[99d", .expected = "\x1b[?6h\x1b8\x1b[10d", .origin = false },
+        .{ .input = "\x1b[?1048h\x1b[?6h\x1b[?1048l\x1b[99d", .expected = "\x1b[?1048h\x1b[?6h\x1b[?1048l\x1b[10d", .origin = false },
+    };
+    for (cases) |case| for (1..case.input.len + 1) |chunk| {
+        var out: Output = .{ .screen = .{ .bar = 1, .rows = 10 } };
+        const got = try translate(&out, case.input, chunk);
+        defer std.testing.allocator.free(got);
+        try std.testing.expectEqualStrings(case.expected, got);
+        try std.testing.expectEqual(case.origin, out.screen.origin_mode);
+        try std.testing.expect(!out.screen.cursor_saved);
+    };
+}
+
+test "cursor saves overwrite and persist on their own screen without restoring DECAWM" {
+    var out: Output = .{ .screen = .{ .bar = 1, .rows = 10 } };
+    var collector: Collector = .{};
+    defer collector.bytes.deinit(std.testing.allocator);
+    out.feed("\x1b7\x1b[?6h\x1b7\x1b[?6l\x1b8", &collector);
+    try std.testing.expect(out.screen.origin_mode);
+    out.feed("\x1b7\x1b[?47h\x1b[?6l\x1b7\x1b[?47l\x1b8", &collector);
+    try std.testing.expect(out.screen.origin_mode);
+    out.feed("\x1b[?47h\x1b8", &collector);
+    try std.testing.expect(!out.screen.origin_mode);
+    out.feed("\x1b[?47l\x1b[?6h\x1b[?1049h\x1b[?6l\x1b[?1049l", &collector);
+    try std.testing.expect(out.screen.origin_mode and !out.screen.alternate);
+    out.feed("\x1b7\x1b[?7l\x1b8", &collector);
+    try std.testing.expect(!out.screen.autowrap);
+    out.feed("\x1b7\x1b[?7h\x1b8", &collector);
+    try std.testing.expect(out.screen.autowrap);
+    out.feed("\x1bc\x1b[?6h\x1b8", &collector);
+    try std.testing.expect(!out.screen.origin_mode);
+}
+
+test "proxy saves replace saved origin mode without clearing an outstanding child save" {
+    var out: Output = .{ .screen = .{ .bar = 1, .rows = 10 } };
+    var collector: Collector = .{};
+    defer collector.bytes.deinit(std.testing.allocator);
+    out.feed("\x1b7\x1b[?6h", &collector);
+    out.screen.borrowCursor();
+    try std.testing.expect(out.screen.cursor_saved);
+    out.feed("\x1b[?6l\x1b8", &collector);
+    try std.testing.expect(out.screen.origin_mode and !out.screen.cursor_saved);
+}
+
 test "other OSCs and user variables pass through" {
     const inputs = [_][]const u8{
         "\x1b]1337;SetUserVar=foo=YmFy\x07",
