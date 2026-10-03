@@ -29,7 +29,7 @@ fn allDigits(text: []const u8) bool {
 /// Explicit names are case-sensitive letters, digits, `_` and `-`, with dots
 /// between nonempty segments. All-digit names are reserved for numeric IDs.
 pub fn validName(name: []const u8) bool {
-    if (name.len == 0 or name.len > max_name or allDigits(name)) return false;
+    if (name.len == 0 or name.len > max_name or @import("shared").config_prefix.numeric(@import("shared").config_prefix.root(name))) return false;
     var segments = std.mem.splitScalar(u8, name, '.');
     while (segments.next()) |segment| if (!names.validSegment(segment)) return false;
     return true;

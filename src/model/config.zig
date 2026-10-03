@@ -25,7 +25,7 @@
 //!
 //! `[line.NAME]` sections appear in the bar in the order they are first
 //! declared, whatever sections come between them. `[push]` holds the
-//! templates of lines created by `statusbar push`, so `push` remains a valid
+//! templates of lines created by `statusbar add`, so `push` remains a valid
 //! line name. `text` is the base template; `running`, `done`, `success` and
 //! `failed` replace it while a line has that status. `KEY .= FRAGMENT`
 //! appends to an explicitly assigned template key exactly, without adding
@@ -124,10 +124,6 @@ pub const Config = struct {
     commands_len: usize = 0,
     highlight: Highlight = .{},
 
-    /// List line and command names by prefix, without executing commands.
-    pub const list = @import("config_list.zig").list;
-    /// List the same prefix groups as versioned JSON.
-    pub const listJson = @import("config_list.zig").listJson;
     /// Describe the full parsed config as versioned JSON.
     pub const fullJson = @import("config_json.zig").write;
 
@@ -142,6 +138,18 @@ pub const Config = struct {
 
     pub fn commandList(self: *const Config) []const Command {
         return self.commands[0..self.commands_len];
+    }
+
+    /// Namespace conflicts with a prospective line (exact duplicates are
+    /// checked separately). Commands/colors only reserve dotted prefixes.
+    pub fn nameConflict(self: *const Config, name: []const u8) ?[]const u8 {
+        const prefixes = @import("shared").config_prefix;
+        for (self.lines) |line| if (prefixes.conflicts(name, line.name)) return line.name;
+        if (std.mem.indexOfScalar(u8, name, '.') == null) {
+            for (self.commandList()) |command| if (prefixes.contains(name, command.name)) return command.name;
+            for (self.palette().colors) |color| if (prefixes.contains(name, color.name)) return color.name;
+        }
+        return null;
     }
 
     pub fn commandInterval(self: *const Config, index: usize) i64 {
@@ -210,6 +218,10 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
         }
     }
     config.lines = specs;
+    for (config.lines) |line| if (config.nameConflict(line.name)) |other| return diag.nameConflict(line.name, other);
+    const prefixes = @import("shared").config_prefix;
+    for (config.commandList()) |command| if (std.mem.indexOfScalar(u8, command.name, '.') != null and prefixes.numeric(prefixes.root(command.name))) return fail(diag, "command group prefixes cannot be all digits");
+    for (config.palette().colors) |color| if (std.mem.indexOfScalar(u8, color.name, '.') != null and prefixes.numeric(prefixes.root(color.name))) return fail(diag, "color group prefixes cannot be all digits");
     config.push.keep = reader.push.keep orelse .right;
     config.push.variants = try compileVariants(arena, &reader.push.variants, default_push_text, commands, .push, diag);
     diag.* = .{};
@@ -224,6 +236,33 @@ fn compileVariants(arena: std.mem.Allocator, raw: *const sections.RawVariants, f
     }
     if (compiled[0] == null) compiled[0] = try templates.compile(arena, fallback, .{ .items = &.{} }, commands, kind, diag);
     return .{ .text = compiled[0].?, .running = compiled[1], .done = compiled[2], .success = compiled[3], .failed = compiled[4] };
+}
+
+test "standalone lines and first-segment groups have exclusive names" {
+    for ([_][]const u8{
+        "[line.disk]\n[line.disk.usage]\n",
+        "[line.disk.usage]\n[line.disk]\n",
+        "[line.disk]\n[command.disk.read]\nrun = true\n",
+        "[colors]\ndisk.accent = blue\n[line.disk]\n",
+        "[line.123.usage]\n",
+        "[line.base]\n[command.123.read]\nrun = true\n",
+        "[line.base]\n[colors]\n123.accent = red\n",
+    }) |text| {
+        var diag: Diagnostic = .{};
+        try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, text, &diag));
+        try std.testing.expect(diag.message.len > 0);
+    }
+    for ([_][]const u8{
+        "[line.disk.usage]\n[line.disk.free]\n[command.disk.usage]\nrun = true\n",
+        "[line.disk]\n[line.diskette.usage]\n",
+        "[line.disk.usage]\n[line.disk.usage.detail]\n",
+        "[line.disk2]\n[line.2disk.usage]\n",
+        "[line." ++ "x" ** 64 ++ "]\n",
+    }) |text| {
+        var diag: Diagnostic = .{};
+        var cfg = try parse(std.testing.allocator, text, &diag);
+        cfg.deinit();
+    }
 }
 
 /// Joins fragments exactly and compiles them once. A single fragment keeps

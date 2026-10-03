@@ -14,7 +14,7 @@ const ValueOp = types.ValueOp;
 pub const max_pushed = 128;
 pub const max_owner = 108;
 
-pub const Kind = enum { configured, pushed };
+pub const Kind = enum { configured, temp };
 
 pub const Line = struct {
     id: u64,
@@ -103,6 +103,13 @@ pub const Lines = struct {
         return self.find(.{ .name = name }) != null;
     }
 
+    pub fn nameConflict(self: *const Lines, name: []const u8) ?[]const u8 {
+        for (self.items.items) |*line| if (line.explicitName()) |own| {
+            if (@import("shared").config_prefix.conflicts(name, own)) return own;
+        };
+        return null;
+    }
+
     pub fn latestPushed(self: *const Lines) ?usize {
         return if (self.items.items.len > self.configured) self.items.items.len - 1 else null;
     }
@@ -127,9 +134,10 @@ pub const Lines = struct {
         if (name) |value| {
             if (!types.validName(value)) return error.InvalidName;
             if (self.nameTaken(value)) return error.NameTaken;
+            if (self.nameConflict(value) != null) return error.NameConflict;
         }
         if (owner) |path| if (path.len == 0 or path.len > max_owner) return error.InvalidOwner;
-        var line: Line = .{ .id = self.next_id, .kind = .pushed, .status = .running };
+        var line: Line = .{ .id = self.next_id, .kind = .temp, .status = .running };
         if (name) |value| line.setName(value);
         if (owner) |path| {
             @memcpy(line.owner_buf[0..path.len], path);
@@ -207,11 +215,31 @@ pub const Lines = struct {
     /// `removed` receives the IDs of configured lines the config dropped,
     /// and of the pushed line `exclude`, which the replacement also drops.
     pub fn reconcile(self: *const Lines, names: []const []const u8, removed: *std.ArrayList(u64), exclude: ?u64) !Lines {
+        return self.reconcileRemoving(names, removed, .{ .id = exclude });
+    }
+
+    pub const Exclusion = struct {
+        id: ?u64 = null,
+        prefix: ?[]const u8 = null,
+
+        pub fn matches(self: Exclusion, line: Line) bool {
+            if (line.id == self.id) return true;
+            if (self.prefix) |prefix| if (line.explicitName()) |name| {
+                return std.mem.eql(u8, prefix, name) or @import("shared").config_prefix.contains(prefix, name);
+            };
+            return false;
+        }
+    };
+
+    pub fn reconcileRemoving(self: *const Lines, names: []const []const u8, removed: *std.ArrayList(u64), exclude: Exclusion) !Lines {
         var result: Lines = .{ .allocator = self.allocator, .next_id = self.next_id };
         errdefer result.deinit();
         try result.items.ensureTotalCapacity(self.allocator, names.len + self.pushed().len);
         for (names, 0..) |name, index| {
-            for (self.pushed()) |*line| if (line.id != exclude) if (line.explicitName()) |own| if (std.mem.eql(u8, own, name)) return error.NameTaken;
+            for (self.pushed()) |*line| if (!exclude.matches(line.*)) if (line.explicitName()) |own| {
+                if (std.mem.eql(u8, own, name)) return error.NameTaken;
+                if (@import("shared").config_prefix.conflicts(name, own)) return error.NameConflict;
+            };
             const previous = for (self.items.items[0..self.configured]) |*line| {
                 if (std.mem.eql(u8, line.explicitName().?, name)) break line;
             } else null;
@@ -226,7 +254,7 @@ pub const Lines = struct {
         }
         result.configured = names.len;
         for (self.pushed()) |line| {
-            if (line.id == exclude) try removed.append(self.allocator, line.id) else result.items.appendAssumeCapacity(line);
+            if (exclude.matches(line)) try removed.append(self.allocator, line.id) else result.items.appendAssumeCapacity(line);
         }
         for (self.items.items[0..self.configured]) |*line| {
             const kept = for (names) |name| {
@@ -316,6 +344,24 @@ test "notes are unowned pushed lines with a normalized value" {
     try std.testing.expectEqualStrings("bad config at line 2", note.override().?);
     try std.testing.expectEqual(Status.failed, note.status);
     try std.testing.expect(note.producer() == null and note.explicitName() == null);
+}
+
+test "temporary names reserve groups in both directions" {
+    var lines = Lines.init(std.testing.allocator);
+    defer lines.deinit();
+    try lines.configure(&.{ "base", "disk.usage" });
+    try std.testing.expectError(error.NameConflict, lines.push("disk", null));
+    _ = try lines.push("disk.free", null);
+    _ = try lines.push("build", null);
+    try std.testing.expectError(error.NameConflict, lines.push("build.log", null));
+    var removed: std.ArrayList(u64) = .empty;
+    defer removed.deinit(std.testing.allocator);
+    try std.testing.expectError(error.NameConflict, lines.reconcile(&.{ "base", "disk" }, &removed, null));
+    var next = try lines.reconcileRemoving(&.{"base"}, &removed, .{ .prefix = "disk" });
+    defer next.deinit();
+    try std.testing.expectEqual(@as(usize, 2), next.items.items.len);
+    try std.testing.expectEqualStrings("build", next.items.items[1].explicitName().?);
+    try std.testing.expectEqual(@as(usize, 4), lines.items.items.len);
 }
 
 test "pushed lines are bounded and producers retire independently of status" {

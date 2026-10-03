@@ -192,21 +192,21 @@ def main():
 import json, pathlib
 library = pathlib.Path(sys.argv[2])
 for path in sorted(library.glob('*.statusbar')):
-    run('config', 'add', str(path))
+    run('config', 'import', str(path))
     settle()
 deadline = time.monotonic() + 5
 while True:
-    lines = json.loads(run('list', '--json'))['lines']
+    lines = json.loads(run('ls', '--json'))['lines']
     if len(lines) == len(list(library.glob('*.statusbar'))) + 1 or time.monotonic() >= deadline: break
     time.sleep(.05)
 assert len(lines) == len(list(library.glob('*.statusbar'))) + 1 and all(line['visible'] for line in lines), lines
 assert {line['name'].split('.')[0] for line in lines[1:]} == {path.stem for path in library.glob('*.statusbar')}, lines
 snapshot = run('config', 'show')
 assert '<module>' not in snapshot, snapshot
-listing = run('config', 'ls').splitlines()
-assert sorted(row.split()[0] for row in listing[1:]) == sorted(path.stem for path in library.glob('*.statusbar')), listing
-run('config', 'add', '-', input=(library / 'clock.statusbar').read_bytes(), code=2)
-run('config', 'add', str(library / 'clock.statusbar'), code=2)
+definitions = json.loads(run('config', 'show', '--json'))
+assert {line['name'].split('.')[0] for line in definitions['lines'][1:]} == {path.stem for path in library.glob('*.statusbar')}, definitions
+run('config', 'import', '-', input=(library / 'clock.statusbar').read_bytes(), code=2)
+run('config', 'import', str(library / 'clock.statusbar'), code=2)
 assert run('config', 'show') == snapshot
 time.sleep(2)
 for line in lines[1:]:

@@ -1,5 +1,5 @@
-//! `statusbar config`: show, check, load, add to, list, or remove from the
-//! config. With no subcommand, redirected stdin is loaded as a replacement.
+//! `statusbar config`: inspect, validate, replace or import definitions.
+//! With no subcommand, redirected stdin is loaded as a replacement.
 const std = @import("std");
 const Io = std.Io;
 const zecli = @import("zecli");
@@ -30,7 +30,7 @@ pub fn run(arena: std.mem.Allocator, io: Io, group: *const zecli.Command, stdout
             };
         },
         .load => load(arena, io, command, args[0], stderr),
-        .add => {
+        .import => {
             const token = try sessionToken(command, stderr) orelse return 2;
             const input = try readInput(arena, io, args[0], protocol.max_config, stderr);
             return switch (input) {
@@ -38,13 +38,7 @@ pub fn run(arena: std.mem.Allocator, io: Io, group: *const zecli.Command, stdout
                 .failed => |code| code,
             };
         },
-        .list => list(arena, io, command, stdout, stderr),
-        .remove => {
-            const prefix = args[0];
-            if (!@import("shared").config_prefix.valid(prefix)) return common.usageError(stderr, command, "PREFIX needs 1-62 letters, digits, underscores or hyphens");
-            const token = try sessionToken(command, stderr) orelse return 2;
-            return config_send.sendEdit(arena, io, token, prefix, true, "current config", stderr);
-        },
+        .path => showPath(arena, io, stdout, stderr),
     };
 }
 
@@ -132,14 +126,23 @@ fn readSession(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, 
 }
 
 fn show(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, source: []const u8, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
-    if (std.mem.eql(u8, source, "path")) return showPath(arena, io, stdout, stderr);
     const text = if (std.mem.eql(u8, source, "default")) config_source.default_config else text: {
         const selection = std.meta.stringToEnum(session_state.Selection, source) orelse
-            return common.usageError(stderr, command, "SOURCE must be current, startup, default, or path");
+            return common.usageError(stderr, command, "SOURCE must be current, startup, or default");
         var status: u8 = 0;
         break :text try readSession(arena, io, command, selection, stderr, &status) orelse return status;
     };
-    try stdout.writeAll(text);
+    if (command.enabled("json")) {
+        var diag: config.Diagnostic = .{};
+        var parsed = config.parse(arena, text, &diag) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            try stderr.print("statusbar: {s} config:{d}: {s}\n", .{ source, diag.line, diag.message });
+            try stderr.flush();
+            return 1;
+        };
+        defer parsed.deinit();
+        try parsed.fullJson(stdout);
+    } else try stdout.writeAll(text);
     try stdout.flush();
     return 0;
 }
@@ -162,29 +165,6 @@ fn showPath(arena: std.mem.Allocator, io: Io, stdout: *Io.Writer, stderr: *Io.Wr
             return 0;
         };
         try stdout.print("{s}\n", .{selected.path});
-    }
-    try stdout.flush();
-    return 0;
-}
-
-fn list(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
-    if (command.enabled("all") and !command.enabled("json")) return common.usageError(stderr, command, "--all requires --json");
-    var status: u8 = 0;
-    const text = try readSession(arena, io, command, .current, stderr, &status) orelse return status;
-    var diag: config.Diagnostic = .{};
-    var parsed = config.parse(arena, text, &diag) catch |err| {
-        if (err == error.OutOfMemory) return err;
-        try stderr.print("statusbar: current config:{d}: {s}\n", .{ diag.line, diag.message });
-        try stderr.flush();
-        return 1;
-    };
-    defer parsed.deinit();
-    if (command.enabled("all")) {
-        try parsed.fullJson(stdout);
-    } else if (command.enabled("json")) {
-        try parsed.listJson(stdout);
-    } else {
-        try parsed.list(stdout);
     }
     try stdout.flush();
     return 0;

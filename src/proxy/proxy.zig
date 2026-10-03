@@ -222,6 +222,8 @@ pub const Proxy = struct {
     held_config: [config.max_config]u8 = undefined,
     held_config_len: ?usize = null,
     held_config_edit: bool = false,
+    /// Advances when a prepared configuration/runtime generation commits.
+    runtime_revision: u64 = 0,
     /// Set once the child has been reaped, which ends the session even while
     /// background jobs still hold the pty open.
     child_status: ?sys.Wait = null,

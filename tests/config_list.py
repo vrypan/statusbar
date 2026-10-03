@@ -23,17 +23,32 @@ def run(*args, code=0):
     return result.stdout
 
 
-# list always shows the current config, so it needs a session and takes no
-# source selection.
-for args in ((), ("--json",), ("--all", "--json"), ("-a", "--json")):
-    for command in ("list", "ls"):
-        run(command, *args, code=2)
-        for source in ("default", "current", "startup", "invalid"):
-            run(command, *args, source, code=2)
-for option in ("--print", "--default", "--path", "--check=file", "--add", "--remove=x", "--list", "--debug"):
+for args in (('show',), ('show', '--json'), ('show', 'startup', '--json')):
+    run(*args, code=2)
+for command in ('list', 'ls', 'remove', 'rm'):
+    run(command, code=2)
+for option in ('--print', '--default', '--path', '--check=file', '--add', '--remove=x', '--list', '--debug'):
     run(option, code=2)
-    run("list", option, code=2)
-run("unknown", code=2)
+run('show', 'path', code=2)
+run('show', '--all', '--json', code=2)
+run('unknown', code=2)
+assert json.loads(run('show', 'default', '--json'))['lines']
+
+# Exercise generated completion rather than assuming registration is enough.
+completion = subprocess.check_output([binary, 'completion', 'bash'], text=True)
+for words, position, expected in (
+    ('statusbar ""', 1, {'run', 'add', 'rm', 'ls', 'set', 'bind', 'config', 'init', 'completion'}),
+    ('statusbar config ""', 2, {'load', 'import', 'check', 'show', 'path'}),
+    ('statusbar config show ""', 3, {'current', 'startup', 'default'}),
+    ('statusbar rm "-"', 2, {'--all', '-a', '--help', '-h'}),
+    ('statusbar ls "--"', 2, {'--temp', '--short', '--json', '--help'}),
+):
+    result = subprocess.run(
+        ['bash'], input=completion + f'\nCOMP_WORDS=({words}); COMP_CWORD={position}; '
+        '_statusbar; printf "%s\\n" "${COMPREPLY[@]}"\n',
+        text=True, capture_output=True, check=True,
+    )
+    assert set(result.stdout.splitlines()) == expected, (words, result.stdout, result.stderr)
 
 with tempfile.TemporaryDirectory(prefix="statusbar-config-list-") as directory:
     state = Path(directory) / "state"
@@ -54,32 +69,13 @@ with tempfile.TemporaryDirectory(prefix="statusbar-config-list-") as directory:
         f"current {len(current)}\n".encode() + startup + current
     )
     env.update(STATUSBAR_STATE=str(state), STATUSBAR_SESSION_ID=token)
-    for command in ("list", "ls"):
-        report = run(command)
-        assert "(no prefix) line.updated\n" in report and "test command.test.run\n" in report
-        assert "line.original" not in report
-        assert json.loads(run(command, "--json")) == {
-            "version": 1,
-            "groups": [
-                {"prefix": None, "lines": ["updated"], "commands": []},
-                {"prefix": "test", "lines": [], "commands": ["test.run"]},
-            ],
-        }
-        for source in ("default", "current", "startup"):
-            run(command, source, code=2)
-            run(command, "--json", source, code=2)
-    for command in ("list", "ls"):
-        for option in ("--all", "-a", "--debug"):
-            assert run(command, option, code=2) == ""
-        assert run(command, "--debug", "--json", code=2) == ""
     assert run("show") == current.decode()
     assert run("show", "current") == current.decode()
     assert run("show", "startup") == startup.decode()
     assert not marker.exists()
-    full_json = run("list", "--all", "--json")
-    assert full_json == run("ls", "--json", "--all")
-    assert full_json == run("list", "-a", "--json")
-    assert full_json == run("ls", "--json", "-a")
+    full_json = run("show", "--json")
+    assert full_json == run("show", "current", "--json")
+    assert json.loads(run("show", "startup", "--json"))["lines"][0]["name"] == "original"
     assert json.loads(full_json) == {
         "version": 1,
         "global": {"interval_ms": 3000, "style": "fg=white"},
@@ -127,20 +123,8 @@ with tempfile.TemporaryDirectory(prefix="statusbar-config-list-") as directory:
         f"statusbar-state 3\nsession {token}\nstartup {len(startup)}\n"
         f"current {len(grouped)}\n".encode() + startup + grouped
     )
-    grouped_json = run("list", "--json")
-    assert grouped_json == run("ls", "--json")
-    assert grouped_json.endswith("\n")
-    assert json.loads(grouped_json) == {
-        "version": 1,
-        "groups": [
-            {"prefix": None, "lines": ["prompt", "rule"], "commands": ["host"]},
-            {"prefix": "a", "lines": ["a.second", "a.first.details"],
-             "commands": ["a.second", "a.first"]},
-            {"prefix": "only", "lines": [], "commands": ["only.fetch"]},
-            {"prefix": "z", "lines": ["z.last"], "commands": ["z.fetch"]},
-        ],
-    }
-    details = json.loads(run("list", "--all", "--json"))
+    details = json.loads(run("show", "--json"))
+    assert [line["name"] for line in details["lines"]] == ["z.last", "prompt", "a.second", "a.first.details", "rule"]
     assert details["global"] == {"interval_ms": 5000, "style": None}
     assert details["colors"] == []
     assert details["push"]["spinner"] == []
@@ -157,14 +141,11 @@ with tempfile.TemporaryDirectory(prefix="statusbar-config-list-") as directory:
     assert [c["index"] for c in details["commands"]] == list(range(5))
     assert not marker.exists()
     env["STATUSBAR_SESSION_ID"] = "f" * 32
-    run("list", code=1)
-    run("list", "--all", code=2)
-    run("list", "--json", code=1)
-    run("list", "--all", "--json", code=1)
+    run("show", code=1)
+    run("show", "--json", code=1)
     env["STATUSBAR_SESSION_ID"] = token
     state.unlink()
-    run("list", code=1)
-    run("list", "--json", code=1)
-    run("list", "--all", "--json", code=1)
+    run("show", code=1)
+    run("show", "--json", code=1)
 
-print("config list: passed")
+print("config show: passed")

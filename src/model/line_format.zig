@@ -157,7 +157,7 @@ test "template text stays markup while data is escaped" {
     var commands: CommandOutputs = .{ .io = std.testing.io, .gpa = std.testing.allocator, .commands = &.{} };
     _ = commands.keep(0, "#[bold]out");
     try environment.map().put("STATUSBAR_TEST_ENV", "#[bold] me");
-    const line: Line = .{ .id = 7, .kind = .pushed, .status = .running };
+    const line: Line = .{ .id = 7, .kind = .temp, .status = .running };
     var buffer: [256]u8 = undefined;
     try std.testing.expectEqualStrings(
         "#[fg=red]##[x] ## ##(v) |##[bold]out|##[bold] me||b|7|running|80",

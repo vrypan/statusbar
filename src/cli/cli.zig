@@ -1,18 +1,6 @@
-//! The command-line interface, described once for parsing, help and shell
-//! completion.
-//!
-//!     statusbar [run] [options] [-- COMMAND...]
-//!     statusbar set NAME [TEXT...] [--status STATE] | set NAME --reset [--status STATE]
-//!     statusbar push [NAME] [--status STATE] [--fifo | -- COMMAND...]
-//!     statusbar pop [NAME | --all]
-//!     statusbar list [--pushed] [--short] [--json]
-//!     statusbar temp list [--short] [--json]
-//!     statusbar temp add [NAME] [--status STATE] [--fifo | -- COMMAND...]
-//!     statusbar temp remove [NAME | --all]
-//!     statusbar bind [-u] NAME
-//!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME] [--no-plus]
-//!     statusbar config [show [SOURCE] | check FILE | load FILE | add FILE | list [--json [--all]] | remove PREFIX]
-//!     statusbar completion <bash|zsh|fish>
+//! The CLI is described once for parsing, help and completion.
+//! Root add/rm/ls/set/bind manipulate live lines; config manages definitions.
+//! run is the default. Temporary lines use the config's [push] templates.
 
 const std = @import("std");
 const zecli = @import("zecli");
@@ -40,40 +28,39 @@ const config_file_argument = zecli.ArgumentSpec{
     .completion = .files,
 };
 
-pub const config_sources = [_][]const u8{ "current", "startup", "default", "path" };
+pub const config_sources = [_][]const u8{ "current", "startup", "default" };
 
 const config_commands = [_]zecli.CommandSpec{
     .{
         .name = "show",
-        .description = "Print a saved, built-in, or selected config",
-        .usage = "config show [current|startup|default|path]",
+        .description = "Print config source or parsed JSON",
+        .usage = "config show [current|startup|default] [--json]",
+        .flags = &.{.{ .name = "json", .description = "Print the full parsed config as versioned JSON" }},
         .arguments = &.{.{ .name = "SOURCE", .description = "What to show (default: current)", .completion = .{ .values = &config_sources } }},
         .double_dash = .positionals,
-        .help_sections = &.{.{
-            .title = "SOURCES",
-            .entries = &.{
-                .{ .name = "current", .description = "Active config text, including live edits" },
-                .{ .name = "startup", .description = "Exact config text originally loaded by this session" },
-                .{ .name = "default", .description = "Built-in default config; works outside a session" },
-                .{ .name = "path", .description = "Config path a new session would use; works outside a session" },
-            },
-        }},
         .extra_help =
-        \\current and startup require a running session. Both preserve the
-        \\config text and exclude values and statuses set at runtime.
-        \\
-        \\path shows the file a new session would use: $STATUSBAR_CONFIG, then
-        \\$XDG_CONFIG_HOME/statusbar/config.statusbar (or
-        \\~/.config/statusbar/config.statusbar when $XDG_CONFIG_HOME is unset).
-        \\A missing default file shows 'built-in'. It does not describe where
-        \\the running session's config came from.
+        \\current is the active config, including session edits; startup is
+        \\the original config. Both require a running session. default is the
+        \\built-in config and works outside a session.
+        \\Plain output preserves source text and comments and can be reloaded.
+        \\--json includes compiled templates and effective settings, without
+        \\running commands. JSON is for inspection and cannot be reloaded.
+        \\Neither output includes runtime values or statuses.
         ++ "\n",
-        .examples = &.{
-            "config show",
-            "config show startup > original.statusbar",
-            "config show default > my.statusbar",
-            "config show path",
-        },
+        .examples = &.{ "config show", "config show --json", "config show startup > original.statusbar", "config show default > my.statusbar" },
+    },
+    .{
+        .name = "path",
+        .description = "Print the config path selected for a new session",
+        .usage = "config path",
+        .double_dash = .positionals,
+        .extra_help =
+        \\Shows $STATUSBAR_CONFIG, then the default path under
+        \\$XDG_CONFIG_HOME/statusbar or ~/.config/statusbar. A missing default
+        \\file shows 'built-in'. Works outside a session and describes the
+        \\path a new session would use, rather than the active config's origin.
+        ++ "\n",
+        .examples = &.{"config path"},
     },
     .{
         .name = "check",
@@ -102,9 +89,9 @@ const config_commands = [_]zecli.CommandSpec{
         .examples = &.{ "config load my.statusbar", "config show startup | statusbar config load -" },
     },
     .{
-        .name = "add",
-        .description = "Add lines, commands and colors to the running bar",
-        .usage = "config add FILE",
+        .name = "import",
+        .description = "Import lines, commands and colors into the running bar",
+        .usage = "config import FILE",
         .arguments = &.{config_file_argument},
         .double_dash = .positionals,
         .extra_help =
@@ -112,48 +99,7 @@ const config_commands = [_]zecli.CommandSpec{
         \\config. Names must be unique within each kind; duplicates are rejected.
         \\Global settings require a full replacement with `load`.
         ++ "\n",
-        .examples = &.{ "config add extra.statusbar", "config add - < extra.statusbar" },
-    },
-    .{
-        .name = "list",
-        .aliases = &.{"ls"},
-        .description = "List the current config's definitions by prefix",
-        .usage = "config list [--json [--all]]",
-        .flags = &.{
-            .{ .name = "all", .short = 'a', .description = "Include the full parsed config; requires --json" },
-            .{ .name = "json", .description = "Print names or full config details as versioned JSON" },
-        },
-        .extra_help =
-        \\Lists line and command names in the current config, one line per
-        \\prefix (the part of a name before its first dot). Requires a running
-        \\session.
-        \\
-        \\--json prints version and groups. Each group has prefix (null for
-        \\unprefixed names), lines and commands containing full names without
-        \\section-kind labels. Groups and names keep the same order as the
-        \\plain listing.
-        \\
-        \\--all (-a) requires --json and includes global settings, colors,
-        \\lines with compiled templates and expanded defaults, commands with
-        \\effective intervals, push templates and spinner frames, and highlight
-        \\settings. It excludes runtime values and statuses, and is not a
-        \\reloadable config. No form runs commands.
-        ++ "\n",
-        .examples = &.{ "config list", "config list --json", "config list --all --json", "config ls -a --json" },
-    },
-    .{
-        .name = "remove",
-        .aliases = &.{"rm"},
-        .description = "Remove a prefix's definitions from the running bar",
-        .usage = "config remove PREFIX",
-        .arguments = &.{.{ .name = "PREFIX", .description = "Prefix of the PREFIX.* lines, commands and colors to remove", .required = true }},
-        .double_dash = .positionals,
-        .extra_help =
-        \\Removes PREFIX.* definitions, rejecting the removal when remaining
-        \\definitions depend on them. Surviving lines keep their values,
-        \\statuses, FIFOs and command processes.
-        ++ "\n",
-        .examples = &.{"config remove extra"},
+        .examples = &.{ "config import extra.statusbar", "config import - < extra.statusbar" },
     },
 };
 
@@ -165,17 +111,15 @@ const config_application = zecli.comptimeValidated(.{
     .extra_help =
     \\With redirected or piped input and no command, loads it as a
     \\replacement config. Run directly in a terminal, shows this help.
-    \\Commands other than load, add and check ignore stdin.
+    \\Commands other than load, import and check ignore stdin.
     \\FILE may be - to read stdin.
     ++ "\n",
     .examples = &.{
         "config show",
-        "config list",
         "config check my.statusbar",
         "config < my.statusbar",
         "config show default | statusbar config",
-        "config add extra.statusbar",
-        "config remove extra",
+        "config import extra.statusbar",
     },
 });
 
@@ -200,7 +144,7 @@ const temp_remove_flags = [_]zecli.FlagSpec{
 };
 
 const temp_remove_arguments = [_]zecli.ArgumentSpec{
-    .{ .name = "NAME", .description = "Temporary line name or ID; omit to remove the latest" },
+    .{ .name = "NAME", .description = "Top-level name or temporary line ID; omit for the newest temporary line" },
 };
 
 const list_output_help =
@@ -210,75 +154,6 @@ const list_output_help =
     \\The table escapes controls and shows <default> for no override.
     \\--short keeps only id, name, status and value in either output format.
 ++ "\n";
-
-const temp_application = zecli.comptimeValidated(.{
-    .name = "temp",
-    .description = "Manage temporary lines in the current session",
-    .usage = "temp COMMAND [ARGS]",
-    .commands = &.{
-        .{
-            .name = "list",
-            .aliases = &.{"ls"},
-            .description = "List temporary lines",
-            .usage = "temp list [--short] [--json]",
-            .flags = &list_output_flags,
-            .extra_help =
-            \\Lists temporary lines in display order, including
-            \\hidden and completed lines. Requires a running statusbar session.
-            \\
-            ++ list_output_help,
-            .examples = &.{ "temp ls", "temp list --short", "temp ls --json" },
-        },
-        .{
-            .name = "add",
-            .description = "Add a temporary line, optionally running a command",
-            .usage = "temp add [NAME] [--status STATE] [--fifo | -- COMMAND [ARG...]]",
-            .flags = &temp_add_flags,
-            .arguments = &temp_add_arguments,
-            .extra_help =
-            \\Adds a line below configured lines, using the [push] templates.
-            \\With terminal stdin and no command or FIFO, creates an empty line,
-            \\prints its name (or numeric ID), and returns. Update it with set.
-            \\Read stdin from a pipe or file, or run a command after --. Each new
-            \\line of output replaces the value; the last one stays visible.
-            \\Command stdout and stderr are streamed into the line. Background
-            \\commands receive /dev/null instead of terminal stdin, while piped
-            \\or redirected input is preserved. COLUMNS reflects the available width.
-            \\--status sets the initial status in every mode (default: running).
-            \\
-            \\When input ends, the status becomes done for stdin, or success or
-            \\failed from the command's result. Prints the line's name or ID at
-            \\completion, except when backgrounded with stdout on the terminal.
-            \\Command mode exits with the command's status. With --fifo, prints
-            \\the FIFO path immediately; closing a writer keeps the value and status.
-            \\Remove the line with `statusbar temp rm NAME`.
-            ++ "\n",
-            .examples = &.{
-                "temp add build -- make",
-                "tail -n 0 -f app.log | statusbar temp add log &",
-                "temp add download --status running --fifo",
-            },
-        },
-        .{
-            .name = "remove",
-            .aliases = &.{"rm"},
-            .description = "Remove temporary lines",
-            .usage = "temp remove [NAME | --all]",
-            .flags = &temp_remove_flags,
-            .arguments = &temp_remove_arguments,
-            .extra_help =
-            \\Removes a temporary line and its FIFO. Omit NAME to remove the
-            \\latest temporary line. Configured lines cannot be removed here.
-            \\Removing a line does not stop the command producing its output.
-            \\--all (-a) succeeds even when there are no temporary lines.
-            ++ "\n",
-            .examples = &.{ "temp rm build", "temp remove 7", "temp rm", "temp rm --all" },
-        },
-    },
-    .examples = &.{ "temp add build -- make", "temp ls", "temp rm build" },
-});
-
-pub const TempCommandName = zecli.CommandEnum(temp_application);
 
 const commands = [_]zecli.CommandSpec{
     .{
@@ -347,9 +222,9 @@ const commands = [_]zecli.CommandSpec{
         },
     },
     .{
-        .name = "push",
-        .description = "Add a line, optionally streaming text into it",
-        .usage = "statusbar push [NAME] [--status STATE] [--fifo | -- COMMAND [ARG...]]",
+        .name = "add",
+        .description = "Add a temporary line, optionally streaming text into it",
+        .usage = "statusbar add [NAME] [--status STATE] [--fifo | -- COMMAND [ARG...]]",
         .flags = &temp_add_flags,
         .arguments = &temp_add_arguments,
         .extra_help =
@@ -364,49 +239,54 @@ const commands = [_]zecli.CommandSpec{
         \\Background commands receive /dev/null instead of terminal stdin;
         \\piped or redirected input is preserved.
         \\
-        \\At the end of input, push prints the line's name (its numeric ID when
+        \\At the end of input, add prints the line's name (its numeric ID when
         \\unnamed) and sets its status: done for stdin, success or failed from
         \\the command's result. It stays quiet when run in the background with
         \\stdout on the terminal. Command mode exits with the command's status.
-        \\With --fifo, push prints the FIFO path at once; writes to it update
+        \\With --fifo, add prints the FIFO path at once; writes to it update
         \\the value, and closing it keeps the value and status.
-        \\Use `statusbar pop NAME` to remove the line.
+        \\Use `statusbar rm NAME` to remove the line.
         ++ "\n",
         .examples = &.{
-            "tail -n 0 -f app.log | statusbar push applog &",
-            "statusbar push download -- curl --progress-bar -o /dev/null URL",
-            "name=$(printf 'Done\\n' | statusbar push)",
-            "fifo=$(statusbar push build --fifo)",
+            "tail -n 0 -f app.log | statusbar add applog &",
+            "statusbar add download -- curl --progress-bar -o /dev/null URL",
+            "name=$(printf 'Done\\n' | statusbar add)",
+            "fifo=$(statusbar add build --fifo)",
         },
     },
     .{
-        .name = "pop",
-        .description = "Remove pushed lines",
-        .usage = "statusbar pop [NAME | --all]",
+        .name = "rm",
+        .description = "Remove a standalone line, group, or temporary line ID",
+        .usage = "statusbar rm [NAME|ID] | statusbar rm --all",
         .flags = &temp_remove_flags,
         .arguments = &temp_remove_arguments,
+        .double_dash = .positionals,
         .extra_help =
-        \\Removes a pushed line and its FIFO. Configured lines cannot be popped.
+        \\Names remove a standalone line or a whole NAME.* group, including
+        \\its commands, colors and temporary lines. Names cannot contain dots.
+        \\A standalone name cannot coexist with a group of the same prefix.
+        \\Numeric IDs remove temporary lines only. With no target, removes
+        \\the newest temporary line. --all (-a) removes all temporary lines.
         \\Removing a line does not stop the command producing its output.
-        \\--all succeeds even when there are no pushed lines.
+        \\--all succeeds even when there are no temporary lines.
         ++ "\n",
-        .examples = &.{ "statusbar pop", "statusbar pop build", "statusbar pop 7", "statusbar pop --all" },
+        .examples = &.{ "statusbar rm", "statusbar rm build", "statusbar rm 7", "statusbar rm --all" },
     },
     .{
-        .name = "list",
+        .name = "ls",
         .description = "List the current session's lines",
-        .usage = "statusbar list [--pushed] [--short] [--json]",
+        .usage = "statusbar ls [--temp] [--short] [--json]",
+        .double_dash = .positionals,
         .flags = &([_]zecli.FlagSpec{
-            .{ .name = "pushed", .description = "Show only pushed lines" },
+            .{ .name = "temp", .description = "Show only temporary lines" },
         } ++ list_output_flags),
         .extra_help =
-        \\Lists configured and pushed lines in display order, including hidden
-        \\lines. Requires a live statusbar session. --pushed filters the result.
+        \\Lists configured and temporary lines in display order, including hidden
+        \\lines. Requires a live statusbar session. --temp filters the result.
         \\
         ++ list_output_help,
-        .examples = &.{ "statusbar list", "statusbar list --short", "statusbar list --pushed --short --json" },
+        .examples = &.{ "statusbar ls", "statusbar ls --short", "statusbar ls --temp --short --json" },
     },
-    zecli.mount("temp", temp_application),
     .{
         .name = "bind",
         .description = "Create or remove a line's FIFO",
@@ -415,7 +295,7 @@ const commands = [_]zecli.CommandSpec{
         .arguments = &.{.{ .name = "NAME", .description = "Line name or ID", .required = true }},
         .double_dash = .positionals,
         .extra_help =
-        \\Creates a named pipe for an existing configured or pushed line and
+        \\Creates a named pipe for an existing configured or temporary line and
         \\prints its absolute path. Text written to it replaces the line's
         \\value; its latest nonempty line stays visible after writers close.
         \\The pipe is named after the line (its ID when unnamed), in the
@@ -544,8 +424,9 @@ test "run is the default command" {
         .{ &.{ "--", "set" }, "run" },
         .{ &.{ "set", "prompt" }, "set" },
         .{ &.{ "bind", "prompt" }, "bind" },
-        .{ &.{ "list", "--pushed", "--json" }, "list" },
-        .{ &.{ "temp", "ls", "--json" }, "temp" },
+        .{ &.{ "ls", "--temp", "--json" }, "ls" },
+        .{ &.{ "add", "build" }, "add" },
+        .{ &.{ "rm", "disk" }, "rm" },
         .{ &.{ "run", "-c", "my.statusbar" }, "run" },
         .{ &.{"--help"}, "--help" },
         .{ &.{"-V"}, "-V" },
@@ -554,4 +435,14 @@ test "run is the default command" {
         const routed = try routeDefaultCommand(arena, case[0]);
         try std.testing.expectEqualStrings(case[1], routed[0]);
     }
+}
+
+test "only the agreed root and configuration commands are registered" {
+    const root_names = [_][]const u8{ "run", "add", "rm", "ls", "set", "bind", "config", "init", "completion" };
+    try std.testing.expectEqual(root_names.len, application.commands.len);
+    for (root_names) |name| try std.testing.expect(findCommand(name) != null);
+    for ([_][]const u8{ "push", "pop", "list", "temp", "line", "unbind" }) |name| try std.testing.expect(findCommand(name) == null);
+    const config_names = [_][]const u8{ "show", "path", "check", "load", "import" };
+    try std.testing.expectEqual(config_names.len, config_application.commands.len);
+    for (config_names) |name| try std.testing.expect(zecli.findCommand(config_application, name) != null);
 }

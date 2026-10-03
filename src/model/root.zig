@@ -21,7 +21,6 @@ test {
     _ = command_outputs;
     _ = config;
     _ = @import("config_json.zig");
-    _ = @import("config_list.zig");
     _ = config_add;
     _ = config_remove;
     _ = config_sections;

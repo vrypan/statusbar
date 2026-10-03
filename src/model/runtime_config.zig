@@ -41,6 +41,10 @@ pub const Runtime = struct {
     /// Parses `text` and prepares it against the session's `live` lines,
     /// dropping the pushed line `exclude`.
     pub fn initText(gpa: std.mem.Allocator, io: std.Io, text: []const u8, live: *const Lines, exclude: ?u64, cols: u16, diag: *config.Diagnostic) !Runtime {
+        return initTextRemoving(gpa, io, text, live, .{ .id = exclude }, cols, diag);
+    }
+
+    pub fn initTextRemoving(gpa: std.mem.Allocator, io: std.Io, text: []const u8, live: *const Lines, exclude: Lines.Exclusion, cols: u16, diag: *config.Diagnostic) !Runtime {
         const owned_text = try gpa.dupe(u8, text);
         errdefer gpa.free(owned_text);
         const cfg = try gpa.create(config.Config);
@@ -53,8 +57,12 @@ pub const Runtime = struct {
         errdefer removed.deinit(gpa);
         const pending = try gpa.create(Lines);
         errdefer gpa.destroy(pending);
-        pending.* = live.reconcile(names, &removed, exclude) catch |err| {
-            if (err == error.NameTaken) diag.* = .{ .message = "a configured line name is already used by a pushed line" };
+        for (live.pushed()) |line| if (!exclude.matches(line)) if (line.explicitName()) |name| {
+            if (cfg.nameConflict(name)) |other| return diag.nameConflict(name, other);
+        };
+        pending.* = live.reconcileRemoving(names, &removed, exclude) catch |err| {
+            if (err == error.NameTaken) diag.* = .{ .message = "a configured line name is already used by a temporary line" };
+            if (err == error.NameConflict) diag.* = .{ .message = "a standalone line cannot also be a group prefix" };
             return err;
         };
         errdefer pending.deinit();
@@ -143,6 +151,43 @@ test "replacement preparation cleans every allocation failure" {
             var diag: config.Diagnostic = .{};
             var candidate = try Runtime.initText(gpa, std.testing.io, "[line.a]\n[line.b]\ntext = \"#(value)#(fill:-)x\"\n", &live, null, 80, &diag);
             candidate.deinit();
+        }
+    }.run, .{});
+}
+
+test "config replacement validates temporary names against command and color groups" {
+    var live = Lines.init(std.testing.allocator);
+    defer live.deinit();
+    try live.configure(&.{"base"});
+    const id = try live.push("disk", "owner");
+    for ([_][]const u8{
+        "[line.base]\n[command.disk.read]\nrun = true\n",
+        "[line.base]\n[colors]\ndisk.accent = red\n",
+    }) |text| {
+        var diag: config.Diagnostic = .{};
+        try std.testing.expectError(error.InvalidConfig, Runtime.initText(std.testing.allocator, std.testing.io, text, &live, null, 80, &diag));
+        try std.testing.expect(std.mem.indexOf(u8, diag.message, "disk") != null);
+        try std.testing.expect(live.findId(id) != null);
+    }
+}
+
+test "group removal prepares both kinds and cleans every allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var live = Lines.init(gpa);
+            defer live.deinit();
+            try live.configure(&.{ "base", "disk.usage" });
+            const job = try live.push("disk.job", "owner");
+            const kept = try live.push("other", null);
+            var diag: config.Diagnostic = .{};
+            var candidate = try Runtime.initTextRemoving(gpa, std.testing.io, "[line.base]\n", &live, .{ .prefix = "disk" }, 80, &diag);
+            defer candidate.deinit();
+            try std.testing.expectEqual(@as(usize, 4), live.items.items.len);
+            try std.testing.expect(live.findId(job) != null);
+            const pending = candidate.pending_lines.?;
+            try std.testing.expectEqual(@as(usize, 2), pending.items.items.len);
+            try std.testing.expect(pending.findId(job) == null and pending.findId(kept) != null);
+            try std.testing.expectEqualSlices(u64, &.{ job, 2 }, candidate.removed.items);
         }
     }.run, .{});
 }

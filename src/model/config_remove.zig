@@ -4,14 +4,21 @@ const config = @import("config.zig");
 const statements = @import("config_statements.zig");
 const prefixes = @import("shared").config_prefix;
 
+pub fn hasTarget(cfg: *const config.Config, name: []const u8) bool {
+    for (cfg.lines) |line| if (std.mem.eql(u8, name, line.name) or prefixes.contains(name, line.name)) return true;
+    for (cfg.commandList()) |command| if (prefixes.contains(name, command.name)) return true;
+    for (cfg.palette().colors) |color| if (prefixes.contains(name, color.name)) return true;
+    return false;
+}
+
 pub fn remove(gpa: std.mem.Allocator, source: []const u8, prefix: []const u8, diag: *config.Diagnostic) ![]u8 {
     diag.* = .{};
-    if (!prefixes.valid(prefix)) return statements.fail(diag, "invalid removal prefix");
+    if (!@import("session").line_types.validName(prefix) or std.mem.indexOfScalar(u8, prefix, '.') != null) return statements.fail(diag, "removal needs a top-level name without dots");
     var cfg = try config.parse(gpa, source, diag);
     defer cfg.deinit();
     var found = false;
     for (cfg.lines) |line| {
-        if (prefixes.contains(prefix, line.name)) {
+        if (std.mem.eql(u8, prefix, line.name) or prefixes.contains(prefix, line.name)) {
             found = true;
         } else {
             try checkVariants(&cfg, &line.variants, prefix, diag);
@@ -49,7 +56,7 @@ pub fn remove(gpa: std.mem.Allocator, source: []const u8, prefix: []const u8, di
             .section => |s| {
                 colors = std.mem.eql(u8, s.name, "colors");
                 const name = if (std.mem.startsWith(u8, s.name, "line.")) s.name[5..] else if (std.mem.startsWith(u8, s.name, "command.")) s.name[8..] else "";
-                section_keep = !prefixes.contains(prefix, name);
+                section_keep = !prefixes.contains(prefix, name) and !(std.mem.startsWith(u8, s.name, "line.") and std.mem.eql(u8, prefix, name));
                 keep = section_keep;
             },
             .assignment => |s| keep = section_keep and !(colors and prefixes.contains(prefix, s.key)),
@@ -126,4 +133,17 @@ test "removal sees colors and commands referenced only by an unexpanded default"
         var diag: config.Diagnostic = .{};
         try std.testing.expectError(error.InvalidConfig, remove(std.testing.allocator, source, "disk", &diag));
     }
+}
+
+test "standalone removal preserves unprefixed commands colors and source" {
+    const source = "# saved\n[line.base]\ntext = #(command:disk)\n[line.disk]\n[command.disk]\nrun = true\n[colors]\ndisk = red\n";
+    var diag: config.Diagnostic = .{};
+    const result = try remove(std.testing.allocator, source, "disk", &diag);
+    defer std.testing.allocator.free(result);
+    var cfg = try config.parse(std.testing.allocator, result, &diag);
+    defer cfg.deinit();
+    try std.testing.expectEqual(@as(usize, 1), cfg.lines.len);
+    try std.testing.expectEqual(@as(usize, 1), cfg.commands_len);
+    try std.testing.expectEqual(@as(usize, 1), cfg.colors_len);
+    try std.testing.expect(std.mem.startsWith(u8, result, "# saved\n"));
 }

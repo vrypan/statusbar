@@ -20,8 +20,12 @@ const stdin_fd = @import("proxy.zig").stdin_fd;
 /// config warning and the bindings of configured lines it dropped. An
 /// `edit` (an addition or removal) also keeps surviving commands running.
 fn replaceConfig(self: *Proxy, text: []const u8, now_ms: i64, diag: *config.Diagnostic, edit: bool) !void {
+    _ = try replaceConfigRemoving(self, text, now_ms, diag, edit, .{ .id = self.warning_id });
+}
+
+fn replaceConfigRemoving(self: *Proxy, text: []const u8, now_ms: i64, diag: *config.Diagnostic, edit: bool, exclude: @import("session").lines.Lines.Exclusion) !bool {
     const outer = sys.getWinsize(stdin_fd) catch return error.TerminalSizeUnavailable;
-    var candidate = try Runtime.initText(self.gpa, self.io, text, self.lines, self.warning_id, outer.col, diag);
+    var candidate = try Runtime.initTextRemoving(self.gpa, self.io, text, self.lines, exclude, outer.col, diag);
     errdefer candidate.deinit();
     candidate.renderer.palette = self.runtime.renderer.palette;
     candidate.renderer.palette_revision = self.runtime.renderer.palette_revision;
@@ -58,10 +62,15 @@ fn replaceConfig(self: *Proxy, text: []const u8, now_ms: i64, diag: *config.Diag
     if (edit) candidate.source.commands.adoptExisting(&self.runtime.source.commands, candidate.cfg, self.runtime.cfg);
     candidate.commitLines(self.lines);
     std.mem.swap(Runtime, self.runtime, &candidate);
+    self.runtime_revision +%= 1;
     self.runtime.source.lines = self.lines;
     self.warning_id = null;
+    var cleanup_ok = true;
     for (self.runtime.removed.items) |id| {
-        if (self.fifos.findLine(id)) |index| self.fifos.remove(index) catch |err| if (self.log) |log| log.write("FIFO cleanup failed after reload: {t}", .{err});
+        if (self.fifos.findLine(id)) |index| self.fifos.remove(index) catch |err| {
+            cleanup_ok = false;
+            if (self.log) |log| log.write("FIFO cleanup failed after reload: {t}", .{err});
+        };
     }
     self.renderer = &self.runtime.renderer;
     self.output.screen.resize(new_layout.bar, new_layout.child.row);
@@ -75,6 +84,40 @@ fn replaceConfig(self: *Proxy, text: []const u8, now_ms: i64, diag: *config.Diag
     self.output.screen.damaged = true;
     self.requestPaint(now_ms);
     candidate.deinit();
+    return cleanup_ok;
+}
+
+/// Names remove a standalone line or all definitions and temporary lines
+/// under a prefix, in one prepared configuration/runtime generation.
+pub fn removeName(self: *Proxy, name: []const u8, now_ms: i64) @import("session").line_protocol.Reply {
+    if (!@import("session").line_types.validName(name) or std.mem.indexOfScalar(u8, name, '.') != null)
+        return .{ .rejected = "removal needs a top-level name without dots" };
+    // A queued replacement must never resurrect a group after this reply.
+    if (self.held_config_len != null) return .{ .rejected = "a configuration update is pending; retry removal after it applies" };
+    const configured = config_remove.hasTarget(self.runtime.cfg, name);
+    var temporary = false;
+    const exclusion: @import("session").lines.Lines.Exclusion = .{ .id = self.warning_id, .prefix = name };
+    for (self.lines.pushed()) |line| if (exclusion.matches(line) and line.id != self.warning_id) {
+        temporary = true;
+        break;
+    };
+    if (!configured and !temporary) return .{ .rejected = "no such line or group" };
+    const current = self.runtime.owned_text orelse self.session_state.startup;
+    var diag: config.Diagnostic = .{};
+    const text = (if (configured) config_remove.remove(self.gpa, current, name, &diag) else self.gpa.dupe(u8, current)) catch |err| {
+        return removalError(self, &diag, err);
+    };
+    defer self.gpa.free(text);
+    const clean = replaceConfigRemoving(self, text, now_ms, &diag, true, exclusion) catch |err| return removalError(self, &diag, err);
+    return if (clean) .ok else .{ .rejected = "lines removed, but FIFO cleanup failed" };
+}
+
+fn removalError(self: *Proxy, diag: *const config.Diagnostic, err: anyerror) @import("session").line_protocol.Reply {
+    const reason = if (diag.message.len > 0)
+        std.fmt.bufPrint(&self.control_reply, "{s}", .{diag.message}) catch "cannot remove the line or group"
+    else
+        std.fmt.bufPrint(&self.control_reply, "cannot remove the line or group: {t}", .{err}) catch "cannot remove the line or group";
+    return .{ .rejected = reason };
 }
 
 pub fn applyConfigRequest(self: *Proxy, payload: []const u8, now_ms: i64) bool {
@@ -138,6 +181,7 @@ fn validateEdit(self: *const Proxy, text: []const u8, diag: *config.Diagnostic) 
         kept_pushed += 1;
         const name = line.explicitName() orelse continue;
         for (checked.lines) |spec| if (std.mem.eql(u8, name, spec.name)) return error.NameTaken;
+        if (checked.nameConflict(name)) |other| return diag.nameConflict(name, other);
     }
     if (checked.lines.len + kept_pushed > config.max_lines) return error.RowLimit;
 }

@@ -19,7 +19,7 @@ test "every shipped config parses" {
     }
 }
 
-test "every library module composes with every shipped config and other modules" {
+test "library modules compose or reject standalone-prefix collisions" {
     const add = @import("config_add.zig");
     for (shipped.all) |base| {
         if (base.prefix != null) continue;
@@ -40,6 +40,17 @@ test "every library module composes with every shipped config and other modules"
             isolated.deinit();
             const combined = try add.merge(std.testing.allocator, current, entry.text, &diag);
             errdefer std.testing.allocator.free(combined);
+            var previous = try config.parse(std.testing.allocator, current, &diag);
+            const collision = for (previous.lines) |line| {
+                if (std.mem.eql(u8, prefix, line.name)) break true;
+            } else false;
+            previous.deinit();
+            if (collision) {
+                try std.testing.expectError(error.InvalidConfig, config.parse(std.testing.allocator, combined, &diag));
+                try std.testing.expect(std.mem.indexOf(u8, diag.message, prefix) != null);
+                std.testing.allocator.free(combined);
+                continue;
+            }
             var cfg = config.parse(std.testing.allocator, combined, &diag) catch |err| {
                 std.debug.print("{s} + {s}:{d}: {s}\n", .{ base.name, entry.name, diag.line, diag.message });
                 return err;

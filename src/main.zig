@@ -54,10 +54,9 @@ pub fn main(init: std.process.Init) !u8 {
     return switch (try command.as(cli.CommandName)) {
         .run => commands.run.run(arena, init.io, command, stderr),
         .set => commands.set.run(arena, init.io, command, stderr),
-        .push => commands.push.run(arena, init.io, command, stdout, stderr),
-        .pop => commands.pop.run(init.io, command, stderr),
-        .list => commands.list.run(arena, init.io, command, stdout, stderr),
-        .temp => commands.temp.run(arena, init.io, command, stdout, stderr, help_output),
+        .add => commands.add.run(arena, init.io, command, stdout, stderr),
+        .rm => commands.rm.run(init.io, command, stderr),
+        .ls => commands.ls.run(arena, init.io, command, stdout, stderr),
         .bind => commands.bind.run(init.io, command, stdout, stderr),
         .init => commands.init.run(arena, init.io, args[0], command, stdout, stderr),
         .config => commands.config.run(arena, init.io, command, stdout, stderr, help_output),

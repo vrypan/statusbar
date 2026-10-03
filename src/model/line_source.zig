@@ -86,7 +86,7 @@ pub const Source = struct {
     fn variants(self: *const Source, entry: *const Line) *const config.Variants {
         return switch (entry.kind) {
             .configured => if (entry.overridden) &self.cfg.lines[entry.config_index].variants else &self.cfg.lines[entry.config_index].default_variants,
-            .pushed => &self.cfg.push.variants,
+            .temp => &self.cfg.push.variants,
         };
     }
 
@@ -98,7 +98,7 @@ pub const Source = struct {
     fn keep(self: *const Source, entry: *const Line) config.Keep {
         return switch (entry.kind) {
             .configured => self.cfg.lines[entry.config_index].keep,
-            .pushed => self.cfg.push.keep,
+            .temp => self.cfg.push.keep,
         };
     }
 

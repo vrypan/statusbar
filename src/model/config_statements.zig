@@ -14,6 +14,12 @@ const std = @import("std");
 pub const Diagnostic = struct {
     line: usize = 0,
     message: []const u8 = "",
+    buffer: [256]u8 = undefined,
+
+    pub fn nameConflict(self: *Diagnostic, name: []const u8, other: []const u8) Error {
+        self.message = std.fmt.bufPrint(&self.buffer, "line name '{s}' conflicts with '{s}'; a standalone line cannot also be a group prefix", .{ name, other }) catch "line name conflicts with a group prefix";
+        return error.InvalidConfig;
+    }
 };
 
 pub const Error = error{InvalidConfig};

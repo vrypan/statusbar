@@ -96,10 +96,15 @@ fn valueColumns(self: *const Proxy, index: usize) usize {
 
 fn pushLine(self: *Proxy, name: ?[]const u8, mode: protocol.PushMode, status: ?line_types.Status, owner: []const u8, now_ms: i64) protocol.Reply {
     if (name) |value| if (self.lines.nameTaken(value)) return reject("name is already used by another line");
+    if (name) |value| {
+        const other = self.runtime.cfg.nameConflict(value) orelse self.lines.nameConflict(value);
+        if (other) |conflict| return reject(std.fmt.bufPrint(&self.control_reply, "line name '{s}' conflicts with '{s}'; a standalone line cannot also be a group prefix", .{ value, conflict }) catch "line name conflicts with a group prefix");
+    }
     if (self.lines.items.items.len >= config.max_lines) return reject("line limit reached");
     const id = self.lines.push(name, if (mode == .stream) owner else null) catch |err| return reject(switch (err) {
         error.LineLimit => "line limit reached",
         error.NameTaken => "name is already used by another line",
+        error.NameConflict => "line name conflicts with a group prefix",
         else => "invalid line",
     });
     const index = self.lines.items.items.len - 1;
@@ -140,9 +145,15 @@ fn finishStream(self: *Proxy, id: u64, status: line_types.Status, owner: []const
 }
 
 fn popLine(self: *Proxy, target: ?line_types.Target, now_ms: i64) protocol.Reply {
+    if (target) |value| if (value == .name) {
+        if (std.mem.indexOfScalar(u8, value.name, '.') != null) return reject("removal needs a top-level name without dots");
+        if (@import("model").config_remove.hasTarget(self.runtime.cfg, value.name) or self.lines.find(value) == null)
+            return @import("reload.zig").removeName(self, value.name, now_ms);
+        if (self.held_config_len != null) return reject("a configuration update is pending; retry removal after it applies");
+    };
     const index = if (target) |value| self.lines.find(value) orelse return reject("no such line") else self.lines.latestPushed() orelse return .empty;
     const line = self.lines.items.items[index];
-    if (line.kind != .pushed) return reject("only pushed lines can be popped");
+    if (line.kind != .temp) return reject("use the configured line's top-level name or group for removal");
     if (self.fifos.findLine(line.id)) |binding| if (!self.fifos.items.items[binding].ownedPath()) return reject("FIFO path was replaced");
     _ = self.lines.remove(index);
     self.resizeForLines(now_ms) catch {
@@ -238,6 +249,7 @@ const Harness = struct {
         _ = try self.lines.push(null, "owner");
         const layout = Layout.of(.{ .row = 24, .col = 80, .xpixel = 0, .ypixel = 0 }, @intCast(self.lines.items.items.len));
         self.runtime = try Runtime.initInitial(gpa, std.testing.io, &self.cfg, &self.lines, layout.bar, layout.cols);
+        self.runtime.owned_text = try gpa.dupe(u8, text);
         self.proxy = schedulerProxy();
         self.proxy.runtime = &self.runtime;
         self.proxy.lines = &self.lines;
@@ -304,11 +316,16 @@ test "set changes only supplied attributes and rejects unknown targets" {
     try std.testing.expectEqualStrings("idle normal", content.line(0));
 }
 
-test "configured lines cannot be popped" {
+test "removal rejects final configured lines, configured IDs, dotted names and pending edits" {
     var h: Harness = undefined;
     try h.init("[line.a]\n");
     defer h.deinit();
     try std.testing.expect(h.proxy.controlRequest(.{ .pop = .{ .name = "a" } }, "cli", 0) == .rejected);
     try std.testing.expect(h.proxy.controlRequest(.{ .pop = .{ .name = "missing" } }, "cli", 0) == .rejected);
+    try std.testing.expect(h.proxy.controlRequest(.{ .pop = .{ .id = 1 } }, "cli", 0) == .rejected);
+    try std.testing.expect(h.proxy.controlRequest(.{ .pop = .{ .name = "a.b" } }, "cli", 0) == .rejected);
+    h.proxy.held_config_len = 1;
+    const reply = h.proxy.controlRequest(.{ .pop = .{ .name = "a" } }, "cli", 0);
+    try std.testing.expect(reply == .rejected and std.mem.indexOf(u8, reply.rejected, "pending") != null);
     try std.testing.expectEqual(@as(usize, 2), h.lines.items.items.len);
 }

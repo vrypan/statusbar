@@ -128,9 +128,12 @@ pub fn pump(self: *Proxy, sig_r: sys.Fd, pid: posix.pid_t) !void {
         if (sig.revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
             try self.drainSignals(sig_r, pid, now_ms);
         }
+        const revision_before_control = self.runtime_revision;
         if (ctl.fd >= 0 and ctl.revents & posix.POLL.IN != 0) self.drainControl(now_ms);
 
-        var runtime_replaced = false;
+        // Named removal can replace the runtime through the control socket.
+        // Its command descriptors belong to the next poll iteration.
+        var runtime_replaced = self.runtime_revision != revision_before_control;
         if (out.revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
             // Keep reading while reads come back full, which means the
             // pty had more than one read's worth waiting. A short read
