@@ -35,7 +35,7 @@ if ($env.STATUSBAR_STATE? != null) {
 
       let bar = ($lines | drop 1 | str join "\n")
       let prompt = ($lines | last)
-      let update = (^statusbar set prompt -- $bar | complete)
+      let update = (^statusbar update prompt -- $bar | complete)
       if $update.exit_code != 0 { return $full }
       $"($leading)($prompt)"
     }

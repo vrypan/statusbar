@@ -185,9 +185,10 @@ const commands = [_]zecli.CommandSpec{
         },
     },
     .{
-        .name = "set",
+        .name = "update",
+        .aliases = &.{"upd"},
         .description = "Change a line's value or status",
-        .usage = "statusbar set NAME [TEXT...] [--status STATE] | statusbar set NAME --reset [--status STATE]",
+        .usage = "statusbar update NAME [TEXT...] [--status STATE] | statusbar update NAME --reset [--status STATE]",
         .flags = &.{
             .{ .name = "status", .value = .string, .value_name = "STATE", .description = "Set the line's status", .choices = &status_names },
             .{ .name = "reset", .description = "Restore the line's configured default value" },
@@ -213,24 +214,24 @@ const commands = [_]zecli.CommandSpec{
         \\can call it without checking whether statusbar is running.
         ++ "\n",
         .examples = &.{
-            "statusbar set prompt 'Ready'",
-            "statusbar set build 'Build passed' --status success",
-            "statusbar set build --status running",
-            "statusbar set build ''",
-            "statusbar set build --reset",
-            "statusbar set build -- '--verbose enabled'",
+            "statusbar update prompt 'Ready'",
+            "statusbar update build 'Build passed' --status success",
+            "statusbar update build --status running",
+            "statusbar update build ''",
+            "statusbar update build --reset",
+            "statusbar update build -- '--verbose enabled'",
         },
     },
     .{
-        .name = "add",
-        .description = "Add a temporary line, optionally streaming text into it",
-        .usage = "statusbar add [NAME] [--status STATE] [--fifo | -- COMMAND [ARG...]]",
+        .name = "new",
+        .description = "Create a temporary line, optionally streaming text into it",
+        .usage = "statusbar new [NAME] [--status STATE] [--fifo | -- COMMAND [ARG...]]",
         .flags = &temp_add_flags,
         .arguments = &temp_add_arguments,
         .extra_help =
         \\Adds a line below the configured ones, using the [push] templates.
         \\With terminal stdin and no command or FIFO, creates an empty line,
-        \\prints its name (or numeric ID), and returns. Update it with set.
+        \\prints its name (or numeric ID), and returns. Update it with update.
         \\--status sets the initial status in every mode (default: running).
         \\Read stdin from a pipe or file, or run a command after --. Each new
         \\line of input replaces the value; the last one stays visible after
@@ -239,25 +240,26 @@ const commands = [_]zecli.CommandSpec{
         \\Background commands receive /dev/null instead of terminal stdin;
         \\piped or redirected input is preserved.
         \\
-        \\At the end of input, add prints the line's name (its numeric ID when
+        \\At the end of input, new prints the line's name (its numeric ID when
         \\unnamed) and sets its status: done for stdin, success or failed from
         \\the command's result. It stays quiet when run in the background with
         \\stdout on the terminal. Command mode exits with the command's status.
-        \\With --fifo, add prints the FIFO path at once; writes to it update
+        \\With --fifo, new prints the FIFO path at once; writes to it update
         \\the value, and closing it keeps the value and status.
-        \\Use `statusbar rm NAME` to remove the line.
+        \\Use `statusbar remove NAME` to remove the line.
         ++ "\n",
         .examples = &.{
-            "tail -n 0 -f app.log | statusbar add applog &",
-            "statusbar add download -- curl --progress-bar -o /dev/null URL",
-            "name=$(printf 'Done\\n' | statusbar add)",
-            "fifo=$(statusbar add build --fifo)",
+            "tail -n 0 -f app.log | statusbar new applog &",
+            "statusbar new download -- curl --progress-bar -o /dev/null URL",
+            "name=$(printf 'Done\\n' | statusbar new)",
+            "fifo=$(statusbar new build --fifo)",
         },
     },
     .{
-        .name = "rm",
+        .name = "remove",
+        .aliases = &.{"rm"},
         .description = "Remove a standalone line, group, or temporary line ID",
-        .usage = "statusbar rm [NAME|ID] | statusbar rm --all",
+        .usage = "statusbar remove [NAME|ID] | statusbar remove --all",
         .flags = &temp_remove_flags,
         .arguments = &temp_remove_arguments,
         .double_dash = .positionals,
@@ -270,12 +272,13 @@ const commands = [_]zecli.CommandSpec{
         \\Removing a line does not stop the command producing its output.
         \\--all succeeds even when there are no temporary lines.
         ++ "\n",
-        .examples = &.{ "statusbar rm", "statusbar rm build", "statusbar rm 7", "statusbar rm --all" },
+        .examples = &.{ "statusbar remove", "statusbar remove build", "statusbar remove 7", "statusbar remove --all" },
     },
     .{
-        .name = "ls",
+        .name = "list",
+        .aliases = &.{"ls"},
         .description = "List the current session's lines",
-        .usage = "statusbar ls [--temp] [--short] [--json]",
+        .usage = "statusbar list [--temp] [--short] [--json]",
         .double_dash = .positionals,
         .flags = &([_]zecli.FlagSpec{
             .{ .name = "temp", .description = "Show only temporary lines" },
@@ -285,7 +288,7 @@ const commands = [_]zecli.CommandSpec{
         \\lines. Requires a live statusbar session. --temp filters the result.
         \\
         ++ list_output_help,
-        .examples = &.{ "statusbar ls", "statusbar ls --short", "statusbar ls --temp --short --json" },
+        .examples = &.{ "statusbar list", "statusbar list --short", "statusbar list --temp --short --json" },
     },
     .{
         .name = "bind",
@@ -422,10 +425,13 @@ test "run is the default command" {
         .{ &.{}, "run" },
         .{ &.{ "-c", "my.statusbar" }, "run" },
         .{ &.{ "--", "set" }, "run" },
-        .{ &.{ "set", "prompt" }, "set" },
+        .{ &.{ "update", "prompt" }, "update" },
+        .{ &.{ "upd", "prompt" }, "upd" },
+        .{ &.{"list"}, "list" },
+        .{ &.{ "remove", "disk" }, "remove" },
         .{ &.{ "bind", "prompt" }, "bind" },
         .{ &.{ "ls", "--temp", "--json" }, "ls" },
-        .{ &.{ "add", "build" }, "add" },
+        .{ &.{ "new", "build" }, "new" },
         .{ &.{ "rm", "disk" }, "rm" },
         .{ &.{ "run", "-c", "my.statusbar" }, "run" },
         .{ &.{"--help"}, "--help" },
@@ -438,10 +444,11 @@ test "run is the default command" {
 }
 
 test "only the agreed root and configuration commands are registered" {
-    const root_names = [_][]const u8{ "run", "add", "rm", "ls", "set", "bind", "config", "init", "completion" };
+    const root_names = [_][]const u8{ "run", "new", "remove", "list", "update", "bind", "config", "init", "completion" };
     try std.testing.expectEqual(root_names.len, application.commands.len);
     for (root_names) |name| try std.testing.expect(findCommand(name) != null);
-    for ([_][]const u8{ "push", "pop", "list", "temp", "line", "unbind" }) |name| try std.testing.expect(findCommand(name) == null);
+    for ([_][]const u8{ "push", "pop", "add", "set", "temp", "line", "unbind" }) |name| try std.testing.expect(findCommand(name) == null);
+    for ([_][]const u8{ "upd", "ls", "rm" }) |name| try std.testing.expect(findCommand(name) != null);
     const config_names = [_][]const u8{ "show", "path", "check", "load", "import" };
     try std.testing.expectEqual(config_names.len, config_application.commands.len);
     for (config_names) |name| try std.testing.expect(zecli.findCommand(config_application, name) != null);

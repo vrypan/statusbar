@@ -37,10 +37,14 @@ assert json.loads(run('show', 'default', '--json'))['lines']
 # Exercise generated completion rather than assuming registration is enough.
 completion = subprocess.check_output([binary, 'completion', 'bash'], text=True)
 for words, position, expected in (
-    ('statusbar ""', 1, {'run', 'add', 'rm', 'ls', 'set', 'bind', 'config', 'init', 'completion'}),
+    ('statusbar ""', 1, {'run', 'new', 'remove', 'rm', 'list', 'ls', 'update', 'upd', 'bind', 'config', 'init', 'completion'}),
+    ('statusbar upd "--"', 2, {'--status', '--reset', '--help'}),
+    ('statusbar update "--"', 2, {'--status', '--reset', '--help'}),
     ('statusbar config ""', 2, {'load', 'import', 'check', 'show', 'path'}),
     ('statusbar config show ""', 3, {'current', 'startup', 'default'}),
+    ('statusbar remove "-"', 2, {'--all', '-a', '--help', '-h'}),
     ('statusbar rm "-"', 2, {'--all', '-a', '--help', '-h'}),
+    ('statusbar list "--"', 2, {'--temp', '--short', '--json', '--help'}),
     ('statusbar ls "--"', 2, {'--temp', '--short', '--json', '--help'}),
 ):
     result = subprocess.run(

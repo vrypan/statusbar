@@ -1,4 +1,4 @@
-//! `statusbar rm [NAME | --all]`: remove lines or groups.
+//! `statusbar remove [NAME | --all]`: remove lines or groups.
 const std = @import("std");
 const Io = std.Io;
 const zecli = @import("zecli");
@@ -15,7 +15,7 @@ pub fn run(io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
         null;
     if (target) |value| if (value == .name and std.mem.indexOfScalar(u8, value.name, '.') != null)
         return common.usageError(stderr, command, "removal needs a top-level name without dots");
-    if (@import("platform").environment.get("STATUSBAR_SESSION_ID") == null) return common.usageError(stderr, command, "rm requires a running statusbar session");
+    if (@import("platform").environment.get("STATUSBAR_SESSION_ID") == null) return common.usageError(stderr, command, "remove requires a running statusbar session");
     var session: common.Session = undefined;
     if (!try session.open(io, stderr)) return 1;
     defer session.close();

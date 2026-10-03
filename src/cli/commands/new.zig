@@ -1,4 +1,4 @@
-//! `statusbar add [NAME]`: create a line, optionally with a stream or FIFO.
+//! `statusbar new [NAME]`: create a line, optionally with a stream or FIFO.
 const std = @import("std");
 const Io = std.Io;
 const zecli = @import("zecli");
@@ -9,7 +9,7 @@ const sys = @import("platform").sys;
 
 pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
     const args = command.positionals();
-    if (args.len > 1) return common.usageError(stderr, command, "use -- before an add command");
+    if (args.len > 1) return common.usageError(stderr, command, "use -- before a new command");
     const name: ?[]const u8 = if (args.len == 1) name: {
         if (!types.validName(args[0])) return common.usageError(stderr, command, "NAME must be 1–64 letters, digits, _, - and dots between nonempty segments, and not only digits");
         break :name args[0];
@@ -22,21 +22,21 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     const child_argv = command.passthrough() orelse &.{};
     if (fifo and child_argv.len > 0) return common.usageError(stderr, command, "choose --fifo or a command after --");
     const mode: @import("session").line_protocol.PushMode = if (fifo) .fifo else if (child_argv.len > 0 or !(Io.File.stdin().isTty(io) catch false)) .stream else .empty;
-    if (@import("platform").environment.get("STATUSBAR_SESSION_ID") == null) return common.usageError(stderr, command, "add requires a running statusbar session");
+    if (@import("platform").environment.get("STATUSBAR_SESSION_ID") == null) return common.usageError(stderr, command, "new requires a running statusbar session");
     var session: common.Session = undefined;
     if (!try session.open(io, stderr)) return 1;
     defer session.close();
 
     const created = try session.request(stderr, .{ .push = .{ .name = name, .mode = mode, .status = status } }) orelse return 1;
     if (fifo) {
-        if (created != .path) return common.rejected(stderr, created, "the session rejected add");
+        if (created != .path) return common.rejected(stderr, created, "the session rejected new");
         if (!sys.isBackgroundTty(io, 1)) {
             try stdout.print("{s}\n", .{created.path});
             try stdout.flush();
         }
         return 0;
     }
-    if (created != .created) return common.rejected(stderr, created, "the session rejected add");
+    if (created != .created) return common.rejected(stderr, created, "the session rejected new");
     const id = created.created.id;
     if (mode == .empty) {
         if (!sys.isBackgroundTty(io, 1)) {
@@ -79,7 +79,7 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
     defer if (child_pipe) |fd| sys.close(io, fd);
     push_stream.run(io, &session.client, session.token, id, child_pipe orelse 0) catch |err| {
         if (child) |*process| process.kill(io);
-        try stderr.print("statusbar: add stream failed: {t}\n", .{err});
+        try stderr.print("statusbar: new stream failed: {t}\n", .{err});
         try stderr.flush();
         return 1;
     };

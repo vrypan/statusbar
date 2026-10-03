@@ -22,6 +22,6 @@ if not type -q +
     if test -z "$name"
       set name (string replace -r '^.*/' '' -- "$argv[1]")
     end
-    command @STATUSBAR@ add "$name" -- $argv &
+    command @STATUSBAR@ new "$name" -- $argv &
   end
 end

@@ -1,4 +1,4 @@
-//! `statusbar ls [--temp] [--short] [--json]`: inspect session lines.
+//! `statusbar list [--temp] [--short] [--json]`: inspect session lines.
 const std = @import("std");
 const Io = std.Io;
 const zecli = @import("zecli");
@@ -59,7 +59,7 @@ fn list(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout:
 }
 
 fn notInSession(stderr: *Io.Writer, command: *const zecli.Command) !u8 {
-    return common.usageError(stderr, command, "ls requires a running statusbar session");
+    return common.usageError(stderr, command, "list requires a running statusbar session");
 }
 
 fn field(writer: *Io.Writer, bytes: []const u8, width: usize) !void {

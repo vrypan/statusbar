@@ -1,4 +1,4 @@
-//! `statusbar set NAME [TEXT...] [--status STATE]`: change a line.
+//! `statusbar update NAME [TEXT...] [--status STATE]`: change a line.
 const std = @import("std");
 const Io = std.Io;
 const zecli = @import("zecli");
@@ -6,7 +6,7 @@ const common = @import("../common.zig");
 const types = @import("session").line_types;
 
 /// Only the attributes given change. TEXT presence is decided by argument
-/// count, before joining, so `set NAME ""` stores an explicit empty value.
+/// count, before joining, so `update NAME ""` stores an explicit empty value.
 pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stderr: *Io.Writer) !u8 {
     const args = command.positionals();
     const target = types.Target.parse(args[0]) orelse return common.usageError(stderr, command, "NAME must be a line name (letters, digits, _, - and dots between nonempty segments) or a numeric ID");

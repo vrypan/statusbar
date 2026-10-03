@@ -20,7 +20,7 @@ if (( $+commands[starship] )); then
       out=${out##*$'\n'}
       # Starship marks escape codes with %{ %} and doubles literal percent
       # signs for zsh; prompt expansion turns that back into plain output.
-      if ! command @STATUSBAR@ set @LINE@ "${(%)rest}" 2>/dev/null; then
+      if ! command @STATUSBAR@ update @LINE@ "${(%)rest}" 2>/dev/null; then
         out=$full
         newline=''
       fi

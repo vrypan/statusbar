@@ -19,6 +19,6 @@ if ! whence -w + >/dev/null 2>&1; then
       return 2
     fi
     [[ -n $name ]] || name=${1:t}
-    command @STATUSBAR@ add "$name" -- "$@" &
+    command @STATUSBAR@ new "$name" -- "$@" &
   }
 fi

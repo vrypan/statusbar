@@ -398,23 +398,23 @@ text = "OTHER[#(value)]"
 """
     child = CHILD_PRELUDE + r"""
 mark('STEP_START')
-run('set', 'build'); mark('STEP_UNCHANGED')
-run('set', 'build', '--status', 'running'); mark('STEP_STATUS')
-run('set', 'build', ''); mark('STEP_EMPTY')
-run('set', 'build', 'Build passed', '--status', 'success'); mark('STEP_BOTH')
-run('set', 'build', '--reset'); mark('STEP_RESET')
-run('set', 'build', '--reset', '--status', 'normal'); mark('STEP_RESET_STATUS')
-run('set', 'build', 'a', 'b', '--status', 'failed'); mark('STEP_FAILED')
-run('set', 'build', '--status', 'running'); mark('STEP_RUNNING')
-run('set', '1', '-'); settle()
-run('set', '--', '1', '--dash'); settle()
-run('set', 'build', '#(value) #[fg=red]x ##'); settle()
-run('set', 'other', '\x1b[31mred\x1b[0m'); settle()
+run('update', 'build'); mark('STEP_UNCHANGED')
+run('upd', 'build', '--status', 'running'); mark('STEP_STATUS')
+run('update', 'build', ''); mark('STEP_EMPTY')
+run('update', 'build', 'Build passed', '--status', 'success'); mark('STEP_BOTH')
+run('update', 'build', '--reset'); mark('STEP_RESET')
+run('update', 'build', '--reset', '--status', 'normal'); mark('STEP_RESET_STATUS')
+run('update', 'build', 'a', 'b', '--status', 'failed'); mark('STEP_FAILED')
+run('update', 'build', '--status', 'running'); mark('STEP_RUNNING')
+run('update', '1', '-'); settle()
+run('update', '--', '1', '--dash'); settle()
+run('update', 'build', '#(value) #[fg=red]x ##'); settle()
+run('update', 'other', '\x1b[31mred\x1b[0m'); settle()
 for args in (['build', 'x', '--reset'], ['build', '', '--reset'], ['build', '--status', 'fail'],
              ['bad..name', 'x'], ['0', 'x'], ['build', 'x' * 1025]):
-    run('set', *args, code=2)
+    run('update', *args, code=2)
 for args in (['missing', 'x'], ['99', '--status', 'done']):
-    run('set', *args, code=1)
+    run('update', *args, code=1)
 mark('SET_OK')
 """
     code, data = run_session(binary, config, child)
@@ -438,10 +438,10 @@ mark('SET_OK')
 
     env = clean_env()
     for args in (["prompt", "x"], ["prompt", "--status", "done"], ["5", "--reset"], ["prompt", ""]):
-        result = subprocess.run([binary, "set", *args], env=env, capture_output=True)
+        result = subprocess.run([binary, "update", *args], env=env, capture_output=True)
         assert result.returncode == 0 and not result.stdout and not result.stderr, result
     for args in (["prompt", "x", "--reset"], ["a..b", "x"], ["prompt", "--status", "fail"]):
-        result = subprocess.run([binary, "set", *args], env=env, capture_output=True)
+        result = subprocess.run([binary, "update", *args], env=env, capture_output=True)
         assert result.returncode == 2 and not result.stdout, result
     print("set changes only supplied attributes, atomically, and is quiet outside a session")
 
@@ -457,8 +457,8 @@ def check_init_invocation(binary):
             [stable, "init", "zsh"], env=env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
         )
-        assert f"command '{stable}' set prompt".encode() in absolute.stdout
-        assert f"command '{binary}' set".encode() not in absolute.stdout
+        assert f"command '{stable}' update prompt".encode() in absolute.stdout
+        assert f"command '{binary}' update".encode() not in absolute.stdout
 
         path_env = env.copy()
         path_env["PATH"] = directory + os.pathsep + path_env.get("PATH", "")
@@ -466,7 +466,7 @@ def check_init_invocation(binary):
             ["statusbar", "init", "zsh"], env=path_env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
         )
-        assert b"command 'statusbar' set prompt" in by_name.stdout
+        assert b"command 'statusbar' update prompt" in by_name.stdout
 
     outside_env = env.copy()
     outside_env.pop("STATUSBAR_STATE")
@@ -508,13 +508,13 @@ def check_plus(binary):
             record = Path(directory) / 'record.json'
             test_env = {**env, 'PLUS_RECORD': str(record)}
             cases = [
-                ('+ make test', ['add', 'make', '--', 'make', 'test']),
+                ('+ make test', ['new', 'make', '--', 'make', 'test']),
                 ('+ +build make "two words" "" "--flag"',
-                 ['add', 'build', '--', 'make', 'two words', '', '--flag']),
+                 ['new', 'build', '--', 'make', 'two words', '', '--flag']),
                 ('+ /bin/echo "a;$(ignored)*"',
-                 ['add', 'echo', '--', '/bin/echo', 'a;$(ignored)*']),
-                ('+ -- +command arg', ['add', '+command', '--', '+command', 'arg']),
-                ('+ +build -- /bin/echo done', ['add', 'build', '--', '/bin/echo', 'done']),
+                 ['new', 'echo', '--', '/bin/echo', 'a;$(ignored)*']),
+                ('+ -- +command arg', ['new', '+command', '--', '+command', 'arg']),
+                ('+ +build -- /bin/echo done', ['new', 'build', '--', '/bin/echo', 'done']),
             ]
             # Single quotes keep the literal command-substitution text in both shells.
             cases[2] = ("+ /bin/echo 'a;$(ignored)*'", cases[2][1])
@@ -791,12 +791,12 @@ def check_nu(binary):
         sample = os.path.join(os.path.dirname(__file__), "..", "samples", "statusbar.nu")
         with open(sample, "rb") as file:
             integration = file.read()
-        assert b"set prompt --" in integration
+        assert b"update prompt --" in integration
         scripts = {}
         for target in ("prompt", "other"):
             script_path = os.path.join(directory, f"statusbar-{target}.nu")
             with open(script_path, "wb") as file:
-                file.write(integration.replace(b"set prompt --", f"set {target} --".encode()))
+                file.write(integration.replace(b"update prompt --", f"update {target} --".encode()))
             scripts[target] = script_path
 
         def argv_for(mode, option):
@@ -1047,7 +1047,7 @@ def check_datetime_and_terminal_properties(binary):
             cfg.write("[line.a]\ntext = STAMP#(datetime:%Y) WINDOW#(terminal:rows)x#(terminal:cols) SHELL#(terminal:content_rows)\n[line.b]\ntext = second\n[line.c]\ntext = third\n")
         child = (
             'while IFS= read -r action; do case "$action" in '
-            f'PUSH) printf "payload\\n" | {shlex.quote(binary)} add extra ;; '
+            f'PUSH) printf "payload\\n" | {shlex.quote(binary)} new extra ;; '
             f'POP) {shlex.quote(binary)} rm ;; '
             f'RELOAD) {shlex.quote(binary)} config < {shlex.quote(replacement_path)} ;; '
             'EXIT) exit 0 ;; esac; done'
@@ -1243,7 +1243,7 @@ assert show('show', 'startup') == original
 assert show('show') == original
 assert show('show', 'default') == show('show', 'default')
 assert stat.S_IMODE(os.stat(os.environ['STATUSBAR_STATE']).st_mode) == 0o600
-subprocess.run([binary, 'set', 'a', 'MANUAL_OVERRIDE'], check=True)
+subprocess.run([binary, 'update', 'a', 'MANUAL_OVERRIDE'], check=True)
 assert show('show') == original
 assert json.loads(show('show', '--json')) == full_original
 subprocess.run([binary, 'config'], input=replacement, check=True)
@@ -1553,7 +1553,7 @@ def check_background_push_tty_output(binary):
     try:
         os.write(master, b"stty -echo tostop\n")
         time.sleep(0.2)
-        cmd = shlex.quote(os.path.abspath(binary)) + " add background -- sh -c 'sleep 0.1; printf finished' & wait; print -r -- __PUSH_DONE__:$?\n"
+        cmd = shlex.quote(os.path.abspath(binary)) + " new background -- sh -c 'sleep 0.1; printf finished' & wait; print -r -- __PUSH_DONE__:$?\n"
         os.write(master, cmd.encode())
         data = read_until(master, data, b"__PUSH_DONE__:0", timeout=5)
         assert b"suspended (tty output)" not in data, data[-1000:]
@@ -1567,19 +1567,19 @@ def check_background_push_tty_output(binary):
             "assert not tty; assert os.read(0, 1) == b''; print('stdin detached')"
         )
         cmd = "stty -tostop; " + shlex.join([
-            os.path.abspath(binary), "add", "terminal-input", "--", sys.executable, "-c", probe,
+            os.path.abspath(binary), "new", "terminal-input", "--", sys.executable, "-c", probe,
         ]) + " & wait $!; print -r -- __INPUT_DONE__:$?\n"
         os.write(master, cmd.encode())
         data = read_until(master, data, b"__INPUT_DONE__:0", timeout=5)
         assert b"suspended" not in data, data[-1000:]
         cmd = "printf payload | " + shlex.join([
-            os.path.abspath(binary), "add", "piped-input", "--", sys.executable, "-c",
+            os.path.abspath(binary), "new", "piped-input", "--", sys.executable, "-c",
             "import sys; assert sys.stdin.read() == 'payload'; print('pipe preserved')",
         ]) + " & wait $!; print -r -- __PIPE_DONE__:$?\n"
         os.write(master, cmd.encode())
         data = read_until(master, data, b"__PIPE_DONE__:0", timeout=5)
         cmd = shlex.join([
-            os.path.abspath(binary), "add", "foreground-input", "--", sys.executable, "-c",
+            os.path.abspath(binary), "new", "foreground-input", "--", sys.executable, "-c",
             "import os; assert os.isatty(0); print('terminal preserved')",
         ]) + "; print -r -- __FOREGROUND_DONE__:$?\n"
         os.write(master, cmd.encode())
@@ -1594,7 +1594,7 @@ def check_hidden_push_without_paint(binary):
               '[line.c]\ntext = C\n[push]\ntext = "#(value)"\n')
     child = CHILD_PRELUDE + r'''
 mark('HIDDEN_READY')
-assert run('add', input=b'hidden value') == '4'
+assert run('new', input=b'hidden value') == '4'
 mark('HIDDEN_ADDED')
 run('rm', '4')
 mark('HIDDEN_REMOVED')
@@ -1633,9 +1633,9 @@ assert temporary() == []
 assert temporary('--short') == []
 assert run('ls', '--temp', '--short').split() == ['ID', 'NAME', 'STATUS', 'VALUE']
 assert run('ls', '--temp').split() == ['ID', 'NAME', 'KIND', 'STATUS', 'VISIBLE', 'FIFO', 'VALUE']
-run('set', 'empty', '')
+run('update', 'empty', '')
 value = '\x1b[31m"\\Καλημέρα\t界'
-run('set', 'hidden', value, '--status', 'failed')
+run('update', 'hidden', value, '--status', 'failed')
 updated = listing()
 assert updated[1]['value'] == ''
 # set normalizes tabs to spaces; list returns the stored override.
@@ -1650,10 +1650,10 @@ assert '\\x1b[31m' in short_table and '""' in short_table
 table = run('ls')
 assert '\x1b' not in table and '\\x1b[31m' in table and '<default>' in table
 assert '""' in table and len(table.splitlines()) == 4, table
-run('set', 'empty', '--reset')
+run('update', 'empty', '--reset')
 assert listing()[1]['value'] is None
-unnamed = run('add', input=b'unnamed')
-run('add', 'job', input=b'finished')
+unnamed = run('new', input=b'unnamed')
+run('new', 'job', input=b'finished')
 pushed = listing('--temp')
 assert [x['id'] for x in pushed] == [int(unnamed), int(unnamed) + 1], pushed
 assert [x['name'] for x in pushed] == [None, 'job'], pushed
@@ -1686,7 +1686,7 @@ assert [x['fifo'] for x in reordered[:3]] == [hidden_fifo, base_fifo, None]
 assert temporary() == listing('--temp')
 run('bind', '--unbind', 'hidden')
 assert listing()[0]['fifo'] is None
-pushed_fifo = run('add', 'fifo-job', '--status', 'running', '--fifo')
+pushed_fifo = run('new', 'fifo-job', '--status', 'running', '--fifo')
 assert listing('--temp')[-1]['fifo'] == pushed_fifo
 assert pushed_fifo in run('ls', '--temp')
 assert pushed_fifo in run('ls', '--temp')
@@ -1696,7 +1696,7 @@ assert all(x['fifo'] != pushed_fifo for x in listing())
 run('rm', '--all')
 long_value = '界' * 341 + 'x'
 for n in range(24):
-    run('add', 'large-%d' % n, input=long_value.encode())
+    run('new', 'large-%d' % n, input=long_value.encode())
 large = listing('--temp')
 assert len(large) == 24 and all(x['value'] == long_value for x in large), large
 assert temporary() == large
@@ -1718,7 +1718,7 @@ assert os.stat(snapshot_path).st_mtime_ns == before
 outside = os.environ.copy(); outside.pop('STATUSBAR_SESSION_ID'); outside.pop('STATUSBAR_STATE')
 run('ls', '--json', env=outside, code=2)
 run('ls', '--temp', '--json', env=outside, code=2)
-run('add', 'new', '--fifo', env=outside, code=2)
+run('new', 'new', '--fifo', env=outside, code=2)
 run('rm', '--all', env=outside, code=2)
 for variable in ('STATUSBAR_SESSION_ID', 'STATUSBAR_STATE'):
     partial = os.environ.copy(); partial.pop(variable)
@@ -1749,13 +1749,13 @@ print('LIST_OK', flush=True)
 def check_push_pop(binary):
     child = CHILD_PRELUDE + r'''
 from subprocess import PIPE, Popen
-first = run('add', input=b'partial\rfirst final\n')
-second = run('add', 'named', input='Καλημέρα ## #[bold]'.encode())
+first = run('new', input=b'partial\rfirst final\n')
+second = run('new', 'named', input='Καλημέρα ## #[bold]'.encode())
 assert first == '2' and second == 'named', (first, second)
 for args in (['5'], ['a..b'], ['1', 'x']):
-    run('add', *args, input=b'x', code=2)
+    run('new', *args, input=b'x', code=2)
 for taken in ('named', 'base'):
-    run('add', taken, input=b'x', code=1)
+    run('new', taken, input=b'x', code=1)
 assert os.get_terminal_size(0).lines == 21
 print('PUSHED_TWO', flush=True)
 run('config', input=b'[line.base]\ntext = reloaded\n[line.extra]\ntext = new\n[push]\ntext = "#[fg=#654321]> #[default]#(value)#(fill: )#[fg=#abcdef,bold]<#(name)>#[default]"\n')
@@ -1765,23 +1765,23 @@ run('rm', first, code=1)
 run('rm', '1', code=1)
 print('POPPED_FIRST', flush=True)
 # A removed producer can still finish, and its ID is never reused.
-p = Popen([b, 'add'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
+p = Popen([b, 'new'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
 p.stdin.write(b'in progress'); p.stdin.flush(); time.sleep(1)
 run('rm', '5')
 p.stdin.write(b'\rfinished'); p.stdin.close()
 assert p.wait(timeout=4) == 0, p.stderr.read()
 assert p.stdout.read() == b'5\n'
 # A retired producer cannot touch a replacement with the same name.
-p = Popen([b, 'add', 'job'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
+p = Popen([b, 'new', 'job'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
 p.stdin.write(b'old job'); p.stdin.flush(); time.sleep(1)
 run('rm', 'job')
-assert run('add', 'job', input=b'new job\n') == 'job'
+assert run('new', 'job', input=b'new job\n') == 'job'
 p.stdin.write(b'\rSTALE UPDATE'); p.stdin.close()
 assert p.wait(timeout=4) == 0, p.stderr.read()
 assert p.stdout.read() == b'job\n'
 mark('REPLACED_JOB')
 run('rm', 'job')
-simultaneous = [Popen([b, 'add'], stdin=PIPE, stdout=PIPE, stderr=PIPE) for _ in range(2)]
+simultaneous = [Popen([b, 'new'], stdin=PIPE, stdout=PIPE, stderr=PIPE) for _ in range(2)]
 for stream, value in zip(simultaneous, (b'left', b'right')):
     stream.stdin.write(value); stream.stdin.close()
 ids = []
@@ -1791,9 +1791,9 @@ for stream in simultaneous:
 assert set(ids) == {b'8', b'9'}, ids
 for line_id in ids:
     run('rm', line_id.decode())
-assert run('add', input=b'') == '10'
+assert run('new', input=b'') == '10'
 run('rm', '10')
-command = subprocess.run([b, 'add', '--', sys.executable, '-c',
+command = subprocess.run([b, 'new', '--', sys.executable, '-c',
                           'import os,sys; '
                           'sys.stdout.write("started\\n"); sys.stdout.flush(); '
                           'w=int(os.environ["COLUMNS"]); '
@@ -1804,14 +1804,14 @@ assert command.stdout == b'11\n', command.stdout
 assert command.stderr == b'', command.stderr
 settle()
 run('rm', '11')
-named = subprocess.run([b, 'add', 'download', '--', sys.executable, '-c', 'import os; print("width=" + os.environ["COLUMNS"])'], capture_output=True)
+named = subprocess.run([b, 'new', 'download', '--', sys.executable, '-c', 'import os; print("width=" + os.environ["COLUMNS"])'], capture_output=True)
 assert named.returncode == 0 and named.stdout == b'download\n', named
 settle()
 run('rm', 'download')
 run('rm', 'named')
-missing = subprocess.run([b, 'add', '--', '/nonexistent/command'], capture_output=True)
+missing = subprocess.run([b, 'new', '--', '/nonexistent/command'], capture_output=True)
 assert missing.returncode == 1 and b'cannot start command' in missing.stderr, missing
-stack = [run('add', input=value) for value in (b'older', b'middle', b'newer')]
+stack = [run('new', input=value) for value in (b'older', b'middle', b'newer')]
 assert stack == ['14', '15', '16'], stack
 run('rm', '15')
 assert run('rm') == ''
@@ -1820,14 +1820,14 @@ empty = subprocess.run([b, 'rm'], capture_output=True)
 assert empty.returncode == 1 and b'no temporary lines' in empty.stderr, empty
 wrong = os.environ.copy(); wrong['STATUSBAR_SESSION_ID'] = '0' * 32
 assert subprocess.run([b, 'rm', 'named'], env=wrong, capture_output=True).returncode != 0
-assert subprocess.run([b, 'add'], env=wrong, input=b'x', capture_output=True).returncode != 0
+assert subprocess.run([b, 'new'], env=wrong, input=b'x', capture_output=True).returncode != 0
 # A cursor save that is never restored must not starve line requests.
 sys.stdout.write('\x1b7'); sys.stdout.flush()
-assert run('add', input=b'saved cursor') == '17'
+assert run('new', input=b'saved cursor') == '17'
 run('rm', '17')
-p = Popen([b, 'add'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
+p = Popen([b, 'new'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
 p.stdin.write(b'active before clear'); p.stdin.flush(); time.sleep(1)
-assert run('add', input=b'completed before clear') == '19'
+assert run('new', input=b'completed before clear') == '19'
 assert os.get_terminal_size(0).lines == 20
 run('rm', '--all', '19', code=2)
 assert subprocess.run([b, 'rm', '--all'], env=wrong, capture_output=True).returncode != 0
@@ -1838,7 +1838,7 @@ assert run('rm', '-a') == ''
 p.stdin.write(b'late output'); p.stdin.close()
 assert p.wait(timeout=4) == 0, p.stderr.read()
 assert p.stdout.read() == b'18\n'
-assert run('add', input=b'new after clear') == '20'
+assert run('new', input=b'new after clear') == '20'
 assert run('rm', '-a') == ''
 print('PUSH_POP_OK', flush=True)
 '''
@@ -1875,7 +1875,7 @@ assert os.get_terminal_size(0).lines == rows
 with open(prompt, 'wb') as writer:
     writer.write(b'one '); writer.flush(); writer.write(b'two\n')
 settle()
-run('set', 'prompt', 'manual')
+run('update', 'prompt', 'manual')
 settle()
 with open(prompt, 'wb') as writer: writer.write(b'one two\n')
 settle()
@@ -1885,7 +1885,7 @@ with open(prompt, 'wb') as writer: writer.write(b'PARTIAL')
 settle()
 with open(prompt, 'wb') as writer: writer.write(b'\n#[bold]LITERAL #(value)\n')
 mark('LITERAL_WRITTEN')
-build = run('add', 'build', '--fifo')
+build = run('new', 'build', '--fifo')
 assert build == directory + '/build' and stat.S_ISFIFO(os.stat(build).st_mode)
 assert run('bind', 'build') == build and run('bind', '3') == build
 assert os.get_terminal_size(0).lines == rows - 1
@@ -1893,24 +1893,24 @@ with open(build, 'wb') as writer: writer.write('Καλημέρα\n'.encode())
 settle()
 # Input written before a status change is applied first.
 with open(build, 'wb') as writer: writer.write(b'FINAL')
-run('set', 'build', '--status', 'success')
+run('update', 'build', '--status', 'success')
 mark('BUILD_SUCCESS')
 # A status is not a stream end: later input still updates the value.
 with open(build, 'wb') as writer: writer.write(b'\nLATER\n')
 mark('BUILD_LATER')
-unnamed = run('add', '--fifo')
+unnamed = run('new', '--fifo')
 name = os.path.basename(unnamed)
 assert name == '4' and unnamed == directory + '/4'
 with open(unnamed, 'wb') as writer: writer.write(b'UNNAMED\n')
 settle()
-run('set', name, '--status', 'failed')
+run('update', name, '--status', 'failed')
 settle()
 run('rm', name)
 assert not os.path.exists(unnamed)
 fd, nested_info = tempfile.mkstemp(); os.close(fd)
 try:
     nested_code = ('import os,subprocess,sys; '
-        'p=subprocess.run([sys.argv[2],"add","nested","--fifo"],capture_output=True,check=True).stdout.strip().decode(); '
+        'p=subprocess.run([sys.argv[2],"new","nested","--fifo"],capture_output=True,check=True).stdout.strip().decode(); '
         'open(sys.argv[1],"w").write(os.environ["STATUSBAR_FIFOS"]+"\\n"+p); '
         'open(p,"wb").write(b"NESTED\\n")')
     assert subprocess.run([b, '--', sys.executable, '-c', nested_code, nested_info, b], timeout=8).returncode == 0
@@ -1924,7 +1924,7 @@ finally:
 # on the base line wakes the loop, which then drains the pipe.
 flood = subprocess.Popen([sys.executable, '-c',
     'import sys; f=open(sys.argv[1],"wb"); f.write(b"flood\\n"*30000); f.close()', build])
-run('set', 'base', 'RESPONSIVE')
+run('update', 'base', 'RESPONSIVE')
 assert flood.wait(timeout=10) == 0
 # Surviving lines keep their pipes across reloads; failed reloads change nothing.
 run('config', input=b'[line.base]\ntext = "CHANGED #(value)"\n[line.prompt]\ntext = "NEW[#(value)]"\n[push]\ntext = "#(value)#(fill: )#(status) [#(name)]"\n')
@@ -1966,12 +1966,12 @@ while os.path.exists(prompt) and time.monotonic() < deadline: time.sleep(.02)
 assert not os.path.exists(prompt)
 with open(directory + '/collision', 'wb') as file: file.write(b'keep')
 rows = os.get_terminal_size(0).lines
-run('add', 'collision', '--fifo', code=1)
+run('new', 'collision', '--fifo', code=1)
 assert open(directory + '/collision', 'rb').read() == b'keep'
 assert os.get_terminal_size(0).lines == rows
-run('set', 'collision', 'x', code=1)
+run('update', 'collision', 'x', code=1)
 os.unlink(directory + '/collision')
-end = run('add', 'end', '--fifo')
+end = run('new', 'end', '--fifo')
 print('FIFO_CLEANUP=' + end, flush=True)
 print('FIFO_OK', flush=True)
 '''
@@ -2000,7 +2000,7 @@ print('FIFO_OK', flush=True)
 def check_fifo_signal_cleanup(binary):
     child = r'''
 import os, subprocess, sys, time
-path = subprocess.run([sys.argv[1], 'add', 'signal', '--fifo'], capture_output=True, check=True).stdout.strip().decode()
+path = subprocess.run([sys.argv[1], 'new', 'signal', '--fifo'], capture_output=True, check=True).stdout.strip().decode()
 print('SIGNAL_FIFO=' + path, flush=True)
 time.sleep(30)
 '''
@@ -2029,17 +2029,17 @@ def check_push_completion(binary):
     child = CHILD_PRELUDE + r'''
 def pop():
     subprocess.run([b, 'rm'], check=True, capture_output=True)
-p = subprocess.Popen([b, 'add'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+p = subprocess.Popen([b, 'new'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 p.stdin.write(b'PIPE_CONTENT'); p.stdin.flush(); time.sleep(1)
 p.stdin.close()
 assert p.wait(timeout=4) == 0
 settle(); pop()
 for code in (0, 7, 130):
-    command = subprocess.run([b, 'add', '--', sys.executable, '-c',
+    command = subprocess.run([b, 'new', '--', sys.executable, '-c',
                               f'print("COMMAND_{code}"); raise SystemExit({code})'], capture_output=True)
     assert command.returncode == code, command
     settle(); pop()
-command = subprocess.run([b, 'add', '--', sys.executable, '-c',
+command = subprocess.run([b, 'new', '--', sys.executable, '-c',
                           'import os,signal; print("SIGNALED", flush=True); os.kill(os.getpid(), signal.SIGTERM)'], capture_output=True)
 assert command.returncode == 128 + signal.SIGTERM, command
 settle()
@@ -2047,8 +2047,8 @@ settle()
 subprocess.run([b, 'config'], input=b'[line.a]\n[push]\ntext = RUNNING_AGAIN #(value)\nfailed = RELOADED_#(status)_#(value)\n', check=True, capture_output=True)
 settle()
 # Any transition is allowed, keeping the value.
-run('set', '6', '--status', 'running'); settle()
-run('set', '6', '--status', 'normal'); settle()
+run('update', '6', '--status', 'running'); settle()
+run('update', '6', '--status', 'normal'); settle()
 pop()
 print('COMPLETION_OK', flush=True)
 '''
@@ -2073,33 +2073,33 @@ failed = "COMMAND_FAILED #(value)"
 def check_push_initial_status(binary):
     child = CHILD_PRELUDE + r'''
 assert os.isatty(0)
-assert run('add', 'bare') == 'bare'
+assert run('new', 'bare') == 'bare'
 settle()
 run('rm', 'bare')
-assert run('add', 'manual', '--status', 'normal') == 'manual'
+assert run('new', 'manual', '--status', 'normal') == 'manual'
 settle()
-run('set', 'manual', 'UPDATED', '--status', 'success'); settle()
+run('update', 'manual', 'UPDATED', '--status', 'success'); settle()
 run('rm', 'manual')
-unnamed = run('add', '--status', 'done')
+unnamed = run('new', '--status', 'done')
 assert unnamed.isdecimal(), unnamed
 run('rm', unnamed)
-run('add', 'invalid', '--status', 'bad', code=2)
-path = run('add', 'fifo', '--fifo', '--status', 'failed')
+run('new', 'invalid', '--status', 'bad', code=2)
+path = run('new', 'fifo', '--fifo', '--status', 'failed')
 assert stat.S_ISFIFO(os.stat(path).st_mode)
 with open(path, 'w') as output:
     output.write('FIFO_VALUE\n')
 settle()
 run('rm', 'fifo')
-p = subprocess.Popen([b, 'add', 'pipe', '--status', 'failed'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+p = subprocess.Popen([b, 'new', 'pipe', '--status', 'failed'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 p.stdin.write(b'PIPE_VALUE\n'); p.stdin.flush(); time.sleep(1)
 p.stdin.close()
 assert p.wait(timeout=4) == 0
 settle(); run('rm', 'pipe')
 with tempfile.TemporaryFile() as source:
     source.write(b'FILE_VALUE\n'); source.seek(0)
-    subprocess.run([b, 'add', 'file', '--status', 'failed'], stdin=source, capture_output=True, check=True)
+    subprocess.run([b, 'new', 'file', '--status', 'failed'], stdin=source, capture_output=True, check=True)
 settle(); run('rm', 'file')
-run('add', 'command', '--status', 'failed', '--', sys.executable, '-c',
+run('new', 'command', '--status', 'failed', '--', sys.executable, '-c',
     'import os,time; assert os.environ["COLUMNS"] == "73"; print("COMMAND_VALUE", flush=True); time.sleep(.3)')
 settle(); run('rm', 'command')
 print('INITIAL_STATUS_OK', flush=True)
@@ -2124,7 +2124,7 @@ def check_push_spinner(binary):
     child = r'''
 import os, subprocess, sys, time
 b = sys.argv[1]
-r = subprocess.run([b, 'add', '--', sys.executable, '-c',
+r = subprocess.run([b, 'new', '--', sys.executable, '-c',
     'import os,time; print("width=" + os.environ["COLUMNS"], flush=True); time.sleep(.8)'], capture_output=True)
 assert r.returncode == 0 and r.stdout == b'2\n', r
 # A completed line must remain quiet even while the session stays open.
@@ -2163,7 +2163,7 @@ def check_config_remove(binary):
     child = CHILD_PRELUDE + r"""
 import json, base64
 def current(): return run('config', 'show')
-def entries(): return json.loads(run('ls', '--json'))['lines']
+def entries(): return json.loads(run('list', '--json'))['lines']
 def wait_for(check):
     deadline = time.monotonic() + 4
     while not check():
@@ -2183,10 +2183,10 @@ with tempfile.TemporaryDirectory() as folder:
                 '[line.unprefixed]\n')
     run('config', 'import', '-', input=fragment.encode())
     wait_for(lambda: os.path.exists(counter))
-    run('set', 'keep.status', 'VALUE', '--status', 'success')
+    run('update', 'keep.status', 'VALUE', '--status', 'success')
     disk_fifo = run('bind', 'disk.usage')
     keep_fifo = run('bind', 'keep.status')
-    run('add', 'disk.job', input=b'JOB\n')
+    run('new', 'disk.job', input=b'JOB\n')
     before = next(line for line in entries() if line['name'] == 'keep.status')
     run('config', 'import', '-', input=b'[line.dependent.row]\ndefault = #(command:disk.read)\n')
     wait_for(lambda: '[line.dependent.row]' in current())
@@ -2237,7 +2237,7 @@ with tempfile.TemporaryDirectory() as folder:
 def check_line_namespace(binary):
     child = CHILD_PRELUDE + r'''
 import base64, json, socket
-def entries(): return json.loads(run('ls', '--json'))['lines']
+def entries(): return json.loads(run('list', '--json'))['lines']
 def current(): return run('config', 'show')
 def wait_for(predicate):
     deadline = time.monotonic() + 4
@@ -2246,18 +2246,18 @@ def wait_for(predicate):
         time.sleep(.02)
 startup = current()
 for name in ('disk', 'colors', 'commands', 'standalone.child'):
-    r = subprocess.run([b, 'add', name], input=b'conflict', capture_output=True)
+    r = subprocess.run([b, 'new', name], input=b'conflict', capture_output=True)
     assert r.returncode == 1 and name.encode() in r.stderr, (name, r)
     assert current() == startup
-run('add', 'tasks.first', input=b'first')
-run('add', 'tasks.second', input=b'second')
-run('add', 'tasks', input=b'conflict', code=1)
-run('add', 'single', input=b'single')
-run('add', 'single.child', input=b'conflict', code=1)
-run('add', 'disk.job', input=b'job')
-run('add', 'diskette', input=b'near-prefix')
+run('new', 'tasks.first', input=b'first')
+run('new', 'tasks.second', input=b'second')
+run('new', 'tasks', input=b'conflict', code=1)
+run('new', 'single', input=b'single')
+run('new', 'single.child', input=b'conflict', code=1)
+run('new', 'disk.job', input=b'job')
+run('new', 'diskette', input=b'near-prefix')
 for name in ('123.child', '123'):
-    run('add', name, input=b'invalid', code=2)
+    run('new', name, input=b'invalid', code=2)
 for target in ('disk.usage', 'tasks.first', '01', '0', '18446744073709551616'):
     run('rm', target, code=2)
 run('rm', '1', code=1)
@@ -2286,7 +2286,7 @@ for replacement in (b'[line.single.child]\n', b'[line.base]\n[colors]\nsingle.ac
 # Group deletion removes all temporary members and their FIFOs together.
 paths = [run('bind', name) for name in ('tasks.first', 'tasks.second', 'disk.usage', 'disk.job')]
 before = entries()
-run('rm', 'tasks')
+run('remove', 'tasks')
 assert not any(x['name'] and x['name'].startswith('tasks.') for x in entries())
 assert not any(os.path.exists(path) for path in paths[:2])
 # A replaced FIFO rejects the complete mixed group before any edit commits.
@@ -2362,10 +2362,10 @@ def frame(text):
     body = ('2;' + os.environ['STATUSBAR_SESSION_ID'] + ';' + text).encode()
     return b'\x1b]3110;STATUSBAR;ADD;' + base64.b64encode(body) + b'\x1b\\'
 startup = run('config', 'show', 'startup')
-run('set', 'base', 'kept', '--status', 'success')
+run('update', 'base', 'kept', '--status', 'success')
 bound = run('bind', 'base')
-run('add', 'job', input=b'pushed\n')
-before = json.loads(run('ls', '--json'))
+run('new', 'job', input=b'pushed\n')
+before = json.loads(run('list', '--json'))
 with tempfile.TemporaryDirectory() as folder:
     counter = os.path.join(folder, 'counter')
     # A command that is still running when the next additions arrive.
@@ -2414,14 +2414,14 @@ with tempfile.TemporaryDirectory() as folder:
     assert open(counter).read() == 'x', 'an existing command was restarted'
     # A pushed-name collision is checked by the session and rolls back all
     # definitions, even when the sender bypasses CLI validation.
-    run('add', 'clash.row', input=b'temporary\n')
+    run('new', 'clash.row', input=b'temporary\n')
     snapshot = current()
     os.write(1, frame('[line.clash.row]\n[command.clash.run]\nrun = true\n'))
     settle()
     assert current() == snapshot
     assert run('config', 'show', 'startup') == startup
     assert os.path.exists(bound)
-    after = json.loads(run('ls', '--json'))
+    after = json.loads(run('list', '--json'))
     assert after['lines'][0] == before['lines'][0], (before, after)
     assert after['lines'][-2] == before['lines'][-1], (before, after)
     assert [line['name'] for line in after['lines']] == [
@@ -2443,27 +2443,27 @@ with tempfile.TemporaryDirectory() as folder:
     assert current() == snapshot
     # Dotted names work through the line protocol and as FIFO basenames.
     assert any(line['name'] == 'alpha.row' for line in json.loads(run('config', 'show', '--json'))['lines'])
-    run('set', 'alpha.row', 'dotted-value', '--status', 'success')
+    run('update', 'alpha.row', 'dotted-value', '--status', 'success')
     pipe = run('bind', 'alpha.row')
     assert os.path.basename(pipe) == 'alpha.row'
     with open(pipe, 'w') as writer:
         writer.write('dotted-fifo\n')
     def alpha_value():
-        return next(line for line in json.loads(run('ls', '--json'))['lines'] if line['name'] == 'alpha.row')
+        return next(line for line in json.loads(run('list', '--json'))['lines'] if line['name'] == 'alpha.row')
     wait_for(lambda: alpha_value()['value'] == 'dotted-fifo')
     assert alpha_value()['status'] == 'success'
     run('bind', '--unbind', 'alpha.row')
     assert not os.path.exists(pipe)
-    run('set', 'alpha.row', '--reset', '--status', 'normal')
-    run('add', 'tasks.build', input=b'dotted-job\n')
+    run('update', 'alpha.row', '--reset', '--status', 'normal')
+    run('new', 'tasks.build', input=b'dotted-job\n')
     job_pipe = run('bind', 'tasks.build')
-    run('rm', 'tasks')
+    run('remove', 'tasks')
     assert not os.path.exists(job_pipe)
     # A complete replacement reads the saved snapshot literally.
     run('config', input=snapshot.encode())
     settle()
     assert current() == snapshot
-    run('set', '1', 'still-kept')
+    run('update', '1', 'still-kept')
     # Accumulated configs can exceed the single-message limit. The parser's
     # total limit is still enforced without changing the live snapshot.
     for suffix in ('a', 'b', 'c'):
@@ -2486,29 +2486,29 @@ with tempfile.TemporaryDirectory() as folder:
 
 def check_reload_lines(binary):
     child = CHILD_PRELUDE + r'''
-run('set', 'a', 'kept', '--status', 'success')
-run('set', 'b', '')
+run('update', 'a', 'kept', '--status', 'success')
+run('update', 'b', '')
 c = run('bind', 'c')
 mark('BEFORE_RELOAD')
 run('config', input=b'[line.c]\ntext = "C[#(value)]"\n[line.b]\ndefault = B1\ntext = "B[#(value)]"\n[line.a]\ndefault = A1\ntext = "A[#(value)|#(status)]"\n[line.d]\ntext = "D[#(value)]"\n')
 mark('REORDERED')
 assert os.path.exists(c)
 # IDs survive reordering: a is still ID 1, and d is new.
-run('set', '1', 'by-id'); run('set', '4', 'new-line')
+run('update', '1', 'by-id'); run('update', '4', 'new-line')
 mark('BY_ID')
-run('set', 'a', '--reset')
+run('update', 'a', '--reset')
 run('config', input=b'[line.a]\ndefault = A2\ntext = "A[#(value)|#(status)]"\n[line.b]\ntext = "B[#(value)]"\n')
 mark('DROPPED')
 deadline = time.monotonic() + 2
 while os.path.exists(c) and time.monotonic() < deadline: time.sleep(.02)
 assert not os.path.exists(c)
-run('set', 'c', 'x', code=1)
+run('update', 'c', 'x', code=1)
 # A configured name used by a pushed line, or a bad config, changes nothing.
-assert run('add', 'job', input=b'pushed\n') == 'job'
+assert run('new', 'job', input=b'pushed\n') == 'job'
 run('config', input=b'[line.a]\n[line.job]\n')
 run('config', input=b'[line.a]\ntext = #(nope)\n', code=2)
 mark('REJECTED')
-run('set', 'a', 'still')
+run('update', 'a', 'still')
 mark('RELOAD_OK')
 '''
     config = '[line.a]\ndefault = A0\ntext = "A[#(value)|#(status)]"\n[line.b]\ndefault = B0\ntext = "B[#(value)]"\n[line.c]\ntext = "C[#(value)]"\n'
@@ -2619,26 +2619,26 @@ run = printf machine
 '''
     child = CHILD_PRELUDE + r'''
 mark('DEFAULT_START')
-run('set', 'prompt', '#(command:user) #[bold]')
+run('update', 'prompt', '#(command:user) #[bold]')
 mark('DEFAULT_LITERAL')
-run('set', 'prompt', '--reset')
+run('update', 'prompt', '--reset')
 mark('DEFAULT_RESET')
 fifo = run('bind', 'prompt')
 with open(fifo, 'w') as f: f.write('#[bold]FIFO\n')
 mark('DEFAULT_FIFO')
-run('set', 'prompt', '')
+run('update', 'prompt', '')
 mark('DEFAULT_EMPTY')
 layout = '[line.prompt]\ndefault = "NEW #(name) #(status)"\ntext = "PROMPT[#(value)]"\n'
 run('config', input=layout.encode())
 mark('DEFAULT_RELOADED_EMPTY')
-run('set', 'prompt', '--reset', '--status', 'success')
+run('update', 'prompt', '--reset', '--status', 'success')
 mark('DEFAULT_RELOADED_RESET')
 run('config', input=layout.replace('NEW ', 'LATEST ').encode())
 mark('DEFAULT_RELOADED_LIVE')
-run('set', 'prompt', 'kept')
+run('update', 'prompt', 'kept')
 run('config', input=layout.encode())
 mark('DEFAULT_RELOADED_OVERRIDE')
-run('set', 'prompt', '--reset')
+run('update', 'prompt', '--reset')
 mark('DEFAULT_OK')
 '''
     code, data = run_session(binary, config, child)
@@ -2717,13 +2717,13 @@ size=$(stty size); rows=${size%% *}; printf "__START__:%s:%s\n" "$rows" "${STATU
 while :; do
   IFS= read -r command || continue
   case "$command" in
-    SET) "$statusbar_bin" set three hidden-value; printf '__SET__\n' ;;
-    ROW) "$statusbar_bin" set two changed-row-two ;;
+    SET) "$statusbar_bin" update three hidden-value; printf '__SET__\n' ;;
+    ROW) "$statusbar_bin" update two changed-row-two ;;
     CLEAR) printf '\033[2J__CLEAR__\n' ;;
     ALT) printf '\033[?1049h__ALT__\n' ;;
     NORMAL) printf '\033[?1049l__NORMAL__\n' ;;
     BYTES) printf '\033[32m__FORWARDED__\033[0m\n' ;;
-    BAD) "$statusbar_bin" set missing bad 2>/dev/null; printf '__BAD__:%s\n' "$?" ;;
+    BAD) "$statusbar_bin" update missing bad 2>/dev/null; printf '__BAD__:%s\n' "$?" ;;
     EXIT) exit 0 ;;
   esac
 done

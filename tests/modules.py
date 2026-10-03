@@ -212,9 +212,9 @@ time.sleep(2)
 for line in lines[1:]:
     name = line['name']
     mark('OVERRIDE_START_' + name)
-    run('set', name, 'OVERRIDE_' + name)
+    run('update', name, 'OVERRIDE_' + name)
     mark('OVERRIDE_SET_' + name)
-    run('set', name, '--reset')
+    run('update', name, '--reset')
     mark('OVERRIDE_RESET_' + name)
 mark('MODULE_LIBRARY_OK')
 '''

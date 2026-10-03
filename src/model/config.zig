@@ -25,7 +25,7 @@
 //!
 //! `[line.NAME]` sections appear in the bar in the order they are first
 //! declared, whatever sections come between them. `[push]` holds the
-//! templates of lines created by `statusbar add`, so `push` remains a valid
+//! templates of lines created by `statusbar new`, so `push` remains a valid
 //! line name. `text` is the base template; `running`, `done`, `success` and
 //! `failed` replace it while a line has that status. `KEY .= FRAGMENT`
 //! appends to an explicitly assigned template key exactly, without adding
