@@ -19,9 +19,11 @@ if not type -q +
       printf '%s\n' 'Usage: + [+NAME] COMMAND [ARG...]' >&2
       return 2
     end
-    if test -z "$name"
-      set name (string replace -r '^.*/' '' -- "$argv[1]")
+    if test -n "$name"
+      command @STATUSBAR@ new "$name" -- $argv &
+    else
+      set -l prefix (string replace -r '^.*/' '' -- "$argv[1]")
+      command @STATUSBAR@ new --prefix "$prefix" -- $argv &
     end
-    command @STATUSBAR@ new "$name" -- $argv &
   end
 end

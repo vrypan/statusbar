@@ -512,12 +512,12 @@ def check_plus(binary):
             record = Path(directory) / 'record.json'
             test_env = {**env, 'PLUS_RECORD': str(record)}
             cases = [
-                ('+ make test', ['new', 'make', '--', 'make', 'test']),
+                ('+ make test', ['new', '--prefix', 'make', '--', 'make', 'test']),
                 ('+ +build make "two words" "" "--flag"',
                  ['new', 'build', '--', 'make', 'two words', '', '--flag']),
                 ('+ /bin/echo "a;$(ignored)*"',
-                 ['new', 'echo', '--', '/bin/echo', 'a;$(ignored)*']),
-                ('+ -- +command arg', ['new', '+command', '--', '+command', 'arg']),
+                 ['new', '--prefix', 'echo', '--', '/bin/echo', 'a;$(ignored)*']),
+                ('+ -- +command arg', ['new', '--prefix', '+command', '--', '+command', 'arg']),
                 ('+ +build -- /bin/echo done', ['new', 'build', '--', '/bin/echo', 'done']),
             ]
             # Single quotes keep the literal command-substitution text in both shells.
@@ -555,8 +555,15 @@ run('rm', 'build')
 script = source + "\n+ /bin/sh -c 'printf failure; exit 7'\nwait\n"
 subprocess.run([shell, flag, '-c', script])
 lines = json.loads(run('ls', '--temp', '--json'))['lines']
-assert len(lines) == 1 and lines[0]['name'] == 'sh', lines
+assert len(lines) == 1 and lines[0]['name'] == 'sh-' + str(lines[0]['id']), lines
 assert lines[0]['status'] == 'failed' and lines[0]['value'] == 'failure', lines
+# Repeating the command keeps the earlier line and generates a fresh name.
+script = source + "\n+ /bin/sh -c 'printf again'\nwait\n"
+subprocess.run([shell, flag, '-c', script], check=True)
+repeated = json.loads(run('ls', '--temp', '--json'))['lines']
+assert len(repeated) == 2 and repeated[0] == lines[0], repeated
+assert repeated[1]['name'] == 'sh-' + str(repeated[1]['id']), repeated
+assert repeated[1]['status'] == 'success' and repeated[1]['value'] == 'again', repeated
 mark('PLUS_OK')
 '''
         code, data = run_session(binary, '[line.base]\n', child,

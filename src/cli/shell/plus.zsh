@@ -18,7 +18,10 @@ if ! whence -w + >/dev/null 2>&1; then
       print -u2 -- 'Usage: + [+NAME] COMMAND [ARG...]'
       return 2
     fi
-    [[ -n $name ]] || name=${1:t}
-    command @STATUSBAR@ new "$name" -- "$@" &
+    if [[ -n $name ]]; then
+      command @STATUSBAR@ new "$name" -- "$@" &
+    else
+      command @STATUSBAR@ new --prefix "${1:t}" -- "$@" &
+    fi
   }
 fi

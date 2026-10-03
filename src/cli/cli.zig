@@ -336,7 +336,7 @@ const commands = [_]zecli.CommandSpec{
         \\the full prompt stays in the terminal. Use --starship-line to choose another.
         \\
         \\The + shortcut runs commands in background statusbar lines:
-        \\+ make test names the line make; + +build make test names it build.
+        \\+ make test names the line make-ID; + +build make test names it build.
         \\An existing + command is preserved. Use --no-plus to skip this shortcut.
         \\
         \\Use --starship=false to keep your prompt, or --report-cwd=false
