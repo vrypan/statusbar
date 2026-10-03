@@ -558,8 +558,13 @@ def check_plus(binary):
                  ['new', 'build', '--', 'make', 'two words', '', '--flag']),
                 ('+ /bin/echo "a;$(ignored)*"',
                  ['new', '--prefix', 'echo', '--', '/bin/echo', 'a;$(ignored)*']),
-                ('+ -- +command arg', ['new', '--prefix', '+command', '--', '+command', 'arg']),
+                ('+ -- +command arg', ['new', '--prefix', '-command', '--', '+command', 'arg']),
                 ('+ +build -- /bin/echo done', ['new', 'build', '--', '/bin/echo', 'done']),
+                ('+ python3.13 -V', ['new', '--prefix', 'python3-13', '--', 'python3.13', '-V']),
+                ('+ ./build.sh arg', ['new', '--prefix', 'build-sh', '--', './build.sh', 'arg']),
+                ("+ './two words.sh'", ['new', '--prefix', 'two-words-sh', '--', './two words.sh']),
+                ('+ ' + 'x' * 60, ['new', '--prefix', 'x' * 43, '--', 'x' * 60]),
+                ('+ /', ['new', '--prefix', 'tmp', '--', '/']),
             ]
             # Single quotes keep the literal command-substitution text in both shells.
             cases[2] = ("+ /bin/echo 'a;$(ignored)*'", cases[2][1])
@@ -584,7 +589,7 @@ def check_plus(binary):
 
         # Verify actual background execution, names, values and completion statuses.
         child = CHILD_PRELUDE + r'''
-import json
+import json, shlex
 shell, flag = sys.argv[2:]
 source = run('init', shell, '--starship=false', '--report-cwd=false')
 script = source + "\n+ +build /bin/sh -c 'sleep .1; printf success'\nwait\n"
@@ -605,6 +610,18 @@ repeated = json.loads(run('ls', '--temp', '--json'))['lines']
 assert len(repeated) == 2 and repeated[0] == lines[0], repeated
 assert repeated[1]['name'] == 'sh-' + str(repeated[1]['id']), repeated
 assert repeated[1]['status'] == 'success' and repeated[1]['value'] == 'again', repeated
+run('rm', '--all')
+# Valid dotted and long executable names must actually run, not just parse.
+with tempfile.TemporaryDirectory() as directory:
+    for basename, prefix in (('build.sh', 'build-sh'), ('x' * 60, 'x' * 43)):
+        executable = os.path.join(directory, basename)
+        with open(executable, 'w') as f: f.write('#!/bin/sh\nprintf normalized\n')
+        os.chmod(executable, 0o755)
+        script = source + '\n+ ' + shlex.quote(executable) + '\nwait\n'
+        subprocess.run([shell, flag, '-c', script], check=True)
+        line = json.loads(run('ls', '--temp', '--json'))['lines'][-1]
+        assert line['name'] == prefix + '-' + str(line['id']), line
+        assert line['status'] == 'success' and line['value'] == 'normalized', line
 mark('PLUS_OK')
 '''
         code, data = run_session(binary, '[line.base]\n', child,

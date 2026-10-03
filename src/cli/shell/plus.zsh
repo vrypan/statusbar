@@ -21,7 +21,11 @@ if ! whence -w + >/dev/null 2>&1; then
     if [[ -n $name ]]; then
       command @STATUSBAR@ new "$name" -- "$@" &
     else
-      command @STATUSBAR@ new --prefix "${1:t}" -- "$@" &
+      local prefix=${1:t}
+      prefix=${prefix//[^A-Za-z0-9_-]/-}
+      prefix=${prefix[1,43]}
+      [[ -n $prefix ]] || prefix=tmp
+      command @STATUSBAR@ new --prefix "$prefix" -- "$@" &
     fi
   }
 fi

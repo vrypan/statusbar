@@ -23,6 +23,10 @@ if not type -q +
       command @STATUSBAR@ new "$name" -- $argv &
     else
       set -l prefix (string replace -r '^.*/' '' -- "$argv[1]")
+      set prefix (string replace -ar '[^A-Za-z0-9_-]' '-' -- "$prefix" | string sub -l 43)
+      if test -z "$prefix"
+        set prefix tmp
+      end
       command @STATUSBAR@ new --prefix "$prefix" -- $argv &
     end
   end
