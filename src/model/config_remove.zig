@@ -15,7 +15,7 @@ pub fn remove(gpa: std.mem.Allocator, source: []const u8, prefix: []const u8, di
             found = true;
         } else {
             try checkVariants(&cfg, &line.variants, prefix, diag);
-            try checkVariants(&cfg, &line.default_variants, prefix, diag);
+            try checkTemplate(&cfg, line.default_template, prefix, diag);
         }
     }
     for (cfg.commandList()) |command| found = found or prefixes.contains(prefix, command.name);
@@ -65,16 +65,18 @@ pub fn remove(gpa: std.mem.Allocator, source: []const u8, prefix: []const u8, di
 fn checkVariants(cfg: *const config.Config, variants: *const config.Variants, prefix: []const u8, diag: *config.Diagnostic) !void {
     inline for (std.meta.fields(config.Variants)) |field| {
         const optional: ?config.Template = @field(variants, field.name);
-        if (optional) |template| for (template.parts) |part| {
-            switch (part) {
-                .command => |index| if (prefixes.contains(prefix, cfg.commands[index].name)) {
-                    return statements.fail(diag, "remaining template references a command under this prefix");
-                },
-                .style => |style| try checkStyle(cfg, style, prefix, diag),
-                else => {},
-            }
-        };
+        if (optional) |template| try checkTemplate(cfg, template, prefix, diag);
     }
+}
+
+fn checkTemplate(cfg: *const config.Config, template: config.Template, prefix: []const u8, diag: *config.Diagnostic) !void {
+    for (template.parts) |part| switch (part) {
+        .command => |index| if (prefixes.contains(prefix, cfg.commands[index].name)) {
+            return statements.fail(diag, "remaining template references a command under this prefix");
+        },
+        .style => |style| try checkStyle(cfg, style, prefix, diag),
+        else => {},
+    };
 }
 
 fn checkStyle(cfg: *const config.Config, style: []const u8, prefix: []const u8, diag: *config.Diagnostic) !void {
@@ -110,6 +112,16 @@ test "removal rejects dependencies, unknown prefixes and removing the final line
         "[line.base]\n[push]\ntext = #[fg=disk.red]#(value)\n[colors]\ndisk.red = red",
         "[line.base]",
         "[line.disk.only]",
+    }) |source| {
+        var diag: config.Diagnostic = .{};
+        try std.testing.expectError(error.InvalidConfig, remove(std.testing.allocator, source, "disk", &diag));
+    }
+}
+
+test "removal sees colors and commands referenced only by an unexpanded default" {
+    for ([_][]const u8{
+        "[line.base]\ndefault = #[fg=disk.red]x\ntext = static\n[colors]\ndisk.red = red",
+        "[line.base]\ndefault = #(command:disk.read)\ntext = static\n[command.disk.read]\nrun = true",
     }) |source| {
         var diag: config.Diagnostic = .{};
         try std.testing.expectError(error.InvalidConfig, remove(std.testing.allocator, source, "disk", &diag));

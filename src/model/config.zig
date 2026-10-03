@@ -82,6 +82,8 @@ pub const LineSpec = struct {
     name: []const u8,
     /// Source of the fallback template used until a value is explicitly set.
     default: []const u8 = "",
+    /// The compiled `default`, kept even where no variant shows `#(value)`.
+    default_template: Template = .{},
     variants: Variants = .{},
     default_variants: Variants = .{},
     keep: Keep = .left,
@@ -195,6 +197,7 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
             try compileFragments(arena, source.fragments.items, commands, .default_value, &spec.default, diag)
         else
             Template{};
+        spec.default_template = fallback;
         diag.line = if (raw.default) |source| source.fragments.items[0].line else 0;
         inline for (std.meta.fields(Variants)) |field| {
             if (comptime field.type == Template) {
