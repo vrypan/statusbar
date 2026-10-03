@@ -95,6 +95,20 @@ pub const Source = struct {
         return self.variants(entry).select(entry.status);
     }
 
+    /// Whether supplied text appears in the current status's override template.
+    /// Default expansion substitutes #(value), so inspect the unexpanded variant.
+    pub fn acceptsText(self: *const Source, index: usize) bool {
+        const entry = self.line(index);
+        const writable_variants = switch (entry.kind) {
+            .configured => &self.cfg.lines[entry.config_index].variants,
+            .temp => &self.cfg.push.variants,
+        };
+        for (writable_variants.select(entry.status).parts) |part| {
+            if (part == .value) return true;
+        }
+        return false;
+    }
+
     fn keep(self: *const Source, entry: *const Line) config.Keep {
         return switch (entry.kind) {
             .configured => self.cfg.lines[entry.config_index].keep,
@@ -538,4 +552,30 @@ fn initAllocationScenario(gpa: std.mem.Allocator) !void {
 
 test "source initialization cleans every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, initAllocationScenario, .{});
+}
+
+test "text access uses unexpanded templates and follows status variants" {
+    var f: Fixture = undefined;
+    try f.init(std.testing.allocator,
+        \\[line.rule]
+        \\text = #(fill:·)
+        \\[line.prompt]
+        \\default = Ready
+        \\failed = fixed
+        \\[push]
+        \\text = #(value)
+        \\done = fixed
+    );
+    defer f.deinit();
+    try std.testing.expect(!f.source.acceptsText(0));
+    try std.testing.expect(f.source.acceptsText(1));
+    f.set(1, .{ .status = .failed });
+    try std.testing.expect(!f.source.acceptsText(1));
+    f.set(1, .{ .status = .normal, .value = .{ .replace = "override" } });
+    try std.testing.expect(f.source.acceptsText(1));
+    _ = try f.lines.push(null, null);
+    try f.source.syncLines();
+    try std.testing.expect(f.source.acceptsText(2));
+    f.set(2, .{ .status = .success });
+    try std.testing.expect(!f.source.acceptsText(2));
 }

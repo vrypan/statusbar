@@ -1674,13 +1674,12 @@ def temporary(*args):
 initial = listing()
 assert [x['name'] for x in initial] == ['base', 'empty', 'hidden'], initial
 assert [x['visible'] for x in initial] == [True, True, False], initial
-assert all(x['value'] is None and x['fifo'] is None for x in initial), initial
+assert all(x['value'] is None and x['fifo_path'] is None for x in initial), initial
 assert listing('--temp') == []
-assert listing('--temp', '--short') == []
+run('ls', '--short', code=2)
+run('list', '--short', '--json', code=2)
 assert temporary() == []
-assert temporary('--short') == []
-assert run('ls', '--temp', '--short').split() == ['ID', 'NAME', 'STATUS', 'VALUE']
-assert run('ls', '--temp').split() == ['ID', 'NAME', 'KIND', 'STATUS', 'VISIBLE', 'FIFO', 'VALUE']
+assert run('ls', '--temp').split() == ['ID', 'NAME', 'TEMP', 'ACCESS', 'FIFO', 'STATUS']
 run('update', 'empty', '')
 value = '\x1b[31m"\\Καλημέρα\t界'
 run('update', 'hidden', value, '--status', 'failed')
@@ -1689,15 +1688,15 @@ assert updated[1]['value'] == ''
 # set normalizes tabs to spaces; list returns the stored override.
 assert updated[2]['value'] == value.replace('\t', ' '), updated[2]
 assert updated[2]['status'] == 'failed' and not updated[2]['visible']
-short_fields = ('id', 'name', 'status', 'value')
-assert listing('--short') == [{key: x[key] for key in short_fields} for x in updated]
-short_table = run('ls', '--short')
-assert short_table.splitlines()[0].split() == ['ID', 'NAME', 'STATUS', 'VALUE']
-assert len(short_table.splitlines()) == 4 and '<default>' in short_table and '\x1b' not in short_table
-assert '\\x1b[31m' in short_table and '""' in short_table
+assert [x['access'] for x in initial] == ['rw', 'ro', 'rw'], initial
+assert updated[2]['access'] == 'ro', updated
+assert not any(x['temp'] or x['fifo'] for x in initial)
+assert set(initial[0]) == {'id', 'name', 'temp', 'access', 'status', 'visible', 'value', 'fifo', 'fifo_path'}
 table = run('ls')
-assert '\x1b' not in table and '\\x1b[31m' in table and '<default>' in table
-assert '""' in table and len(table.splitlines()) == 4, table
+assert table.splitlines()[0].split() == ['ID', 'NAME', 'TEMP', 'ACCESS', 'FIFO', 'STATUS']
+assert len(table.splitlines()) == 4 and 'Καλημέρα' not in table and '\x1b' not in table
+assert table.splitlines()[1].split()[2:5] == ['no', 'rw', 'no'], table
+assert table.splitlines()[2].split()[2:5] == ['no', 'ro', 'no'], table
 run('update', 'empty', '--reset')
 assert listing()[1]['value'] is None
 unnamed = run('new', input=b'unnamed')
@@ -1705,24 +1704,25 @@ run('new', 'job', input=b'finished')
 pushed = listing('--temp')
 assert [x['id'] for x in pushed] == [int(unnamed), int(unnamed) + 1], pushed
 assert [x['name'] for x in pushed] == [None, 'job'], pushed
-assert all(x['kind'] == 'temp' and x['status'] == 'done' and not x['visible'] for x in pushed)
+assert all(x['temp'] and x['status'] == 'done' and not x['visible'] for x in pushed)
 assert temporary() == pushed
+run('update', 'job', '--status', 'failed')
+assert listing('--temp')[-1]['access'] == 'ro'
+run('update', 'job', '--status', 'done')
+assert listing('--temp')[-1]['access'] == 'rw'
 # Bindings are discovered by stable line ID, including hidden and unnamed lines.
 base_fifo = run('bind', 'base')
 hidden_fifo = run('bind', 'hidden')
 unnamed_fifo = run('bind', unnamed)
 bound = listing()
-assert [x['fifo'] for x in bound] == [base_fifo, None, hidden_fifo, unnamed_fifo, None], bound
-assert base_fifo in run('ls') and hidden_fifo in run('ls')
-assert listing('--temp')[0]['fifo'] == unnamed_fifo
-assert temporary()[0]['fifo'] == unnamed_fifo
-assert temporary('--short') == listing('--temp', '--short')
-assert listing('--temp', '--short') == [{key: x[key] for key in short_fields} for x in bound if x['kind'] == 'temp']
-short_pushed = run('ls', '--short', '--temp').splitlines()
-assert short_pushed[0].split() == ['ID', 'NAME', 'STATUS', 'VALUE']
-assert len(short_pushed) == 3 and all('.fifos/' not in row for row in short_pushed)
+assert [x['fifo_path'] for x in bound] == [base_fifo, None, hidden_fifo, unnamed_fifo, None], bound
+assert [x['fifo'] for x in bound] == [True, False, True, True, False]
+assert base_fifo not in run('ls') and hidden_fifo not in run('ls')
+assert run('ls').splitlines()[1].split()[4] == 'yes'
+assert listing('--temp')[0]['fifo_path'] == unnamed_fifo
+assert temporary()[0]['fifo_path'] == unnamed_fifo
 run('bind', '--unbind', unnamed)
-assert listing('--temp')[0]['fifo'] is None
+assert listing('--temp')[0]['fifo_path'] is None
 # Reordering config lines preserves IDs and pushed rows; visibility follows layout.
 run('config', input=b'[line.hidden]\ndefault = fallback\n[line.base]\n[line.empty]\n')
 settle()
@@ -1730,16 +1730,16 @@ reordered = listing()
 assert [x['id'] for x in reordered] == [initial[2]['id'], initial[0]['id'], initial[1]['id'], *[x['id'] for x in pushed]], reordered
 assert reordered[0]['visible'] and not reordered[2]['visible']
 assert reordered[0]['value'] == updated[2]['value']
-assert [x['fifo'] for x in reordered[:3]] == [hidden_fifo, base_fifo, None]
+assert [x['fifo_path'] for x in reordered[:3]] == [hidden_fifo, base_fifo, None]
 assert temporary() == listing('--temp')
 run('bind', '--unbind', 'hidden')
-assert listing()[0]['fifo'] is None
+assert listing()[0]['fifo_path'] is None
 pushed_fifo = run('new', 'fifo-job', '--status', 'running', '--fifo')
-assert listing('--temp')[-1]['fifo'] == pushed_fifo
-assert pushed_fifo in run('ls', '--temp')
-assert pushed_fifo in run('ls', '--temp')
+assert listing('--temp')[-1]['fifo_path'] == pushed_fifo
+assert pushed_fifo not in run('ls', '--temp')
+assert run('ls', '--temp').splitlines()[-1].split()[4] == 'yes'
 run('rm', 'fifo-job')
-assert all(x['fifo'] != pushed_fifo for x in listing())
+assert all(x['fifo_path'] != pushed_fifo for x in listing())
 # A snapshot must fit more than a datagram and preserve maximum-length values.
 run('rm', '--all')
 long_value = '界' * 341 + 'x'
@@ -1785,7 +1785,7 @@ assert temporary() == []
 print('SNAPSHOT_PATH=' + snapshot_path, flush=True)
 print('LIST_OK', flush=True)
 """
-    config = '[line.base]\ndefault = fallback\n[line.empty]\n[line.hidden]\n'
+    config = '[line.base]\ndefault = fallback\n[line.empty]\ntext = fixed\n[line.hidden]\nfailed = fixed\n[push]\nfailed = fixed\n'
     code, data = run_session(binary, config, child, rows=4, timeout=35)
     assert code == 0 and b'LIST_OK' in data, (code, data[-6000:])
     match = re.search(rb'SNAPSHOT_PATH=([^\r\n\x1b]+)', data)

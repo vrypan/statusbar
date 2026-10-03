@@ -44,8 +44,8 @@ for words, position, expected in (
     ('statusbar config show ""', 3, {'current', 'startup', 'default'}),
     ('statusbar remove "-"', 2, {'--all', '-a', '--help', '-h'}),
     ('statusbar rm "-"', 2, {'--all', '-a', '--help', '-h'}),
-    ('statusbar list "--"', 2, {'--temp', '--short', '--json', '--help'}),
-    ('statusbar ls "--"', 2, {'--temp', '--short', '--json', '--help'}),
+    ('statusbar list "--"', 2, {'--temp', '--json', '--help'}),
+    ('statusbar ls "--"', 2, {'--temp', '--json', '--help'}),
 ):
     result = subprocess.run(
         ['bash'], input=completion + f'\nCOMP_WORDS=({words}); COMP_CWORD={position}; '

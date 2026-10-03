@@ -126,7 +126,6 @@ const config_application = zecli.comptimeValidated(.{
 pub const ConfigCommandName = zecli.CommandEnum(config_application);
 
 const list_output_flags = [_]zecli.FlagSpec{
-    .{ .name = "short", .description = "Show only ID, name, status and value, including in JSON" },
     .{ .name = "json", .description = "Print a versioned JSON snapshot" },
 };
 
@@ -149,10 +148,9 @@ const temp_remove_arguments = [_]zecli.ArgumentSpec{
 
 const list_output_help =
     \\JSON contains version and lines. Each line has id, name (null if
-    \\unnamed), kind, status, visible, fifo (path or null) and value. Value is the raw override,
+    \\unnamed), temp, access (ro/rw), status, visible, fifo (boolean),
+    \\fifo_path (path or null) and value. Value is the raw override,
     \\not rendered text: null means no override, while "" is explicitly empty.
-    \\The table escapes controls and shows <default> for no override.
-    \\--short keeps only id, name, status and value in either output format.
 ++ "\n";
 
 const commands = [_]zecli.CommandSpec{
@@ -278,7 +276,7 @@ const commands = [_]zecli.CommandSpec{
         .name = "list",
         .aliases = &.{"ls"},
         .description = "List the current session's lines",
-        .usage = "statusbar list [--temp] [--short] [--json]",
+        .usage = "statusbar list [--temp] [--json]",
         .double_dash = .positionals,
         .flags = &([_]zecli.FlagSpec{
             .{ .name = "temp", .description = "Show only temporary lines" },
@@ -286,9 +284,12 @@ const commands = [_]zecli.CommandSpec{
         .extra_help =
         \\Lists configured and temporary lines in display order, including hidden
         \\lines. Requires a live statusbar session. --temp filters the result.
+        \\ACCESS is rw when supplied text appears in the current status template,
+        \\otherwise ro. FIFO reports whether a pipe is bound. JSON adds values,
+        \\visibility and FIFO paths.
         \\
         ++ list_output_help,
-        .examples = &.{ "statusbar list", "statusbar list --short", "statusbar list --temp --short --json" },
+        .examples = &.{ "statusbar list", "statusbar list --temp", "statusbar list --json" },
     },
     .{
         .name = "bind",

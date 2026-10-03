@@ -28,11 +28,16 @@ pub fn controlRequest(self: *Proxy, request: protocol.Request, owner: []const u8
         .pop => |target| popLine(self, target, now_ms),
         .pop_all => popAll(self, now_ms),
         .list => snapshot: {
-            const path = @import("session").line_snapshot.publish(
+            const snapshots = @import("session").line_snapshot;
+            const access = self.gpa.alloc(snapshots.Access, self.lines.items.items.len) catch break :snapshot reject("cannot create line snapshot");
+            defer self.gpa.free(access);
+            for (access, 0..) |*mode, index| mode.* = if (self.runtime.source.acceptsText(index)) .rw else .ro;
+            const path = snapshots.publish(
                 self.io,
                 self.session_state.path(),
                 &self.session_token,
                 self.lines,
+                access,
                 self.fifos.items.items,
                 self.layout.bar,
                 &self.control_reply,

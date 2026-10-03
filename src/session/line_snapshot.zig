@@ -11,14 +11,18 @@ pub const version = 1;
 // value can expand to six JSON bytes; leave room for names and metadata.
 pub const max_bytes = 65533 * (6 * types.max_value + 512) + 256;
 
+pub const Access = enum { ro, rw };
+
 pub const Entry = struct {
     id: u64,
     name: ?[]const u8,
-    kind: lines_mod.Kind,
+    temp: bool,
+    access: Access,
     status: types.Status,
     visible: bool,
     value: ?[]const u8,
-    fifo: ?[]const u8 = null,
+    fifo: bool,
+    fifo_path: ?[]const u8 = null,
 };
 
 pub const Snapshot = struct {
@@ -50,7 +54,8 @@ fn utf8Value(buffer: *[3 * types.max_value]u8, bytes: []const u8) []const u8 {
     return buffer[0..len];
 }
 
-pub fn write(writer: *Io.Writer, token: []const u8, lines: *const lines_mod.Lines, bindings: []const Binding, visible: usize) !void {
+pub fn write(writer: *Io.Writer, token: []const u8, lines: *const lines_mod.Lines, access: []const Access, bindings: []const Binding, visible: usize) !void {
+    std.debug.assert(access.len == lines.items.items.len);
     var json: std.json.Stringify = .{ .writer = writer, .options = .{} };
     try json.beginObject();
     try json.objectField("version");
@@ -61,15 +66,18 @@ pub fn write(writer: *Io.Writer, token: []const u8, lines: *const lines_mod.Line
     try json.beginArray();
     for (lines.items.items, 0..) |*line, index| {
         var buffer: [3 * types.max_value]u8 = undefined;
+        const fifo_path = for (bindings) |*binding| {
+            if (binding.line == line.id) break binding.pathSlice();
+        } else null;
         try json.write(Entry{
             .id = line.id,
             .name = line.explicitName(),
-            .kind = line.kind,
+            .temp = line.kind == .temp,
+            .access = access[index],
             .status = line.status,
             .visible = index < visible,
-            .fifo = for (bindings) |*binding| {
-                if (binding.line == line.id) break binding.pathSlice();
-            } else null,
+            .fifo = fifo_path != null,
+            .fifo_path = fifo_path,
             .value = if (line.override()) |value| utf8Value(&buffer, value) else null,
         });
     }
@@ -81,7 +89,7 @@ pub fn write(writer: *Io.Writer, token: []const u8, lines: *const lines_mod.Line
 /// Every request writes all lines; clients filter afterwards. Concurrent
 /// clients may open a newer snapshot, but always a complete one captured
 /// during their request/read window. One file bounds retained disk state.
-pub fn publish(io: Io, state_path: []const u8, token: []const u8, lines: *const lines_mod.Lines, bindings: []const Binding, visible: usize, path_buffer: []u8) ![]const u8 {
+pub fn publish(io: Io, state_path: []const u8, token: []const u8, lines: *const lines_mod.Lines, access: []const Access, bindings: []const Binding, visible: usize, path_buffer: []u8) ![]const u8 {
     const path = try filePath(path_buffer, state_path);
     var pending = try Io.Dir.cwd().createFileAtomic(io, path, .{
         .replace = true,
@@ -90,7 +98,7 @@ pub fn publish(io: Io, state_path: []const u8, token: []const u8, lines: *const 
     defer pending.deinit(io);
     var buffer: [4096]u8 = undefined;
     var output = pending.file.writer(io, &buffer);
-    try write(&output.interface, token, lines, bindings, visible);
+    try write(&output.interface, token, lines, access, bindings, visible);
     try output.interface.flush();
     try pending.replace(io);
     return path;
@@ -115,12 +123,15 @@ test "snapshot preserves order, null and empty overrides, hidden lines and escap
     _ = lines.apply(2, .{ .value = .{ .replace = "\x1b[31m\"\\界\xff" }, .status = .failed });
     var output: Io.Writer.Allocating = .init(allocator);
     defer output.deinit();
-    try write(&output.writer, "token", &lines, &.{}, 2);
+    try write(&output.writer, "token", &lines, &.{ .ro, .rw, .rw }, &.{}, 2);
     const parsed = try std.json.parseFromSlice(Snapshot, allocator, output.written(), .{});
     defer parsed.deinit();
     const entries = parsed.value.lines;
     try std.testing.expectEqual(@as(usize, 3), entries.len);
     try std.testing.expect(entries[0].value == null);
+    try std.testing.expect(!entries[0].temp and entries[0].access == .ro);
+    try std.testing.expect(entries[2].temp and entries[2].access == .rw);
+    try std.testing.expect(!entries[2].fifo and entries[2].fifo_path == null);
     try std.testing.expectEqualStrings("", entries[1].value.?);
     try std.testing.expect(entries[1].visible);
     try std.testing.expectEqualStrings("\x1b[31m\"\\界\xef\xbf\xbd", entries[2].value.?);
@@ -138,11 +149,11 @@ test "snapshots publish atomically, validate the session, and are removed on shu
     defer lines.deinit();
     try lines.configure(&.{"base"});
     var path_buffer: [160]u8 = undefined;
-    const path = try publish(io, state.path(), token, &lines, &.{}, 1, &path_buffer);
+    const path = try publish(io, state.path(), token, &lines, &.{.rw}, &.{}, 1, &path_buffer);
     const old_file = try Io.Dir.cwd().openFile(io, path, .{});
     defer old_file.close(io);
     _ = lines.apply(0, .{ .value = .{ .replace = "new" } });
-    _ = try publish(io, state.path(), token, &lines, &.{}, 0, &path_buffer);
+    _ = try publish(io, state.path(), token, &lines, &.{.rw}, &.{}, 0, &path_buffer);
     const current = try read(allocator, io, path, token);
     defer current.deinit();
     try std.testing.expectEqualStrings("new", current.value.lines[0].value.?);
