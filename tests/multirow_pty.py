@@ -1208,11 +1208,11 @@ def check_config_snapshots(binary):
         path_env["XDG_CONFIG_HOME"] = folder
         result = subprocess.run([binary, "config", "show", "path"], env=path_env, capture_output=True)
         assert result.returncode == 0 and result.stdout == b"built-in\n", result
-    for args in (["show"], ["show", "current"], ["show", "startup"], ["list"], ["ls"], ["list", "--debug"], ["ls", "--debug"]):
+    for args in (["show"], ["show", "current"], ["show", "startup"], ["list"], ["ls"], ["list", "--json"], ["ls", "--json"], ["list", "--all", "--json"]):
         result = subprocess.run([binary, "config", *args], env=clean_env, capture_output=True)
         assert result.returncode == 2 and not result.stdout and b"requires a running" in result.stderr, result
     for args in (["show", "unknown"], ["startup"], ["show", "default", "current"], ["show", "current", "--path"],
-                 ["show", "--default"], ["--print"], ["--default"], ["--path"], ["list", "default"], ["ls", "--debug", "current"]):
+                 ["show", "--default"], ["--print"], ["--default"], ["--path"], ["list", "default"], ["ls", "--all", "current"]):
         result = subprocess.run([binary, "config", *args], env=clean_env, capture_output=True)
         assert result.returncode == 2 and not result.stdout, result
 
@@ -1233,6 +1233,13 @@ def current_is(expected):
 assert show('show', 'startup') == original
 assert show('show') == original
 assert show('show', 'current') == original
+assert json.loads(show('list', '--json')) == {
+    'version': 1,
+    'groups': [{'prefix': None, 'lines': ['a'], 'commands': []}],
+}
+full_original = json.loads(show('list', '--all', '--json'))
+assert full_original['lines'][0]['name'] == 'a'
+assert full_original['lines'][0]['variants']['text'] == [{'text': 'initial text'}]
 if config_path != '-':
     open(config_path, 'wb').write(b'invalid modified file')
     os.unlink(config_path)
@@ -1242,10 +1249,18 @@ assert show('show', 'default') == show('show', 'default')
 assert stat.S_IMODE(os.stat(os.environ['STATUSBAR_STATE']).st_mode) == 0o600
 subprocess.run([binary, 'set', 'a', 'MANUAL_OVERRIDE'], check=True)
 assert show('show') == original
+assert json.loads(show('ls', '--json', '-a')) == full_original
 subprocess.run([binary, 'config'], input=replacement, check=True)
 current_is(replacement)
 assert show('show', 'startup') == original
 assert show('show', 'current') == replacement
+assert json.loads(show('ls', '--json')) == {
+    'version': 1,
+    'groups': [{'prefix': None, 'lines': ['a', 'b'], 'commands': []}],
+}
+full_replacement = json.loads(show('ls', '--all', '--json'))
+assert [line['name'] for line in full_replacement['lines']] == ['a', 'b']
+assert full_replacement['lines'][0]['variants']['text'] == [{'text': 'next'}]
 assert stat.S_IMODE(os.stat(os.environ['STATUSBAR_STATE']).st_mode) == 0o600
 # A correctly authenticated but malformed replacement must retain the snapshot.
 envelope = b'1;' + os.environ['STATUSBAR_SESSION_ID'].encode() + b';[broken\n'
@@ -2167,7 +2182,7 @@ with tempfile.TemporaryDirectory() as folder:
     assert current() == snapshot and os.path.exists(disk_fifo)
     run('config', 'remove', 'dependent')
     wait_for(lambda: '[line.dependent.row]' not in current())
-    assert '[line.dependent.row]' not in run('config', 'list', '--debug')
+    assert 'dependent.row' not in [line['name'] for line in json.loads(run('config', 'list', '--all', '--json'))['lines']]
     run('config', 'add', '-', input=b'[line.dependent.row]\nfailed = #[fg=disk.red]X\n')
     wait_for(lambda: 'fg=disk.red' in current())
     run('config', 'rm', 'disk', code=2)
@@ -2177,13 +2192,17 @@ with tempfile.TemporaryDirectory() as folder:
     os.write(1, b'\x1b7' + frame('ADD', '[line.new.one]\n[line.new.two]\n') + frame('REMOVE', 'new') + b'\x1b8')
     settle()
     assert '[line.new.' not in current()
-    debug = run('config', 'ls', '--debug')
-    assert '[line.disk.usage]' in debug and '  disk.read #' in debug and '  disk.red = "red"' in debug, debug
+    details = json.loads(run('config', 'ls', '-a', '--json'))
+    assert any(line['name'] == 'disk.usage' for line in details['lines']), details
+    assert any(command['name'] == 'disk.read' for command in details['commands']), details
+    assert {'name': 'disk.red', 'value': 'red'} in details['colors'], details
     run('config', 'remove', 'disk', input=b'ignored')
     wait_for(lambda: '[line.disk.usage]' not in current())
-    debug = run('config', 'list', '--debug')
-    assert '[line.disk.usage]' not in debug and 'disk.read' not in debug and 'disk.red' not in debug, debug
-    assert '[line.keep.status]' in debug, debug
+    details = json.loads(run('config', 'list', '--all', '--json'))
+    assert not any(line['name'] == 'disk.usage' for line in details['lines']), details
+    assert not any(command['name'] == 'disk.read' for command in details['commands']), details
+    assert not any(color['name'] == 'disk.red' for color in details['colors']), details
+    assert any(line['name'] == 'keep.status' for line in details['lines']), details
     assert 'disk.read' not in current() and 'disk.red' not in current()
     assert not os.path.exists(disk_fifo) and os.path.exists(keep_fifo)
     assert next(line for line in entries() if line['name'] == 'keep.status') == before

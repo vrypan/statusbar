@@ -168,6 +168,7 @@ fn showPath(arena: std.mem.Allocator, io: Io, stdout: *Io.Writer, stderr: *Io.Wr
 }
 
 fn list(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout: *Io.Writer, stderr: *Io.Writer) !u8 {
+    if (command.enabled("all") and !command.enabled("json")) return common.usageError(stderr, command, "--all requires --json");
     var status: u8 = 0;
     const text = try readSession(arena, io, command, .current, stderr, &status) orelse return status;
     var diag: config.Diagnostic = .{};
@@ -178,7 +179,13 @@ fn list(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdout:
         return 1;
     };
     defer parsed.deinit();
-    if (command.enabled("debug")) try parsed.debug(stdout) else try parsed.list(stdout);
+    if (command.enabled("all")) {
+        try parsed.fullJson(stdout);
+    } else if (command.enabled("json")) {
+        try parsed.listJson(stdout);
+    } else {
+        try parsed.list(stdout);
+    }
     try stdout.flush();
     return 0;
 }

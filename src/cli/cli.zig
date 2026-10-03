@@ -8,7 +8,7 @@
 //!     statusbar list [--pushed] [--short] [--json]
 //!     statusbar bind [-u] NAME
 //!     statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME] [--no-plus]
-//!     statusbar config [show [SOURCE] | check FILE | load FILE | add FILE | list [--debug] | remove PREFIX]
+//!     statusbar config [show [SOURCE] | check FILE | load FILE | add FILE | list [--json [--all]] | remove PREFIX]
 //!     statusbar completion <bash|zsh|fish>
 
 const std = @import("std");
@@ -115,19 +115,28 @@ const config_commands = [_]zecli.CommandSpec{
         .name = "list",
         .aliases = &.{"ls"},
         .description = "List the current config's definitions by prefix",
-        .usage = "config list [--debug]",
-        .flags = &.{.{ .name = "debug", .description = "Show the whole parsed config instead of names" }},
+        .usage = "config list [--json [--all]]",
+        .flags = &.{
+            .{ .name = "all", .short = 'a', .description = "Include the full parsed config; requires --json" },
+            .{ .name = "json", .description = "Print names or full config details as versioned JSON" },
+        },
         .extra_help =
         \\Lists line and command names in the current config, one line per
         \\prefix (the part of a name before its first dot). Requires a running
         \\session.
         \\
-        \\--debug shows the parsed config: global settings, colors, lines with
-        \\their compiled templates and defaults, commands, push templates and
-        \\highlight settings. It excludes runtime values and statuses, and is
-        \\not a reloadable config. Neither form runs commands.
+        \\--json prints version and groups. Each group has prefix (null for
+        \\unprefixed names), lines and commands containing full names without
+        \\section-kind labels. Groups and names keep the same order as the
+        \\plain listing.
+        \\
+        \\--all (-a) requires --json and includes global settings, colors,
+        \\lines with compiled templates and expanded defaults, commands with
+        \\effective intervals, push templates and spinner frames, and highlight
+        \\settings. It excludes runtime values and statuses, and is not a
+        \\reloadable config. No form runs commands.
         ++ "\n",
-        .examples = &.{ "config list", "config ls --debug" },
+        .examples = &.{ "config list", "config list --json", "config list --all --json", "config ls -a --json" },
     },
     .{
         .name = "remove",
