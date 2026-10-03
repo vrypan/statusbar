@@ -90,6 +90,12 @@ fn resizeForLinesWithWinsize(self: *Proxy, now_ms: i64, outer: std.posix.winsize
     self.layout = next;
     try sys.setWinsize(self.master, &next.child);
     self.output.screen.resize(next.bar, next.child.row);
+    // Install the new scroll region before acknowledging line changes or
+    // forwarding child output. DECSTBM homes the cursor, so preserve the
+    // position corrected by makeRoomForGrowth. Painting may happen later.
+    self.terminal.write("\x1b7");
+    self.output.screen.writeRegion(&self.terminal);
+    self.terminal.write("\x1b8");
     self.setInputGeometry(next);
     self.output.screen.damaged = true;
     self.requestPaint(now_ms);

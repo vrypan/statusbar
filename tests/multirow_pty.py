@@ -214,9 +214,10 @@ def reap_while_draining(pid, fd, timeout=5):
                 time.sleep(min(0.01, remaining))
 
 
-def capture_pty(argv, env=None, rows=24, timeout=5, raw=False):
+def capture_pty(argv, env=None, rows=24, timeout=5, raw=False, cursor_rows=()):
     pid, master = spawn(argv, rows, env)
     reader = (lambda fd: os.read(fd, 65536)) if raw else read_pty
+    cursor_replies = 0
     data = b""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -226,6 +227,9 @@ def capture_pty(argv, env=None, rows=24, timeout=5, raw=False):
                 chunk = reader(master)
                 if chunk:
                     data += chunk
+                    while cursor_replies < min(data.count(b"\x1b[6n"), len(cursor_rows)):
+                        os.write(master, b"\x1b[%d;5R" % cursor_rows[cursor_replies])
+                        cursor_replies += 1
             except OSError:
                 pass
         got, status = os.waitpid(pid, os.WNOHANG)
@@ -356,14 +360,14 @@ def check_config_file(binary):
     print("standalone config validation reports errors without executing commands")
 
 
-def run_session(binary, config, child, *args, env=None, timeout=15, rows=24, raw=False):
+def run_session(binary, config, child, *args, env=None, timeout=15, rows=24, raw=False, cursor_rows=()):
     """Runs a Python child inside a session with an inline config."""
     with tempfile.TemporaryDirectory() as directory:
         path = os.path.join(directory, "session.statusbar")
         with open(path, "w", encoding="utf-8") as file:
             file.write(config)
         return capture_pty([binary, "-c", path, "--", sys.executable, "-c", child, binary, *args],
-                           env=clean_env(env), rows=rows, timeout=timeout, raw=raw)
+                           env=clean_env(env), rows=rows, timeout=timeout, raw=raw, cursor_rows=cursor_rows)
 
 
 def between(text, start, end):
@@ -1531,6 +1535,50 @@ IFS= read -r command
     print("two-row to five-row theme growth preserves terminal geometry")
 
 
+def check_new_at_bottom(binary):
+    child = r"""
+import os, subprocess, sys, time
+os.write(1, b'\x1b[23;5H')
+subprocess.run([sys.argv[1], 'new', 'job'], check=True)
+os.write(1, b'AFTER_NEW')
+time.sleep(.1)
+"""
+    code, data = run_session(binary, '[line.base]\ntext = BASE\n', child, raw=True, cursor_rows=(1, 23))
+    assert code == 0 and b'AFTER_NEW' in data, data[-2000:]
+    before = data[:data.index(b'AFTER_NEW')]
+    # Model the cursor and margins through the actual PTY output. The name
+    # printed by new includes a newline at the shortened screen's bottom.
+    row, col, bottom, saved = 1, 1, 24, (1, 1)
+    for token in PAINT_TOKEN.findall(before):
+        if token == b'\x1b7':
+            saved = row, col
+        elif token == b'\x1b8':
+            row, col = saved
+        elif token.startswith(b'\x1b['):
+            params, final = token[2:-1], token[-1:]
+            if final in (b'H', b'f'):
+                values = params.split(b';')
+                row = int(values[0] or b'1')
+                col = int(values[1] or b'1') if len(values) > 1 else 1
+            elif final == b'd':
+                row = int(params or b'1')
+            elif final == b'r':
+                values = params.split(b';')
+                bottom = int(values[1]) if len(values) > 1 and values[1] else 24
+                row, col = 1, 1
+        elif not token.startswith(b'\x1b'):
+            for char in token:
+                if char == 10:
+                    row = row if row == bottom else min(row + 1, 24)
+                elif char == 13:
+                    col = 1
+                elif char >= 32:
+                    col += 1
+    assert row == 22, ('cursor entered the statusbar', row, before[-2000:])
+    assert before.index(b'\x1b[1;22r') < before.index(b'job\r\n'), before[-2000:]
+    print('new at the last child row installs margins before output and keeps the cursor above the bar')
+
+
 def check_background_job_exit(binary):
     # The job ignores SIGHUP and keeps the pty open after the shell exits.
     script = "(trap '' HUP; exec sleep 10) & printf LAST_WORDS; exit 3"
@@ -2687,6 +2735,7 @@ def main():
     check_config_snapshots(binary)
     check_osc_config(binary)
     check_theme_growth(binary)
+    check_new_at_bottom(binary)
     check_background_job_exit(binary)
     check_background_push_tty_output(binary)
     check_hidden_push_without_paint(binary)
