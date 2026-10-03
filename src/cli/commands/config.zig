@@ -25,7 +25,7 @@ pub fn run(arena: std.mem.Allocator, io: Io, group: *const zecli.Command, stdout
         .check => {
             const input = try readInput(arena, io, args[0], config.max_config, stderr);
             return switch (input) {
-                .text => |text| config_send.validateText(arena, text, input.label(args[0]), stderr),
+                .text => |text| config_send.validateText(arena, text, inputLabel(args[0]), stderr),
                 .failed => |code| code,
             };
         },
@@ -34,7 +34,7 @@ pub fn run(arena: std.mem.Allocator, io: Io, group: *const zecli.Command, stdout
             const token = try sessionToken(command, stderr) orelse return 2;
             const input = try readInput(arena, io, args[0], protocol.max_config, stderr);
             return switch (input) {
-                .text => |text| config_send.sendEdit(arena, io, token, text, false, input.label(args[0]), stderr),
+                .text => |text| config_send.sendEdit(arena, io, token, text, false, inputLabel(args[0]), stderr),
                 .failed => |code| code,
             };
         },
@@ -53,17 +53,18 @@ pub fn run(arena: std.mem.Allocator, io: Io, group: *const zecli.Command, stdout
 const Input = union(enum) {
     text: []const u8,
     failed: u8,
-
-    fn label(_: Input, file: []const u8) []const u8 {
-        return if (std.mem.eql(u8, file, "-")) "stdin" else file;
-    }
 };
+
+/// How diagnostics name FILE.
+fn inputLabel(file: []const u8) []const u8 {
+    return if (std.mem.eql(u8, file, "-")) "stdin" else file;
+}
 
 /// Reads FILE, or stdin for `-`, rejecting empty input and anything over
 /// `limit` bytes.
 fn readInput(arena: std.mem.Allocator, io: Io, file: []const u8, limit: usize, stderr: *Io.Writer) !Input {
     const from_stdin = std.mem.eql(u8, file, "-");
-    const name = if (from_stdin) "stdin" else file;
+    const name = inputLabel(file);
     const text = read: {
         if (!from_stdin) break :read Io.Dir.cwd().readFileAlloc(io, file, arena, .limited(limit));
         var buffer: [4096]u8 = undefined;
@@ -104,7 +105,7 @@ fn load(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, file: [
     const token = try sessionToken(command, stderr) orelse return 2;
     const input = try readInput(arena, io, file, protocol.max_config, stderr);
     return switch (input) {
-        .text => |text| config_send.sendText(arena, io, token, text, input.label(file), stderr),
+        .text => |text| config_send.sendText(arena, io, token, text, inputLabel(file), stderr),
         .failed => |code| code,
     };
 }

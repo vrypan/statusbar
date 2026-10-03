@@ -217,10 +217,11 @@ pub const Proxy = struct {
     palette_deadline_ms: ?i64 = null,
     /// An authenticated config request that arrived while the child held a
     /// saved cursor, waiting for the same pause a paint waits for. Only the
-    /// newest replacement is kept; additions accumulate against it.
+    /// newest replacement is kept; additions and removals accumulate
+    /// against it. `held_config_edit` is false once a replacement is held.
     held_config: [config.max_config]u8 = undefined,
     held_config_len: ?usize = null,
-    held_config_additive: bool = false,
+    held_config_edit: bool = false,
     /// Set once the child has been reaped, which ends the session even while
     /// background jobs still hold the pty open.
     child_status: ?sys.Wait = null,
@@ -259,11 +260,9 @@ pub const Proxy = struct {
     pub const flushPalette = @import("terminal_input.zig").flushPalette;
     pub const flushInput = @import("terminal_input.zig").flushInput;
     // reload.zig
-    pub const replaceConfig = @import("reload.zig").replaceConfig;
     pub const applyConfigRequest = @import("reload.zig").applyConfigRequest;
     pub const heldConfigDue = @import("reload.zig").heldConfigDue;
     pub const applyHeldConfig = @import("reload.zig").applyHeldConfig;
-    pub const applyConfig = @import("reload.zig").applyConfig;
     // loop.zig
     pub const requestPaint = @import("loop.zig").requestPaint;
     pub const paint = @import("loop.zig").paint;

@@ -67,7 +67,7 @@ pub const CommandOutputs = struct {
         }
     }
 
-    /// Called only once the addition can commit. Move the running processes
+    /// Called only once an edit can commit. Move the running processes
     /// and schedules, but keep each generation's own exec and source strings:
     /// exec borrows that generation's environment block.
     pub fn adoptExisting(self: *CommandOutputs, old: *CommandOutputs, cfg: *const config.Config, previous: *const config.Config) void {

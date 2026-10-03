@@ -20,13 +20,13 @@ pub fn merge(gpa: std.mem.Allocator, current: []const u8, fragment: []const u8, 
             if (std.mem.eql(u8, header.name, "colors")) {
                 section = .colors;
             } else {
-                if (!std.mem.startsWith(u8, header.name, "line.") and !std.mem.startsWith(u8, header.name, "command.")) return statements.fail(diag, "config add accepts only [line.NAME], [command.NAME] and [colors]");
+                if (!std.mem.startsWith(u8, header.name, "line.") and !std.mem.startsWith(u8, header.name, "command.")) return statements.fail(diag, "additions accept only [line.NAME], [command.NAME] and [colors]");
                 section = .named;
                 definitions += 1;
             }
         },
         .assignment => |assignment| switch (section) {
-            .root => return statements.fail(diag, "config add does not accept global settings; start with a section"),
+            .root => return statements.fail(diag, "additions cannot change global settings; start with a section"),
             .named => {},
             .colors => {
                 for (base.palette().colors) |color| if (std.mem.eql(u8, color.name, assignment.key)) return statements.fail(diag, "this color is already defined");
@@ -59,8 +59,8 @@ test "fragments share existing commands and preserve source text" {
     try std.testing.expectEqual(@as(usize, 2), parsed.commands_len);
 }
 
-test "imports preserve marker-like text" {
-    const fragment = "# <module> <<module>>\n[line.disk.usage]\ntext = #(command:disk.usage)\n[command.disk.usage]\nrun = printf '<module> <<module>>'\n";
+test "fragments are appended verbatim with their static names" {
+    const fragment = "# disk\n[line.disk.usage]\ntext = #(command:disk.usage)\n[command.disk.usage]\nrun = printf 'disk usage'\n";
     var diag: config.Diagnostic = .{};
     const merged = try merge(std.testing.allocator, "[line.base]", fragment, &diag);
     defer std.testing.allocator.free(merged);
@@ -68,7 +68,7 @@ test "imports preserve marker-like text" {
     var parsed = try config.parse(std.testing.allocator, merged, &diag);
     defer parsed.deinit();
     try std.testing.expectEqualStrings("disk.usage", parsed.lines[1].name);
-    try std.testing.expectEqualStrings("printf '<module> <<module>>'", parsed.commands[0].run);
+    try std.testing.expectEqualStrings("printf 'disk usage'", parsed.commands[0].run);
 }
 
 test "combined source limit includes the separator newlines" {
@@ -113,7 +113,7 @@ test "addition parsing cleans every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
         fn run(gpa: std.mem.Allocator) !void {
             var diag: config.Diagnostic = .{};
-            const text = try merge(gpa, "[line.base]", "[line.extra.one]\ntext = <<module>>", &diag);
+            const text = try merge(gpa, "[line.base]", "[line.extra.one]\ntext = extra", &diag);
             defer gpa.free(text);
             var parsed = try config.parse(gpa, text, &diag);
             parsed.deinit();

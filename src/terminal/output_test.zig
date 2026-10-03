@@ -102,7 +102,7 @@ test "STATUSBAR config requests are consumed across every read partition" {
             while (offset < end) {
                 offset += out.feedUntilConfig(input[offset..end], &collector);
                 if (out.takeConfig()) |payload| {
-                    try std.testing.expectEqualStrings(config_text, try config_protocol.decode(&decoded, payload, token));
+                    try std.testing.expectEqualStrings(config_text, (try config_protocol.decodeRequest(&decoded, payload, token)).text);
                     requests += 1;
                 }
             }

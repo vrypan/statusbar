@@ -1,5 +1,6 @@
-//! Namespaces for additive config fragments. A dot separates the prefix
-//! from the local name. Prefixes use letters, digits, underscores and hyphens.
+//! Config name prefixes: the part of a line, command or color name before
+//! its first dot. They group definitions for listing and removal.
+//! Prefixes use letters, digits, underscores and hyphens.
 const std = @import("std");
 
 pub const max_len = 62;
