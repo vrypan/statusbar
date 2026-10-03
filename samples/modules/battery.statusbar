@@ -2,8 +2,8 @@
 # Load: statusbar config add battery.statusbar
 
 [line.battery.status]
-default = " #[fg=colour5]battery#[default] #(command:battery.status)#[default]#(fill: ) "
-text = "#(value)"
+default = "#(command:battery.status)"
+text = "#[default,fg=colour8,fg=muted,bold]* Battery: #[nobold]#(value) #[default,fg=colour8,fg=rule,dim]#(fill:·)#[default]"
 
 [command.battery.status]
 run = |

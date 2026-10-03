@@ -1,5 +1,3 @@
-# Native palette variant of multi-line.statusbar.
-# Colors follow the terminal theme; see README.md for palette mappings.
 # Adapted from a real day-to-day configuration and shared as a practical
 # multi-line example.
 #
@@ -16,14 +14,14 @@
 interval = 5
 
 [colors]
-base = default
-text = default
-accent = colour3
-muted = colour8
-pill = colour8
-good = colour2
-success = colour10
-failure = colour1
+base = #3c3836
+text = #fbf1c7
+accent = #d79921
+muted = #928374
+pill = #504945
+good = #98971a
+success = #b8bb26
+failure = #fb4934
 
 # A blank separator above the bar's content.
 [line.spacer]
@@ -33,15 +31,14 @@ text = ""
 [line.prompt]
 text = "#[fg=text]#(value)#(fill: )#[fg=pill] (load #(command:system.load))#[default,fg=text]"
 
-# Dim the dotted fills while keeping the text at normal brightness.
 [line.hn.top]
-text = "#[fg=pill,dim]#[track]#[fg=text,nodim,bold]*#[nobold] #(command:hn.top)#[notrack]#[default,fg=pill,dim]#(fill:·)#[fg=muted,nodim] (HackerNews)"
+text = "#[fg=pill]#[track]#[fg=bold]*#[default,fg=pill] #(command:hn.top)#[notrack]#[default,fg=pill]#(fill:·) (HackerNews)"
 
 [line.gh.notifications]
-text = "#[fg=pill,dim]#[track]#[fg=text,nodim,bold]*#[nobold] #(command:gh.notifications)#[notrack] #[default,fg=pill,dim]#(fill:·)#[fg=muted,nodim] (GitHub)"
+text = "#[fg=pill]#[track]#[fg=bold]*#[default,fg=pill] #(command:gh.notifications)#[notrack] #[default,fg=pill]#(fill:·) (GitHub)"
 
 [line.system.now]
-text = "#[fg=pill,dim]#[fg=text,nodim,bold]*#[nobold] Now #[default,fg=pill,dim]#(fill:·) #[fg=muted,nodim] #(command:system.weather) #(datetime:%a %d %H:%M:%S)"
+text = "#[fg=pill]#[fg=bold]*#[default,fg=pill] Now #(fill:·) #[fg=muted] #(command:system.weather) #(datetime:%a %d %H:%M:%S)"
 
 # Lines created by `statusbar push`.
 [push]

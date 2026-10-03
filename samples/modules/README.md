@@ -5,10 +5,11 @@ line and its commands with static names such as `disk.usage`. Load a module
 with `statusbar config add FILE`. A module is simply a group of config
 definitions sharing a prefix; no declaration or registration is needed.
 
-All modules use the terminal's native palette, keep the theme's background,
-and use ordinary Unicode. They need no Nerd Font. Labels use palette magenta
-or blue, secondary text uses bright black, and meters use green, yellow, and
-red. The actual colors follow your terminal theme.
+Modules follow the [shared theme style](../themes/README.md#shared-styling-rules):
+bold muted `* Label:` prefixes, regular-weight values and dim dotted fills.
+They use the theme's `muted` and `rule` colors, with terminal-color fallbacks,
+and keep its background. Meters use native green, yellow and red for thresholds.
+No special font is required.
 
 ## Choose modules
 
@@ -94,8 +95,9 @@ statusbar set codex.usage "HELLO"
 statusbar set codex.usage --reset
 ```
 
-An explicitly empty value hides the content until reset. FIFO input also
-overrides the display. After editing a module already loaded in a session,
+An explicitly empty value clears the value until reset; the label and fill
+remain. FIFO input also overrides the value. After editing a module already
+loaded in a session,
 update its definitions in `config show current` and reload the complete
 config; `config add FILE` rejects definitions that already exist.
 
@@ -153,19 +155,17 @@ in definitions and references:
 
 ```ini
 [line.host.summary]
-default = "#[fg=host.accent]#(command:host.fetch)#[default]"
-text = "#(value)"
+default = "#(command:host.fetch)"
+text = "#[default,fg=colour8,fg=muted,bold]* Host: #[nobold]#(value) "
+text .= "#[default,fg=colour8,fg=rule,dim]#(fill:·)#[default]"
 
 [command.host.fetch]
 run = hostname -s
 interval = 3600
-
-[colors]
-host.accent = colour4
 ```
 
-Import with `config add FILE`; the source defines `host.summary`, `host.fetch`,
-and `host.accent`. The import checks name uniqueness and preserves the source as
+Import with `config add FILE`; the source defines `host.summary` and
+`host.fetch`. The import checks name uniqueness and preserves the source as
 written. Fragments may contain multiple prefixes or unprefixed definitions.
 Snapshots from `config show current` can be saved, checked with
 `config check FILE`, and loaded as complete configs. Each bundled module can also be checked directly with

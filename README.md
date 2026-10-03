@@ -71,8 +71,8 @@ a directory of your own `.statusbar` themes:
 statusbar-theme ~/.config/statusbar/themes
 ```
 
-The bundled themes include versions with fixed colors and versions that
-follow your terminal's palette. See [sample themes](samples/themes/README.md).
+Bundled themes follow your terminal's palette by default. Choose a
+`*-color.statusbar` variant for the original Starship-inspired colors and layouts. See [sample themes](samples/themes/README.md).
 The picker uses [zooi](https://github.com/vrypan/zooi).
 
 ## Add modules

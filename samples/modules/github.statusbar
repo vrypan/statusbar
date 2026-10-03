@@ -3,8 +3,8 @@
 # Load: statusbar config add github.statusbar
 
 [line.github.notifications]
-default = " #[fg=colour4]GitHub#[default] #[track]#(command:github.notifications)#[notrack]#(fill: ) "
-text = "#(value)"
+default = "#[track]#(command:github.notifications)#[notrack]"
+text = "#[default,fg=colour8,fg=muted,bold]* GitHub: #[nobold]#(value) #[default,fg=colour8,fg=rule,dim]#(fill:·)#[default]"
 
 [command.github.notifications]
 run = |

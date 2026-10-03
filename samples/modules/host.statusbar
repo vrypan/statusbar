@@ -2,8 +2,8 @@
 # Load: statusbar config add host.statusbar
 
 [line.host.identity]
-default = " #[fg=colour5]host#[default] #[fg=colour4,bold]#(command:host.identity)#[default]#(fill: ) "
-text = "#(value)"
+default = "#(command:host.identity)"
+text = "#[default,fg=colour8,fg=muted,bold]* Host: #[nobold]#(value) #[default,fg=colour8,fg=rule,dim]#(fill:·)#[default]"
 
 [command.host.identity]
 run = |

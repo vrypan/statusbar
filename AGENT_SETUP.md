@@ -67,7 +67,8 @@ the assembled layout. Do not load optional network modules unless requested.
 Create a draft in a user-owned directory, for example
 `~/.config/statusbar/themes/my-theme.statusbar`, creating its parent if needed.
 Copy a suitable bundled theme or use `statusbar config show default` as a
-starting point. Prefer a `-native.statusbar` sample for terminal palette colors.
+starting point. Unsuffixed themes use terminal palette colors; choose
+`*-color.statusbar` for the original Starship-inspired colors and layouts.
 Installed themes may be replaced on upgrade, so customize the copy.
 
 Inspect commands before loading a theme: every `[command.NAME]` executes a
@@ -79,21 +80,33 @@ This small theme uses the terminal palette and needs no network access:
 
 ```ini
 [colors]
-accent = colour12
+text = default
 muted = colour8
+rule = colour8
+accent = colour3
+success = colour10
+failure = colour1
 
 [line.rule]
-text = "#[fg=muted,dim]#(fill:─)"
+text = "#[fg=rule,dim]#(fill:─)#[default]"
 
 [line.prompt]
-text = " #(value)#[fg=accent,bold]#(command:host)#[default] "
-text .= "#(fill: )"
-text .= " #(datetime:%a %d %b)  #(datetime:%H:%M) "
+default = "#[fg=muted,bold]* Host: #[nobold]#(command:host)"
+text = "#[fg=text]#(value) #[default,fg=rule,dim]#(fill:·)"
+text .= "#[default,fg=muted] #(datetime:%a %d %b) #(datetime:%H:%M)#[default]"
 
 [command.host]
 run = hostname
 interval = 60
 ```
+
+For native themes, follow the shared style: muted bold `* Label:` prefixes, regular-weight values,
+dim dotted fills, and a dim solid separator. Keep the terminal background.
+Use `text`, `muted`, `rule`, `accent`, `success` and `failure` as shared color
+names; unsuffixed themes define their terminal defaults. Put module content in
+`default` and its label, `#(value)` and fill in `text`. Use
+`fg=colour8,fg=muted` and `fg=colour8,fg=rule` so modules work without a theme's
+palette too. Reserve stronger colors for state indicators and meter thresholds.
 
 Keep these rules in mind:
 
@@ -113,7 +126,8 @@ Keep these rules in mind:
   color. Styles carry through the fill, so a line background needs a leading
   style and a fill of spaces. Use `dim` for subtle rules and `#[nodim]` for
   text on the same line. Check glyph alignment and contrast in the actual
-  font. Powerline layouts may need a Nerd Font.
+  font. Native themes need no special font; Gruvbox Color and Pastel Powerline
+  Color need Powerline glyphs, usually supplied by a Nerd Font.
 - **Templates:** `#(datetime:%H:%M)` is a clock; inside it `%%` is a literal
   percent sign, and `%` elsewhere is plain text. `#(command:NAME)` shows a
   `[command.NAME]`; any other unknown `#(...)` is an error, never a shell

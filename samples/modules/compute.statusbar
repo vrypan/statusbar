@@ -2,8 +2,8 @@
 # Load: statusbar config add compute.statusbar
 
 [line.compute.status]
-default = " #(command:compute.status)#[default]#(fill: ) "
-text = "#(value)"
+default = "#(command:compute.status)"
+text = "#[default,fg=colour8,fg=muted,bold]* System: #[nobold]#(value) #[default,fg=colour8,fg=rule,dim]#(fill:·)#[default]"
 
 [command.compute.status]
 run = |
@@ -30,10 +30,10 @@ run = |
       else if(unit ~ /B$/)used=value
     }
     END {
-      printf "\033[35mcpu\033[0m "
+      printf "\033[90mcpu\033[0m "
       if(samples>=2){bar(cpu,cpu>=90 ? 31 : cpu>=70 ? 33 : 32); printf " %3.0f%%",cpu}
       else printf "?"
-      printf "   \033[35mmem\033[0m "
+      printf "   \033[90mmem\033[0m "
       if(used>0 && total>0){
         p=100*used/total; bar(p,p>=90 ? 31 : p>=75 ? 33 : 32)
         printf " %4.1f/%.0fG",used/1073741824,total/1073741824

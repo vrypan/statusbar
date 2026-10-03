@@ -3,8 +3,8 @@
 # Load: statusbar config add weather.statusbar
 
 [line.weather.current]
-default = " #[fg=colour5]#[track]#(command:weather.current)#[notrack]#(fill: ) "
-text = "#(value)"
+default = "#[track]#(command:weather.current)#[notrack]"
+text = "#[default,fg=colour8,fg=muted,bold]* Weather: #[nobold]#(value) #[default,fg=colour8,fg=rule,dim]#(fill:·)#[default]"
 
 [command.weather.current]
 run = |

@@ -5,8 +5,8 @@
 # Quota colors: green below 75%, yellow from 75%, red from 90%.
 
 [line.codex.usage]
-default = " #[fg=colour5]codex#[default] #(command:codex.usage)#[default]#(fill: ) "
-text = "#(value)"
+default = "#[track]#(command:codex.usage)#[notrack]"
+text = "#[default,fg=colour8,fg=muted,bold]* Codex: #[nobold]#(value) #[default,fg=colour8,fg=rule,dim]#(fill:·)#[default]"
 
 [command.codex.usage]
 run = |

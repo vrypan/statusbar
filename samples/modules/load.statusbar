@@ -2,8 +2,8 @@
 # Load: statusbar config add load.statusbar
 
 [line.load.average]
-default = " #[fg=colour5]load#[default] #[track]#(command:load.average)#[notrack]#(fill: )#[fg=colour8]1 / 5 / 15 min#[default] "
-text = "#(value)"
+default = "#[track]#(command:load.average)#[notrack] (1 / 5 / 15 min)"
+text = "#[default,fg=colour8,fg=muted,bold]* Load: #[nobold]#(value) #[default,fg=colour8,fg=rule,dim]#(fill:·)#[default]"
 
 [command.load.average]
 run = |

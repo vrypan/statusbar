@@ -1,35 +1,29 @@
-# Native palette variant of pastel-powerline.statusbar.
-# Colors follow the terminal theme; see README.md for palette mappings.
 # Inspired by https://starship.rs/presets/pastel-powerline
 # Requires Powerline glyphs (e.g. a Nerd Font).
 interval = 5
 
 [colors]
-# Default row background; explicit palette colors for text on colored badges.
-base = default
-text = default
-purple = colour5
-rose = colour13
-peach = colour11
-blue = colour12
-muted = colour8
-badge_text = colour0
-error_text = colour15
-segment_text = colour15
-success = colour10
-failure = colour1
+base = #252334
+text = #eee9f5
+purple = #9a348e
+rose = #da627d
+peach = #fca17d
+blue = #86bbd8
+muted = #b8afc8
+success = #a8d5ba
+failure = #da627d
 
 [line.rule]
 text = "#[fg=rose]#(fill:─)"
 
 # Show user/host/load until Starship or `set prompt` supplies a value.
 [line.prompt]
-default = "#[fg=segment_text,bg=purple,bold] #(command:system.user) #[fg=badge_text,bg=rose] #(command:system.host) "
-default .= "#[fg=badge_text,bg=peach,nobold] load #(command:system.load) "
+default = "#[fg=text,bg=purple,bold] #(command:system.user) #[fg=base,bg=rose] #(command:system.host) "
+default .= "#[fg=base,bg=peach,nobold] load #(command:system.load) "
 text = "#[default,fg=text,bg=base]#(value)"
 # Reset value styles before filling the gap and drawing the right side.
 text .= "#[default,fg=text,bg=base]#(fill: )"
-text .= "#[fg=muted]#(command:system.weather)  #(datetime:%a %d) #[fg=badge_text,bg=blue,bold] #(datetime:%H:%M:%S) #[default,fg=text,bg=base]"
+text .= "#[fg=muted]#(command:system.weather)  #(datetime:%a %d) #[fg=base,bg=blue,bold] #(datetime:%H:%M:%S) #[default,fg=text,bg=base]"
 
 # Lines created by `statusbar push`.
 [push]
@@ -37,7 +31,7 @@ spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 text = "#[fg=muted,bg=base]#[fg=rose]#(spinner)#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
 done = "#[fg=muted,bg=base]· #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
 success = "#[fg=muted,bg=base]#[fg=success]✔#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
-failed = "#[fg=muted,bg=base]#[fg=failure]✗#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )#[fg=failure,bg=base]#[fg=error_text,bg=failure,bold] failed #[default,fg=muted,bg=base]"
+failed = "#[fg=muted,bg=base]#[fg=failure]✗#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )#[fg=failure,bg=base]#[fg=base,bg=failure,bold] failed #[default,fg=muted,bg=base]"
 
 [command.system.user]
 run = whoami

@@ -1,12 +1,22 @@
 # Start with: statusbar --config samples/spinner.statusbar
 # Inside the session, try: statusbar push wait -- sleep 3
-[line.title]
-text = "statusbar"
 
+[colors]
+text = default
+muted = colour8
+rule = colour8
+accent = colour3
+success = colour10
+failure = colour1
+
+[line.title]
+text = "#[fg=muted,bold]* Statusbar: #[nobold]ready #[fg=rule,dim]#(fill:·)#[default]"
+
+# Temporary lines use the same muted labels as modules.
 [push]
+keep = left
 spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-spinner_interval = 0.1
-text = "#(spinner) #(value)#(fill: )[#(name)]"
-done = "· #(value)#(fill: )[#(name)]"
-success = "#[fg=green]✓#[default] #(value)#(fill: )[#(name)]"
-failed = "#[fg=red]✗#[default] #(value)#(fill: )failed [#(name)]"
+text = "#[fg=accent]#(spinner)#[default,fg=muted] #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default]"
+done = "#[fg=muted]· #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default]"
+success = "#[fg=success]✔#[default,fg=muted] #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default]"
+failed = "#[fg=failure]✗#[default,fg=muted] #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default,fg=failure] failed#[default]"

@@ -2,8 +2,8 @@
 # Load: statusbar config add disk.statusbar
 
 [line.disk.usage]
-default = " #[fg=colour5]disk#[default] #(command:disk.usage)#[default]#(fill: ) "
-text = "#(value)"
+default = "#(command:disk.usage)"
+text = "#[default,fg=colour8,fg=muted,bold]* Disk: #[nobold]#(value) #[default,fg=colour8,fg=rule,dim]#(fill:·)#[default]"
 
 [command.disk.usage]
 run = |

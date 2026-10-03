@@ -14,31 +14,39 @@ Run `statusbar` to use the built-in config, or save this example as
 
 ## Add colors and a command
 
+Use the shared palette and layout so modules match your config:
+
 ```ini
 interval = 5
 
 [colors]
-accent = #89b4fa
-dim    = #7f849c
-rule   = #45475a
+text = default
+muted = colour8
+rule = colour8
+accent = colour3
+success = colour10
+failure = colour1
 
 [line.rule]
-text = "#[fg=rule]#(fill:─)"
+text = "#[fg=rule,dim]#(fill:─)#[default]"
 
 [line.host]
-text = " #[fg=accent,bold]#(command:host)#[default] #[fg=dim]· ready#[default]"
-text .= "#(fill: )"
-text .= "#(datetime:%a %d %b)  #[bold]#(datetime:%H:%M)#[default] "
+default = "#(command:host)"
+text = "#[fg=muted,bold]* Host: #[nobold]#(value) "
+text .= "#[default,fg=rule,dim]#(fill:·)"
+text .= "#[default,fg=muted] #(datetime:%a %d %b) #(datetime:%H:%M)#[default]"
 
 [command.host]
-run      = hostname
+run = hostname
 interval = 60
 ```
 
-`[command.host]` runs `hostname`, and `#(command:host)` shows the first line
-of its latest output. `[colors]` names colors used by `#[...]` styles and the
-top-level `style`. `text .=` appends to the template, which keeps long
-templates readable.
+`[command.host]` runs `hostname`; its first output line supplies the fallback
+value. The label and fill stay in place when you use `statusbar set host TEXT`.
+`[colors]` names colors used in styles. These defaults follow your terminal;
+replace them with `#rrggbb` values for fixed colors. `text .=` appends to the
+template to keep long lines readable. See the
+[shared styling rules](../samples/themes/README.md#shared-styling-rules).
 
 ## Where statusbar finds the config
 
@@ -289,11 +297,11 @@ OSC 8 hyperlinks still work.
 Until a value is set, `#(value)` expands the line's `default` template, or
 shows nothing if `default` is omitted. The fallback can include styles,
 commands, dates, environment variables, and terminal properties. For example,
-using the built-in config's `dim` and `accent` colors and `system.*` commands:
+using the built-in config's `muted` and `accent` colors and `system.*` commands:
 
 ```ini
 [line.prompt]
-default = "#[fg=dim]#(command:system.user)@#[default]#[fg=accent,bold]#(command:system.host)#[default]"
+default = "#[fg=muted]#(command:system.user)@#[default]#[fg=accent,bold]#(command:system.host)#[default]"
 text = "#(value)#(fill: )"
 ```
 

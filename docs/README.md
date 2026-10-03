@@ -155,10 +155,11 @@ styles: [Pure](../samples/themes/pure.statusbar),
 [Gruvbox](../samples/themes/gruvbox.statusbar), and
 [Pastel Powerline](../samples/themes/pastel-powerline.statusbar).
 
-Each has a `-native.statusbar` version that follows your terminal's palette,
-such as [Pure Native](../samples/themes/pure-native.statusbar). The
+These themes follow your terminal's palette. For the original colors and layouts,
+choose a `*-color.statusbar` file, such as
+[Pure Color](../samples/themes/pure-color.statusbar). The
 [theme directory](../samples/themes/README.md) also includes Minimal and
-Multi-line layouts, both with native variants.
+Multi-line layouts.
 
 Inside a running session, use `statusbar-theme /path/to/themes` to browse
 and activate a `.statusbar` file with the keyboard. The picker changes the
@@ -170,10 +171,11 @@ From the repository checkout, try one without replacing your config:
 statusbar --config ./samples/themes/tokyo-night.statusbar
 ```
 
-The Gruvbox and Pastel Powerline themes need Powerline glyphs, usually supplied
-by a Nerd Font. Pure and Tokyo Night use ordinary terminal text and Unicode.
-The themes are a good way to explore backgrounds, colored labels, rules, and
-restrained use of icons; see [their notes](../samples/themes/README.md).
+Native themes use the same muted labels, dim dotted fills and status indicators
+as modules, with no special font requirement. Gruvbox Color and Pastel Powerline
+Color need Powerline glyphs. See the
+[shared styling rules](../samples/themes/README.md#shared-styling-rules) to
+make your own config match.
 
 ## Add a module
 

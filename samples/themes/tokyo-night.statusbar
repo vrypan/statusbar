@@ -1,34 +1,35 @@
-# Inspired by https://starship.rs/presets/tokyo-night
-# Cool blue badge, dark background, half-block border.
+# tokyo-night: shared muted labels and dotted fills.
+# Colors follow the terminal palette; tokyo-night-color.statusbar uses fixed colors.
+# Commands: whoami, hostname, uptime, awk, curl; weather needs network access.
+
 interval = 5
 
 [colors]
-base = #1d2230
-text = #c0caf5
-muted = #a0a9cb
-accent = #769ff0
-border = #394260
-success = #9ece6a
-failure = #f7768e
+text = default
+muted = colour8
+rule = colour8
+accent = colour3
+success = colour10
+failure = colour1
 
-[line.border]
-text = "#[fg=border,bg=base]#(fill:▀)"
+[line.rule]
+text = "#[fg=rule,dim]#(fill:─)#[default]"
 
-# Show user/host/load until Starship or `set prompt` supplies a value.
+# Starship replaces the fallback with its own prompt details and colors.
 [line.prompt]
-default = "#[fg=base,bg=accent,bold] #(command:system.user)@#(command:system.host) #[default,fg=text,bg=base]  #[fg=muted]load #[fg=accent]#(command:system.load)"
-text = "#[default,fg=text,bg=base]#(value)"
-# Reset value styles before filling the gap and drawing the right side.
-text .= "#[default,fg=text,bg=base]#(fill: )"
-text .= "#[fg=muted]#(command:system.weather)  #(datetime:%a %d) #[default,fg=text,bg=base] #[fg=base,bg=accent,bold] #(datetime:%H:%M:%S) #[default,fg=text,bg=base]"
+default = "#[fg=muted,bold]* Host: #[nobold]#(command:system.user)@#(command:system.host)"
+default .= "  load #[track]#(command:system.load)#[notrack]"
+text = "#[fg=text]#(value) #[default,fg=rule,dim]#(fill:·)"
+text .= "#[default,fg=muted] #(command:system.weather) #(datetime:%a %d) #[track]#(datetime:%H:%M)#[notrack]#[default]"
 
-# Lines created by `statusbar push`.
+# Temporary lines use the same muted labels as modules.
 [push]
+keep = left
 spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-text = "#[fg=muted,bg=base]#[fg=accent]#(spinner)#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
-done = "#[fg=muted,bg=base]· #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
-success = "#[fg=muted,bg=base]#[fg=success]✔#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
-failed = "#[fg=muted,bg=base]#[fg=failure]✗#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )#[fg=base,bg=failure,bold] failed #[default,fg=muted,bg=base]"
+text = "#[fg=accent]#(spinner)#[default,fg=muted] #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default]"
+done = "#[fg=muted]· #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default]"
+success = "#[fg=success]✔#[default,fg=muted] #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default]"
+failed = "#[fg=failure]✗#[default,fg=muted] #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default,fg=failure] failed#[default]"
 
 [command.system.user]
 run = whoami

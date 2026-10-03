@@ -1,52 +1,44 @@
-# Adapted from a real day-to-day configuration and shared as a practical
-# multi-line example.
-#
-# Requirements:
-# - curl, jq, uptime, awk, and the GitHub CLI (`gh`)
-# - an authenticated GitHub CLI (`gh auth login`) for notifications
-# - network access for Hacker News, GitHub, and wttr.in
-# - optional Starship integration for the prompt line; without it, its left
-#   side is blank
-#
-# The `#[track]...#[notrack]` regions pulse when their displayed content
-# changes. Their first result establishes a baseline and does not pulse.
+# multi-line: shared muted labels and dotted fills.
+# Colors follow the terminal palette; multi-line-color.statusbar uses fixed colors.
+# Commands: curl, jq, gh (authenticated), uptime, awk; network access.
 
 interval = 5
 
 [colors]
-base = #3c3836
-text = #fbf1c7
-accent = #d79921
-muted = #928374
-pill = #504945
-good = #98971a
-success = #b8bb26
-failure = #fb4934
+text = default
+muted = colour8
+rule = colour8
+accent = colour3
+success = colour10
+failure = colour1
 
-# A blank separator above the bar's content.
-[line.spacer]
-text = ""
+[line.rule]
+text = "#[fg=rule,dim]#(fill:─)#[default]"
 
-# Starship fills this line's value.
 [line.prompt]
-text = "#[fg=text]#(value)#(fill: )#[fg=pill] (load #(command:system.load))#[default,fg=text]"
+text = "#[fg=text]#(value)#[default]"
 
 [line.hn.top]
-text = "#[fg=pill]#[track]#[fg=bold]*#[default,fg=pill] #(command:hn.top)#[notrack]#[default,fg=pill]#(fill:·) (HackerNews)"
+default = "#[track]#(command:hn.top)#[notrack]"
+text = "#[default,fg=muted,bold]* HN: #[nobold]#(value) #[default,fg=rule,dim]#(fill:·)#[default]"
 
 [line.gh.notifications]
-text = "#[fg=pill]#[track]#[fg=bold]*#[default,fg=pill] #(command:gh.notifications)#[notrack] #[default,fg=pill]#(fill:·) (GitHub)"
+default = "#[track]#(command:gh.notifications)#[notrack]"
+text = "#[default,fg=muted,bold]* GitHub: #[nobold]#(value) #[default,fg=rule,dim]#(fill:·)#[default]"
 
 [line.system.now]
-text = "#[fg=pill]#[fg=bold]*#[default,fg=pill] Now #(fill:·) #[fg=muted] #(command:system.weather) #(datetime:%a %d %H:%M:%S)"
+default = "load #[track]#(command:system.load)#[notrack]"
+text = "#[default,fg=muted,bold]* System: #[nobold]#(value) #[default,fg=rule,dim]#(fill:·)"
+text .= "#[default,fg=muted] #(command:system.weather) #(datetime:%a %d) #[track]#(datetime:%H:%M)#[notrack]#[default]"
 
-# Lines created by `statusbar push`.
+# Temporary lines use the same muted labels as modules.
 [push]
+keep = left
 spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-text = "#[fg=text]#[fg=accent]#(spinner)#[fg=muted] #[fg=text,bold]#(name)#[default,fg=text] › #(value)#(fill: )"
-done = "#[fg=text]#[fg=muted]· #[fg=text,bold]#(name)#[default,fg=text] › #(value)#(fill: )"
-success = "#[fg=text]#[fg=success]✔#[fg=muted] #[fg=text,bold]#(name)#[default,fg=text] › #(value)#(fill: )"
-failed = "#[fg=text]#[fg=failure]✗#[fg=muted] #[fg=text,bold]#(name)#[default,fg=text] › #(value)#(fill: )#[fg=failure]failed#[default,fg=text]"
+text = "#[fg=accent]#(spinner)#[default,fg=muted] #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default]"
+done = "#[fg=muted]· #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default]"
+success = "#[fg=success]✔#[default,fg=muted] #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default]"
+failed = "#[fg=failure]✗#[default,fg=muted] #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default,fg=failure] failed#[default]"
 
 [command.hn.top]
 run = |

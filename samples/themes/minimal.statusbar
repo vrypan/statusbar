@@ -1,26 +1,28 @@
-# Inspired by https://starship.rs/presets/pure-preset
-# Transparent, restrained; no Powerline font required.
+# minimal: shared muted labels and dotted fills.
+# Colors follow the terminal palette; minimal-color.statusbar uses fixed colors.
+
 interval = 5
 
 [colors]
-accent = #c792ea
-muted = #737b91
-blue = #82aaff
-success = #9ece6a
-failure = #f7768e
+text = default
+muted = colour8
+rule = colour8
+accent = colour3
+success = colour10
+failure = colour1
 
-[line.ornament]
-text = "#(fill: )⡎⠉⠉⢱"
+[line.rule]
+text = "#[fg=rule,dim]#(fill:─)#[default]"
 
-# Starship replaces the placeholder with its prompt details.
 [line.prompt]
-default = "<starship placeholder>"
-text = "#(value)#(fill: )⢇⣒⣒⡸"
+default = "Ready"
+text = "#[fg=text]#(value)#[default]"
 
-# Lines created by `statusbar push`.
+# Temporary lines use the same muted labels as modules.
 [push]
+keep = left
 spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-text = "#[fg=blue]#(spinner)#[fg=muted] #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )"
-done = "#[fg=muted]· #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )"
-success = "#[fg=success]✔#[fg=muted] #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )"
-failed = "#[fg=failure]✗#[fg=muted] #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )#[fg=failure]failed#[default]"
+text = "#[fg=accent]#(spinner)#[default,fg=muted] #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default]"
+done = "#[fg=muted]· #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default]"
+success = "#[fg=success]✔#[default,fg=muted] #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default]"
+failed = "#[fg=failure]✗#[default,fg=muted] #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default,fg=failure] failed#[default]"

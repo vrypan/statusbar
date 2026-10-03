@@ -1,36 +1,35 @@
-# Inspired by https://starship.rs/presets/gruvbox-rainbow
-# Warm rounded segments; requires Powerline glyphs (e.g. a Nerd Font).
+# gruvbox: shared muted labels and dotted fills.
+# Colors follow the terminal palette; gruvbox-color.statusbar uses fixed colors.
+# Commands: whoami, hostname, uptime, awk, curl; weather needs network access.
+
 interval = 5
 
 [colors]
-base = #3c3836
-text = #fbf1c7
-orange = #d65d0e
-yellow = #d79921
-aqua = #689d6a
-muted = #bdae93
-success = #b8bb26
-failure = #fb4934
+text = default
+muted = colour8
+rule = colour8
+accent = colour3
+success = colour10
+failure = colour1
 
 [line.rule]
-text = "#[fg=yellow]#(fill:━)"
+text = "#[fg=rule,dim]#(fill:─)#[default]"
 
-# Show user/host/load until Starship or `set prompt` supplies a value.
+# Starship replaces the fallback with its own prompt details and colors.
 [line.prompt]
-default = "#[fg=text,bg=orange,bold] #(command:system.user) #[fg=base,bg=yellow] #(command:system.host) "
-default .= "#[fg=base,bg=aqua,nobold] load #(command:system.load) "
-text = "#[default,fg=text,bg=base]#(value)"
-# Reset value styles before filling the gap and drawing the right side.
-text .= "#[default,fg=text,bg=base]#(fill: )"
-text .= "#[fg=base,bg=aqua] #(command:system.weather) #[fg=base,bg=yellow,bold] #(datetime:%H:%M:%S) #[default,fg=text,bg=base]"
+default = "#[fg=muted,bold]* Host: #[nobold]#(command:system.user)@#(command:system.host)"
+default .= "  load #[track]#(command:system.load)#[notrack]"
+text = "#[fg=text]#(value) #[default,fg=rule,dim]#(fill:·)"
+text .= "#[default,fg=muted] #(command:system.weather) #(datetime:%a %d) #[track]#(datetime:%H:%M)#[notrack]#[default]"
 
-# Lines created by `statusbar push`.
+# Temporary lines use the same muted labels as modules.
 [push]
+keep = left
 spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-text = "#[fg=muted,bg=base]#[fg=yellow]#(spinner)#[default,fg=muted,bg=base] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
-done = "#[fg=muted,bg=base]· #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
-success = "#[fg=muted,bg=base]#[fg=success]✔#[default,fg=muted,bg=base] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"
-failed = "#[fg=muted,bg=base]#[fg=failure]✗#[default,fg=muted,bg=base] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )#[fg=failure]failed#[default,fg=muted,bg=base]"
+text = "#[fg=accent]#(spinner)#[default,fg=muted] #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default]"
+done = "#[fg=muted]· #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default]"
+success = "#[fg=success]✔#[default,fg=muted] #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default]"
+failed = "#[fg=failure]✗#[default,fg=muted] #[bold]#(name)#[nobold] › #(value) #[default,fg=rule,dim]#(fill:·)#[default,fg=failure] failed#[default]"
 
 [command.system.user]
 run = whoami

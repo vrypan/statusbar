@@ -2,5 +2,5 @@
 # Load: statusbar config add clock.statusbar
 
 [line.clock.time]
-default = " #[fg=colour5]clock#[default] #(datetime:%a %d %b)#(fill: )#[fg=colour4,bold]#(datetime:%H:%M:%S)#[default] "
-text = "#(value)"
+default = "#(datetime:%a %d %b %H:%M:%S)"
+text = "#[default,fg=colour8,fg=muted,bold]* Clock: #[nobold]#(value) #[default,fg=colour8,fg=rule,dim]#(fill:·)#[default]"

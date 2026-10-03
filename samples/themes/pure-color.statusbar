@@ -1,18 +1,16 @@
-# Native palette variant of pure.statusbar.
-# Colors follow the terminal theme; see README.md for palette mappings.
 # Inspired by https://starship.rs/presets/pure-preset
 # Transparent, restrained; no Powerline font required.
 interval = 5
 
 [colors]
-accent = colour13
-muted = colour8
-blue = colour12
-success = colour10
-failure = colour1
+accent = #c792ea
+muted = #737b91
+blue = #82aaff
+success = #9ece6a
+failure = #f7768e
 
 [line.rule]
-text = "#[fg=muted,dim]#(fill:─)"
+text = "#[fg=muted]#(fill:─)"
 
 # Show user/host/load until Starship or `set prompt` supplies a value.
 [line.prompt]
