@@ -13,7 +13,7 @@ The statusbar itself has no scheduled external commands or clock updates. Starsh
 updates it through the shell integration when the prompt is drawn, so the
 default stays very light.
 
-Here's my `~/.config/statusbar/config.statusbar`:
+Here's my `~/.config/statusbar/default.stbt`:
 
 ```ini
 # minimal: shared muted labels and dotted fills.

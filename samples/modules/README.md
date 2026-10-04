@@ -62,6 +62,12 @@ For Homebrew, the compiled-in module directory lets you use a bare name:
 statusbar config import disk
 ```
 
+To keep a personal module, save its `.stbm` file directly in
+`$XDG_CONFIG_HOME/statusbar` (normally `~/.config/statusbar`). For example,
+`~/.config/statusbar/my-disk.stbm` can be imported with
+`statusbar config import my-disk` from any working directory. Local files take
+priority, then user modules, then bundled modules.
+
 New lines appear in import order, above temporary lines. Importing the same
 module again fails because its definitions already exist. References are
 written explicitly in the file, such as `#(command:disk.usage)`.

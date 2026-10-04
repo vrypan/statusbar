@@ -188,10 +188,10 @@ Create a personal config, check it, then load it inside a statusbar session:
 
 ```sh
 mkdir -p ~/.config/statusbar
-statusbar config show default > ~/.config/statusbar/config.statusbar
+statusbar config show default > ~/.config/statusbar/default.stbt
 # Edit the file, then:
-statusbar config check ~/.config/statusbar/config.statusbar
-statusbar config load ~/.config/statusbar/config.statusbar
+statusbar config check ~/.config/statusbar/default.stbt
+statusbar config load ~/.config/statusbar/default.stbt
 ```
 
 | Command | Meaning |
@@ -237,8 +237,8 @@ for inspection and cannot be reloaded; see the
 Use [`statusbar list`](list.md) for live line values, statuses, and FIFO bindings.
 
 `path` checks `$STATUSBAR_CONFIG`, then
-`$XDG_CONFIG_HOME/statusbar/config.statusbar` (normally
-`~/.config/statusbar/config.statusbar`). It does not recover a running
+`$XDG_CONFIG_HOME/statusbar/default.stbt` (normally
+`~/.config/statusbar/default.stbt`). It does not recover a running
 session's `--config` argument or describe its current layout.
 
 `import` rejects duplicate names, namespace conflicts and global settings.

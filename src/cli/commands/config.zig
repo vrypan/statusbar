@@ -61,7 +61,13 @@ fn readInput(arena: std.mem.Allocator, io: Io, file: []const u8, limit: usize, k
     const from_stdin = std.mem.eql(u8, file, "-");
     var name = inputLabel(file);
     const text = read: {
-        if (!from_stdin) break :read readConfigFile(arena, io, Io.Dir.cwd(), file, limit, kind.extension(), kind.directory(), &name);
+        if (!from_stdin) {
+            const user_directory = if (kind != .exact and std.mem.indexOfScalar(u8, file, '/') == null)
+                try config_source.defaultDirectory(arena)
+            else
+                null;
+            break :read readConfigFile(arena, io, Io.Dir.cwd(), file, limit, kind.extension(), user_directory, kind.directory(), &name);
+        }
         var buffer: [4096]u8 = undefined;
         var reader = Io.File.stdin().reader(io, &buffer);
         break :read reader.interface.allocRemaining(arena, .limited(limit));
@@ -107,17 +113,20 @@ const FileKind = enum {
 
 /// Exact local paths win. Only missing files trigger fallback; unreadable,
 /// oversized or invalid local files must never silently select another config.
-fn readConfigFile(arena: std.mem.Allocator, io: Io, dir: Io.Dir, file: []const u8, limit: usize, extension: ?[]const u8, directory: ?[]const u8, label: *[]const u8) ![]u8 {
-    var paths: [4]?[]const u8 = .{ file, null, null, null };
+fn readConfigFile(arena: std.mem.Allocator, io: Io, dir: Io.Dir, file: []const u8, limit: usize, extension: ?[]const u8, user_directory: ?[]const u8, directory: ?[]const u8, label: *[]const u8) ![]u8 {
+    var paths: [6]?[]const u8 = .{ file, null, null, null, null, null };
     defer for (paths[1..]) |path| if (path) |allocated| arena.free(allocated);
     if (extension) |suffix| {
         if (!std.mem.endsWith(u8, file, suffix)) paths[1] = try std.fmt.allocPrint(arena, "{s}{s}", .{ file, suffix });
     }
     if (std.mem.indexOfScalar(u8, file, '/') == null) {
-        if (directory) |base| {
-            if (base.len > 0) {
-                paths[2] = try std.fs.path.join(arena, &.{ base, file });
-                if (paths[1]) |with_extension| paths[3] = try std.fs.path.join(arena, &.{ base, with_extension });
+        for ([_]?[]const u8{ user_directory, directory }, 0..) |base_option, index| {
+            if (base_option) |base| {
+                if (base.len > 0) {
+                    const slot = 2 + index * 2;
+                    paths[slot] = try std.fs.path.join(arena, &.{ base, file });
+                    if (paths[1]) |with_extension| paths[slot + 1] = try std.fs.path.join(arena, &.{ base, with_extension });
+                }
             }
         }
     }
@@ -228,6 +237,7 @@ test "config file lookup respects local precedence, extensions and explicit path
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDir(io, "library", .default_dir);
+    try tmp.dir.createDir(io, "user", .default_dir);
     const files = .{
         .{ "theme", "exact" },
         .{ "theme.stbt", "local" },
@@ -245,20 +255,26 @@ test "config file lookup respects local precedence, extensions and explicit path
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var label: []const u8 = "";
-    try std.testing.expectEqualStrings("exact", try readConfigFile(arena, io, tmp.dir, "theme", 100, ".stbt", "library", &label));
+    try std.testing.expectEqualStrings("exact", try readConfigFile(arena, io, tmp.dir, "theme", 100, ".stbt", null, "library", &label));
     try std.testing.expectEqualStrings("theme", label);
     try tmp.dir.deleteFile(io, "theme");
-    try std.testing.expectEqualStrings("local", try readConfigFile(arena, io, tmp.dir, "theme", 100, ".stbt", "library", &label));
+    try std.testing.expectEqualStrings("local", try readConfigFile(arena, io, tmp.dir, "theme", 100, ".stbt", null, "library", &label));
     try std.testing.expectEqualStrings("theme.stbt", label);
     try tmp.dir.deleteFile(io, "theme.stbt");
-    try std.testing.expectEqualStrings("bundled", try readConfigFile(arena, io, tmp.dir, "theme", 100, ".stbt", "library", &label));
+    try std.testing.expectEqualStrings("bundled", try readConfigFile(arena, io, tmp.dir, "theme", 100, ".stbt", null, "library", &label));
     try std.testing.expectEqualStrings("library/theme.stbt", label);
-    try std.testing.expectEqualStrings("other", try readConfigFile(arena, io, tmp.dir, "other.stbt", 100, ".stbt", "library", &label));
-    try std.testing.expectEqualStrings("module", try readConfigFile(arena, io, tmp.dir, "disk", 100, ".stbm", "library", &label));
-    try std.testing.expectEqualStrings("", try readConfigFile(arena, io, tmp.dir, "empty", 100, ".stbt", "library", &label));
-    try std.testing.expectError(error.StreamTooLong, readConfigFile(arena, io, tmp.dir, "huge", 3, ".stbt", "library", &label));
+    try tmp.dir.writeFile(io, .{ .sub_path = "user/theme.stbt", .data = "personal" });
+    try std.testing.expectEqualStrings("personal", try readConfigFile(arena, io, tmp.dir, "theme", 100, ".stbt", "user", "library", &label));
+    try std.testing.expectEqualStrings("user/theme.stbt", label);
+    try std.testing.expectEqualStrings("module", try readConfigFile(arena, io, tmp.dir, "disk", 100, ".stbm", "user", "library", &label));
+    try std.testing.expectError(error.FileNotFound, readConfigFile(arena, io, tmp.dir, "./theme", 100, ".stbt", "user", "library", &label));
+
+    try std.testing.expectEqualStrings("other", try readConfigFile(arena, io, tmp.dir, "other.stbt", 100, ".stbt", null, "library", &label));
+    try std.testing.expectEqualStrings("module", try readConfigFile(arena, io, tmp.dir, "disk", 100, ".stbm", null, "library", &label));
+    try std.testing.expectEqualStrings("", try readConfigFile(arena, io, tmp.dir, "empty", 100, ".stbt", null, "library", &label));
+    try std.testing.expectError(error.StreamTooLong, readConfigFile(arena, io, tmp.dir, "huge", 3, ".stbt", null, "library", &label));
     try std.testing.expectEqualStrings("huge", label);
-    try std.testing.expectError(error.FileNotFound, readConfigFile(arena, io, tmp.dir, "./other", 100, ".stbt", "library", &label));
-    try std.testing.expectError(error.FileNotFound, readConfigFile(arena, io, tmp.dir, "other", 100, null, null, &label));
-    try std.testing.expectError(error.FileNotFound, readConfigFile(arena, io, tmp.dir, "double.stbt", 100, ".stbt", null, &label));
+    try std.testing.expectError(error.FileNotFound, readConfigFile(arena, io, tmp.dir, "./other", 100, ".stbt", null, "library", &label));
+    try std.testing.expectError(error.FileNotFound, readConfigFile(arena, io, tmp.dir, "other", 100, null, null, null, &label));
+    try std.testing.expectError(error.FileNotFound, readConfigFile(arena, io, tmp.dir, "double.stbt", 100, ".stbt", null, null, &label));
 }

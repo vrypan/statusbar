@@ -68,10 +68,8 @@ pub fn load(arena: std.mem.Allocator, io: Io, flag: ?[]const u8) !Startup {
 
 /// A missing new default is ordinary unless an old default file is there.
 fn legacyWarning(arena: std.mem.Allocator, io: Io) !?[]const u8 {
-    const legacy = try config_source.legacyConfigPath(arena) orelse return null;
-    const kind = (Io.Dir.cwd().statFile(io, legacy, .{}) catch return null).kind;
-    if (kind != .file and kind != .sym_link) return null;
-    return try std.fmt.allocPrint(arena, "statusbar: the old config file is no longer loaded; convert {s} to named lines and save it as " ++ config_source.default_name ++ " (using the built-in config)", .{legacy});
+    const legacy = try config_source.legacyConfigPath(arena, io) orelse return null;
+    return try std.fmt.allocPrint(arena, "statusbar: the old config file is no longer loaded; check {s} and save it as " ++ config_source.default_name ++ " (using the built-in config)", .{legacy});
 }
 
 fn readStdin(arena: std.mem.Allocator, io: Io) ![]const u8 {

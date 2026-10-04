@@ -118,8 +118,8 @@ def check_picker(binary, root):
         assert PREFIX not in data and diagnostic in data and b"To use this theme" not in data, data
         assert b"__RESULT_0__" in data, data
     for variables, destination in (
-        ({"HOME": str(root / "home"), "XDG_CONFIG_HOME": "", "STATUSBAR_CONFIG": ""}, root / "home/.config/statusbar/config.statusbar"),
-        ({"XDG_CONFIG_HOME": str(root / "xdg space"), "STATUSBAR_CONFIG": ""}, root / "xdg space/statusbar/config.statusbar"),
+        ({"HOME": str(root / "home"), "XDG_CONFIG_HOME": "", "STATUSBAR_CONFIG": ""}, root / "home/.config/statusbar/default.stbt"),
+        ({"XDG_CONFIG_HOME": str(root / "xdg space"), "STATUSBAR_CONFIG": ""}, root / "xdg space/statusbar/default.stbt"),
         ({"STATUSBAR_CONFIG": str(root / "custom's config")}, root / "custom's config"),
     ):
         data = pick(binary, themes, b"\r", extra_env=variables)

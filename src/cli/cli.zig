@@ -85,7 +85,8 @@ const config_commands = [_]zecli.CommandSpec{
         \\Validates FILE and replaces the current config with it. The new
         \\layout can change the number of rows without restarting your shell.
         \\An invalid config leaves the running bar unchanged.
-        \\Tries FILE, then FILE.stbt. Bare filenames also search the compiled-in
+        \\Tries FILE, then FILE.stbt. Bare filenames also search
+        \\$XDG_CONFIG_HOME/statusbar (or ~/.config/statusbar), then the compiled-in
         \\default theme directory, in the same order. Existing files take priority;
         \\only missing files trigger fallback. - reads stdin.
         \\`statusbar config < FILE` is the same as `statusbar config load - < FILE`.
@@ -102,7 +103,8 @@ const config_commands = [_]zecli.CommandSpec{
         \\Merges new line, command and color definitions into the current
         \\config. Names must be unique within each kind; duplicates are rejected.
         \\Global settings require a full replacement with `load`.
-        \\Tries FILE, then FILE.stbm. Bare filenames also search the compiled-in
+        \\Tries FILE, then FILE.stbm. Bare filenames also search
+        \\$XDG_CONFIG_HOME/statusbar (or ~/.config/statusbar), then the compiled-in
         \\default module directory, in the same order. Existing files take priority;
         \\only missing files trigger fallback. - reads stdin.
         ++ "\n" ++ (if (config_paths.default_modules_dir) |path| "Default module directory: " ++ path ++ "\n" else "No default module directory configured.\n"),
@@ -172,8 +174,8 @@ const commands = [_]zecli.CommandSpec{
         \\program, put its name and arguments after `--`. Exit it to end the session.
         \\
         \\Config lookup: --config, then $STATUSBAR_CONFIG, then the default path:
-        \\$XDG_CONFIG_HOME/statusbar/config.statusbar, or
-        \\~/.config/statusbar/config.statusbar if $XDG_CONFIG_HOME is unset.
+        \\$XDG_CONFIG_HOME/statusbar/default.stbt, or
+        \\~/.config/statusbar/default.stbt if $XDG_CONFIG_HOME is unset.
         \\A missing default file uses the built-in config.
         \\Use --config - to read a complete config from stdin. After EOF, keyboard
         \\input comes from /dev/tty; stdout must still be a terminal.

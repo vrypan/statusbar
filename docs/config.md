@@ -10,7 +10,7 @@ text = " Ready#(fill: )#(datetime:%H:%M) "
 Each `[line.NAME]` section adds a line. `text` is its template: `Ready` on the
 left, the time on the right, and `#(fill: )` repeating a space between them.
 Run `statusbar` to use the built-in config, or save this example as
-`~/.config/statusbar/config.statusbar` to use it instead.
+`~/.config/statusbar/default.stbt` to use it instead.
 
 ## Add colors and a command
 
@@ -54,11 +54,11 @@ statusbar chooses its config path in this order:
 
 1. `--config PATH` (use `-` to read from stdin)
 2. `$STATUSBAR_CONFIG`
-3. `$XDG_CONFIG_HOME/statusbar/config.statusbar` if `XDG_CONFIG_HOME` is set;
-   otherwise, `~/.config/statusbar/config.statusbar`
+3. `$XDG_CONFIG_HOME/statusbar/default.stbt` if `XDG_CONFIG_HOME` is set;
+   otherwise, `~/.config/statusbar/default.stbt`
 
 Complete themes use `.stbt`; module fragments use `.stbm`. The default
-startup file remains `config.statusbar`. An explicit path works with any name.
+startup file is `default.stbt`. An explicit path works with any name.
 
 If the default file is missing, statusbar uses its built-in config:
 [`samples/default.stbt`](../samples/default.stbt).
@@ -75,14 +75,14 @@ The built-in config is commented. Start from it:
 
 ```sh
 mkdir -p ~/.config/statusbar
-statusbar config show default > ~/.config/statusbar/config.statusbar
+statusbar config show default > ~/.config/statusbar/default.stbt
 ```
 
 Validate a draft file without starting a session or running its configured
 commands:
 
 ```sh
-statusbar config check ~/.config/statusbar/config.statusbar
+statusbar config check ~/.config/statusbar/default.stbt
 ```
 
 A valid file produces no output and exits 0. A syntax error exits 2 with its
@@ -110,11 +110,26 @@ is not already present. `import` does the same with `.stbm`. Only missing
 files trigger fallback: an existing but invalid, empty, unreadable or oversized
 file reports an error.
 
-A bare filename, with no `/`, also searches the compiled-in default directory:
-first the exact filename, then the filename with its extension. Local files
-win. Paths containing `/`, including `./disk`, stay local to the supplied
-path. `-` still reads stdin, and `config check` and startup `--config` use
-only the exact supplied path.
+For a bare filename, with no `/`, lookup searches each directory in order:
+
+1. The current working directory.
+2. `$XDG_CONFIG_HOME/statusbar`, or `~/.config/statusbar` when unset.
+3. The compiled-in default theme or module directory, when configured.
+
+Each directory tries the exact filename, then the filename with its extension.
+Save personal themes and modules directly in your user config directory:
+
+```sh
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/statusbar"
+cp ./my-theme.stbt ./disk.stbm "${XDG_CONFIG_HOME:-$HOME/.config}/statusbar/"
+statusbar config load my-theme
+statusbar config import disk
+```
+
+This example assumes `my-theme.stbt` and `disk.stbm` exist in the current
+directory. User files override bundled files with the same name. Paths containing
+`/`, including `./disk`, stay local to the supplied path. `-` still reads stdin,
+and `config check` and startup `--config` use only the exact supplied path.
 
 Homebrew builds configure both bundled directories, so these work from any
 working directory without a matching local file:
@@ -133,7 +148,8 @@ zig build -Ddefault-themes-dir="$PWD/samples/themes" \
 
 Use absolute paths for predictable lookup from any working directory.
 Relative directory settings resolve from the command's working directory.
-Without these options, no default search directories are configured.
+Without these options, lookup still searches the current and user config
+directories.
 `-Ddefault-themes-dir` also supplies the theme picker's default directory.
 `-Dthemes-dir` and `-Dmodules-dir` choose installation destinations separately;
 they do not configure lookup. Run `statusbar config load --help` or

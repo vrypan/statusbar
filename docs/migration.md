@@ -46,16 +46,16 @@ The remaining sections convert the older slot-based configuration.
 
 ## Where configs live
 
-The default config moved from `~/.config/statusbar/config` to
-`~/.config/statusbar/config.statusbar` (under `$XDG_CONFIG_HOME` when it is
-set). The old file is never loaded. If it is the only one present, statusbar
+The default config moved from `~/.config/statusbar/config` (and the later
+`config.statusbar`) to `~/.config/statusbar/default.stbt` (under
+`$XDG_CONFIG_HOME` when it is set). The old file is never loaded. If it is the only one present, statusbar
 starts with the built-in config and a line pointing at it, and your shell
 starts as usual. Convert it, save it under the new name, validate the draft,
 then load it without restarting:
 
 ```sh
-statusbar config check ~/.config/statusbar/config.statusbar
-statusbar config < ~/.config/statusbar/config.statusbar
+statusbar config check ~/.config/statusbar/default.stbt
+statusbar config < ~/.config/statusbar/default.stbt
 ```
 
 A valid replacement removes the warning line. Any config that cannot be used
@@ -65,9 +65,22 @@ fails to start. `statusbar config path` shows the file a new session loads.
 
 Shipped themes and complete samples now end in `.stbt`; modules end in
 `.stbm`. Rename personal theme files to `.stbt` to make them visible in
-`statusbar-theme`. The default startup file remains `config.statusbar`, and
+`statusbar-theme`. The default startup file is `default.stbt`, and
 `--config`, `config load`, and `config import` still accept explicit paths
 with any extension.
+
+If your `config.statusbar` already uses the current named-line syntax, validate
+and rename it without changing its contents:
+
+```sh
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/statusbar"
+statusbar config check "$config_dir/config.statusbar"
+mv "$config_dir/config.statusbar" "$config_dir/default.stbt"
+```
+
+Bare theme and module names search the user config directory before bundled
+files. Save personal `.stbt` and `.stbm` files directly there to load them
+with `config load NAME` and `config import NAME`.
 
 ## One line
 

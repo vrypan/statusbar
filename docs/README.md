@@ -28,7 +28,7 @@ Create a starting config, then edit it:
 
 ```sh
 mkdir -p ~/.config/statusbar
-statusbar config show default > ~/.config/statusbar/config.statusbar
+statusbar config show default > ~/.config/statusbar/default.stbt
 statusbar
 ```
 
@@ -198,7 +198,7 @@ or save your assembled layout:
 
 ```sh
 statusbar config show --json
-statusbar config show current > ~/.config/statusbar/config.statusbar
+statusbar config show current > ~/.config/statusbar/default.stbt
 # To remove the module from the running session:
 statusbar remove disk
 ```

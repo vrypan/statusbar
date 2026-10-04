@@ -31,8 +31,12 @@ or `built-in`. Selection follows this order:
 
 1. An explicit `statusbar --config PATH` launch option.
 2. `$STATUSBAR_CONFIG`.
-3. `$XDG_CONFIG_HOME/statusbar/config.statusbar` if set; otherwise
-   `~/.config/statusbar/config.statusbar`.
+3. `$XDG_CONFIG_HOME/statusbar/default.stbt` if set; otherwise
+   `~/.config/statusbar/default.stbt`.
+
+Bare theme and module names also search this user config directory before the
+bundled directories. Users can save `.stbt` themes and `.stbm` modules directly
+there and use `statusbar config load NAME` or `statusbar config import NAME`.
 
 `config path` does not recover a running session's `--config` argument. A missing
 file at the default location uses the built-in config. A config that cannot
@@ -60,16 +64,16 @@ and dependencies. Add selected modules with `statusbar config import FILE`
 or copy their definitions into a draft config. Modules use static names such
 as `disk.usage`; keep their names, references and command intervals together.
 `config import disk` also tries `disk.stbm`; `config load pure` also tries
-`pure.stbt`. Bare names check local files before their compiled-in default
-directory. Homebrew builds configure both directories; inspect command help
-for other builds. Paths containing `/` do not search the default directory.
+`pure.stbt`. Bare names check local files, then the user config directory,
+then their compiled-in default directory. Homebrew builds configure both
+bundled directories; inspect command help for other builds. Paths containing `/` do not search the default directory.
 Add fragments with `config import FILE`; load complete themes with
 `config load FILE`. Use `config show --json` to inspect definitions and
 `statusbar remove PREFIX` to remove a group, including its temporary lines.
 Save `config show current` to retain the assembled layout. Do not load optional network modules unless requested.
 
 Create a draft in a user-owned directory, for example
-`~/.config/statusbar/themes/my-theme.stbt`, creating its parent if needed.
+`~/.config/statusbar/my-theme.stbt`, creating its parent if needed.
 Copy a suitable bundled theme or use `statusbar config show default` as a
 starting point. Unsuffixed themes use terminal palette colors; choose
 `*-color.stbt` for the original Starship-inspired colors and layouts.
@@ -357,7 +361,7 @@ Save a copy of `statusbar config show current` before replacing a live
 layout. Then preview:
 
 ```sh
-statusbar config load ~/.config/statusbar/themes/my-theme.stbt
+statusbar config load ~/.config/statusbar/my-theme.stbt
 ```
 
 Outside a session, launch `statusbar --config /absolute/path/to/my-theme.stbt`
@@ -382,7 +386,7 @@ in section 1, preserving the existing file first. For the usual location:
 
 ```sh
 mkdir -p ~/.config/statusbar
-cp ~/.config/statusbar/themes/my-theme.stbt ~/.config/statusbar/config.statusbar
+cp ~/.config/statusbar/my-theme.stbt ~/.config/statusbar/default.stbt
 ```
 
 Respect `$STATUSBAR_CONFIG`, `$XDG_CONFIG_HOME`, and any explicit `--config`

@@ -1,7 +1,7 @@
 # statusbar config
 #
 # This is statusbar's built-in config, used when there is no config file.
-# Copy it to ~/.config/statusbar/config.statusbar (or point --config or
+# Copy it to ~/.config/statusbar/default.stbt (or point --config or
 # $STATUSBAR_CONFIG at it) to make your own.
 #
 # Comments start a line with # or ;. A # anywhere else is part of the value,

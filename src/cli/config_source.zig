@@ -5,9 +5,7 @@ const config = @import("model").config;
 /// samples/default.stbt, used when there is no config file.
 pub const default_config = @embedFile("default_config");
 
-pub const default_name = "config.statusbar";
-/// The pre-`.statusbar` default filename, detected only to warn about it.
-pub const legacy_name = "config";
+pub const default_name = "default.stbt";
 
 pub const SelectedConfigPath = struct {
     path: []const u8,
@@ -15,7 +13,8 @@ pub const SelectedConfigPath = struct {
     from_stdin: bool,
 };
 
-fn defaultDirectory(arena: std.mem.Allocator) !?[]const u8 {
+/// User config directory, shared by startup and theme/module lookup.
+pub fn defaultDirectory(arena: std.mem.Allocator) !?[]const u8 {
     const env = @import("platform").environment;
     if (env.get("XDG_CONFIG_HOME")) |xdg| return try std.fmt.allocPrint(arena, "{s}/statusbar", .{xdg});
     const home = env.get("HOME") orelse return null;
@@ -32,10 +31,15 @@ pub fn selectConfigPath(arena: std.mem.Allocator, flag: ?[]const u8) !SelectedCo
     return .{ .path = try std.fmt.allocPrint(arena, "{s}/" ++ default_name, .{directory}), .explicit = false, .from_stdin = false };
 }
 
-/// The old default file, which is never loaded automatically.
-pub fn legacyConfigPath(arena: std.mem.Allocator) !?[]const u8 {
+/// Old default files are detected only to warn about them.
+pub fn legacyConfigPath(arena: std.mem.Allocator, io: std.Io) !?[]const u8 {
     const directory = try defaultDirectory(arena) orelse return null;
-    return try std.fmt.allocPrint(arena, "{s}/" ++ legacy_name, .{directory});
+    for ([_][]const u8{ "config.statusbar", "config" }) |name| {
+        const path = try std.fs.path.join(arena, &.{ directory, name });
+        const kind = (std.Io.Dir.cwd().statFile(io, path, .{}) catch continue).kind;
+        if (kind == .file or kind == .sym_link) return path;
+    }
+    return null;
 }
 
 test "the built-in config parses under the named-line grammar" {

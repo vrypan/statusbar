@@ -2745,6 +2745,31 @@ with tempfile.TemporaryDirectory() as folder:
     run('config', 'import', './extra'); wait_for('[line.extra.value]')
     assert '[line.extra.value]' in run('config', 'show')
     run('config', 'check', 'theme', code=1)
+    # User lookup follows XDG, falls back to HOME, and ignores STATUSBAR_CONFIG.
+    user = Path(folder) / 'xdg' / 'statusbar'
+    user.mkdir(parents=True)
+    os.environ['XDG_CONFIG_HOME'] = str(user.parent)
+    os.environ['STATUSBAR_CONFIG'] = str(Path(folder) / 'unrelated.stbt')
+    (user / 'theme.stbt').write_text('[line.personal.base]\n')
+    run('config', 'load', 'theme'); wait_for(suffixed.strip())
+    Path('theme.stbt').unlink()
+    run('config', 'load', 'theme'); wait_for('[line.personal.base]')
+    run('config', 'load', './theme', code=1)
+    (user / 'personal.stbm').write_text('[line.personal.extra]\n')
+    run('config', 'import', 'personal'); wait_for('[line.personal.extra]')
+    (user / 'broken.stbt').write_text('[unknown]\n')
+    run('config', 'load', 'broken', code=2)
+    home = Path(folder) / 'home'
+    home_config = home / '.config' / 'statusbar'
+    home_config.mkdir(parents=True)
+    (home_config / 'home-theme.stbt').write_text('[line.home.base]\n')
+    (home_config / 'home-module.stbm').write_text('[line.home.extra]\n')
+    os.environ['HOME'] = str(home)
+    os.environ['XDG_CONFIG_HOME'] = ''
+    run('config', 'load', 'home-theme'); wait_for('[line.home.base]')
+    run('config', 'import', 'home-module'); wait_for('[line.home.extra]')
+    Path('theme.stbt').write_text(suffixed)
+
     # An existing invalid or empty file must not load the valid suffixed file.
     snapshot = run('config', 'show')
     for contents in ('[unknown]\n', ''):
@@ -2856,7 +2881,14 @@ def check_startup_recovery(binary):
         code, data = capture_pty([binary, "--", "/bin/sh", "-c", child], env=env)
         assert code == 5 and b"LEGACY" not in plain(data), data[-1500:]
         assert any(b"the old config file is no longer loaded" in row for row in painted(data)), painted(data)
-        current = os.path.join(directory, "config.statusbar")
+        os.unlink(legacy)
+        legacy = os.path.join(directory, "config.statusbar")
+        with open(legacy, "w") as file:
+            file.write("[line.a]\ntext = OLD_DEFAULT\n")
+        code, data = capture_pty([binary, "--", "/bin/sh", "-c", child], env=env)
+        assert code == 5 and b"OLD_DEFAULT" not in plain(data), data[-1500:]
+        assert any(b"the old config file is no longer loaded" in row for row in painted(data)), painted(data)
+        current = os.path.join(directory, "default.stbt")
         with open(current, "w") as file:
             file.write("[line.a]\ntext = NEW_DEFAULT\n")
         code, data = capture_pty([binary, "--", "/bin/sh", "-c", child], env=env)
