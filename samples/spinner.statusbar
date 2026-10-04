@@ -1,5 +1,5 @@
 # Start with: statusbar --config samples/spinner.statusbar
-# Inside the session, try: statusbar push wait -- sleep 3
+# Inside the session, try: statusbar new wait -- sleep 3
 
 [colors]
 text = default

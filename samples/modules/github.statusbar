@@ -1,6 +1,6 @@
 # Module: github. macOS/Linux; jq, gh, network, and gh auth login.
 # Displays up to 100 unread notifications; the title opens your inbox.
-# Load: statusbar config add github.statusbar
+# Load: statusbar config import github.statusbar
 
 [line.github.notifications]
 default = "#[track]#(command:github.notifications)#[notrack]"

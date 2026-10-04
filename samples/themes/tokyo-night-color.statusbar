@@ -14,7 +14,7 @@ failure = #f7768e
 [line.border]
 text = "#[fg=border,bg=base]#(fill:▀)"
 
-# Show user/host/load until Starship or `set prompt` supplies a value.
+# Show user/host/load until Starship or `update prompt` supplies a value.
 [line.prompt]
 default = "#[fg=base,bg=accent,bold] #(command:system.user)@#(command:system.host) #[default,fg=text,bg=base]  #[fg=muted]load #[fg=accent]#(command:system.load)"
 text = "#[default,fg=text,bg=base]#(value)"
@@ -22,7 +22,7 @@ text = "#[default,fg=text,bg=base]#(value)"
 text .= "#[default,fg=text,bg=base]#(fill: )"
 text .= "#[fg=muted]#(command:system.weather)  #(datetime:%a %d) #[default,fg=text,bg=base] #[fg=base,bg=accent,bold] #(datetime:%H:%M:%S) #[default,fg=text,bg=base]"
 
-# Lines created by `statusbar push`.
+# Lines created by `statusbar new`.
 [push]
 spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 text = "#[fg=muted,bg=base]#[fg=accent]#(spinner)#[fg=muted] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"

@@ -45,10 +45,10 @@ shell
   directories.
 - Statusbar is painted with autowrap off, so text that the terminal draws wider
   than statusbar measured is clipped at the right edge rather than wrapping.
-- Lines are session-owned: configured lines in declaration order, then pushed
+- Lines are session-owned: configured lines in declaration order, then temporary
   lines in creation order. Each has a stable, never-reused ID, an optional
   name, a value and a status. A private local datagram socket authenticates
-  and acknowledges every line request (`set`, `push`, `pop`, `bind`, `list`); bounded
+  and acknowledges every line request (`update`, `new`, `remove`, `bind`, `list`); bounded
   stream updates display text literally. Streaming producers are tied to the
   line instance they created, so a retired or removed producer cannot change
   a later line with the same name. See [set.md](set.md#protocol).
@@ -284,7 +284,7 @@ they already own. A feature file does not require a new build module.
 
 ## Limitations
 
-- Repaints, config replacement, and pushed-line creation and removal save and
+- Repaints, config replacement, and temporary-line creation and removal save and
   restore the cursor with DECSC/DECRC, the single save slot the child uses
   too. They only happen between complete sequences, and wait for a pause
   while the child holds a saved cursor, so collisions are unlikely but

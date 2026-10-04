@@ -1,6 +1,6 @@
 # Module: hackernews. macOS/Linux; curl, jq; network access to Hacker News.
 # The title links to the discussion in terminals supporting OSC 8.
-# Load: statusbar config add hackernews.statusbar
+# Load: statusbar config import hackernews.statusbar
 
 [line.hackernews.top]
 default = "#[track]#(command:hackernews.top)#[notrack]"

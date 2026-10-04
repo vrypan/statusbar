@@ -2,7 +2,7 @@
 
 Modules add a small feature to your running statusbar. Each file contains one
 line and its commands with static names such as `disk.usage`. Load a module
-with `statusbar config add FILE`. A module is simply a group of config
+with `statusbar config import FILE`. A module is simply a group of config
 definitions sharing a prefix; no declaration or registration is needed.
 
 Modules follow the [shared theme style](../themes/README.md#shared-styling-rules):
@@ -52,38 +52,41 @@ Locate the library for your installation:
 From the repository directory, inside the statusbar shell:
 
 ```sh
-statusbar config add samples/modules/disk.statusbar
-statusbar config add samples/modules/weather.statusbar
+statusbar config import samples/modules/disk.statusbar
+statusbar config import samples/modules/weather.statusbar
 ```
 
 For Homebrew:
 
 ```sh
 modules_dir="$(brew --prefix statusbar)/share/statusbar/modules"
-statusbar config add "$modules_dir/disk.statusbar"
+statusbar config import "$modules_dir/disk.statusbar"
 ```
 
-New lines appear in import order, above pushed lines. Importing the same
+New lines appear in import order, above temporary lines. Importing the same
 module again fails because its definitions already exist. References are
 written explicitly in the file, such as `#(command:disk.usage)`.
 To create another instance, copy the file and change its names and references
-together before importing the copy.
+together before importing the copy. A standalone line cannot share its name
+with a module prefix: use `disk.summary` alongside `disk.usage`, not `disk`.
 
-`config add FILE` checks and sends the module; the session checks it again before
+`config import FILE` checks and sends the module; the session checks it again before
 applying it. Inspect the bar and `statusbar config show current` afterward.
 
 ## Inspect and remove modules
 
 ```sh
-statusbar config list
-statusbar config remove disk
+statusbar list
+statusbar config show --json
+statusbar remove disk
 ```
 
-The listing groups configured line and command names by the part before their
-first dot. `remove disk` removes all configured `disk.*` lines, commands and
-colors. It rejects removal if remaining definitions depend on them, or if it
-would leave no configured line. Pushed lines stay. The short forms are
-`config ls` and `config rm disk`.
+`list` shows live lines, including their names and IDs. `config show --json`
+includes configured lines, commands, colors and parsed templates.
+`remove disk` removes the whole `disk.*` group, including temporary lines.
+It rejects removal if remaining definitions depend on the group, or if it
+would leave no configured line. Other temporary lines stay. The short forms
+are `ls` and `rm disk`. Removal does not change your saved config file.
 
 ## Customize and save
 
@@ -91,15 +94,15 @@ Each bundled line renders `#(value)`, with its normal display in `default`.
 Override a line temporarily and restore its live display with:
 
 ```sh
-statusbar set codex.usage "HELLO"
-statusbar set codex.usage --reset
+statusbar update codex.usage "HELLO"
+statusbar update codex.usage --reset
 ```
 
 An explicitly empty value clears the value until reset; the label and fill
 remain. FIFO input also overrides the value. After editing a module already
 loaded in a session,
 update its definitions in `config show current` and reload the complete
-config; `config add FILE` rejects definitions that already exist.
+config; `config import FILE` rejects definitions that already exist.
 
 Copy a module into your own directory before editing it; installed copies may
 be replaced by upgrades. Its header lists an example import and requirements.
@@ -164,14 +167,15 @@ run = hostname -s
 interval = 3600
 ```
 
-Import with `config add FILE`; the source defines `host.summary` and
+Import with `config import FILE`; the source defines `host.summary` and
 `host.fetch`. The import checks name uniqueness and preserves the source as
 written. Fragments may contain multiple prefixes or unprefixed definitions.
 Snapshots from `config show current` can be saved, checked with
 `config check FILE`, and loaded as complete configs. Each bundled module can also be checked directly with
 `statusbar config check samples/modules/host.statusbar`.
 
-Module prefixes use letters, digits, underscores and hyphens. Set command intervals
+Module prefixes use letters, digits, underscores and hyphens, and cannot be
+all digits. Set command intervals
 explicitly, use `colour0`–`colour15` or terminal color names, and finish styles
 with `#[default]`. Avoid global settings and `[push]` or `[highlight]`, which
 belong to the surrounding theme. Each supplied module is self-contained.

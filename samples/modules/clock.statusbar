@@ -1,5 +1,5 @@
 # Module: clock. macOS/Linux; no external commands.
-# Load: statusbar config add clock.statusbar
+# Load: statusbar config import clock.statusbar
 
 [line.clock.time]
 default = "#(datetime:%a %d %b %H:%M:%S)"

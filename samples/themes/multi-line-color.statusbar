@@ -40,7 +40,7 @@ text = "#[fg=pill]#[track]#[fg=bold]*#[default,fg=pill] #(command:gh.notificatio
 [line.system.now]
 text = "#[fg=pill]#[fg=bold]*#[default,fg=pill] Now #(fill:·) #[fg=muted] #(command:system.weather) #(datetime:%a %d %H:%M:%S)"
 
-# Lines created by `statusbar push`.
+# Lines created by `statusbar new`.
 [push]
 spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 text = "#[fg=text]#[fg=accent]#(spinner)#[fg=muted] #[fg=text,bold]#(name)#[default,fg=text] › #(value)#(fill: )"

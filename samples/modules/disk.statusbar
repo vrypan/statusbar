@@ -1,5 +1,5 @@
 # Module: disk. macOS/Linux; df and awk. Set volume to monitor another path.
-# Load: statusbar config add disk.statusbar
+# Load: statusbar config import disk.statusbar
 
 [line.disk.usage]
 default = "#(command:disk.usage)"

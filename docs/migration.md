@@ -1,10 +1,48 @@
-# Migrating from slots
+# Migrate to the current commands and config
 
 Earlier versions divided each `[line.N]` into numbered left and right slots.
 statusbar now uses named lines with one template each, explicit expressions,
 and a value and status per line. This is a breaking change: old configs,
 `statusbar set N`, `statusbar fifo` and the OSC slot sequence no longer work.
 This guide converts each part.
+
+## Command changes
+
+If you already use named lines, update scripts and shell hooks with this table:
+
+| Before | Now |
+| --- | --- |
+| `statusbar set NAME TEXT` | `statusbar update NAME TEXT` (alias `upd`) |
+| `statusbar push [NAME]` | `statusbar new [NAME]` |
+| `statusbar pop [NAME]` | `statusbar remove [NAME]` (alias `rm`; see scope below) |
+| `statusbar list --pushed` | `statusbar list --temp` |
+| `statusbar list --short` | `statusbar list`; use `--json` for values and visibility |
+| `statusbar config add FILE` | `statusbar config import FILE` |
+| `statusbar config remove PREFIX` | `statusbar remove PREFIX` |
+| `statusbar config show path` | `statusbar config path` |
+| `statusbar config list --debug --json` | `statusbar config show --json` |
+
+`config list` and its prefix-group output have been removed. Use
+`config show --json` for parsed definitions, or `statusbar list` for live
+lines. The [line JSON format](list.md#json-format) now uses `temp`, `access`,
+boolean `fifo`, and nullable `fifo_path` instead of `kind` and a path in `fifo`.
+
+Removal has a broader scope than `pop`: a named target removes a standalone
+line or an entire group, including configured lines, commands, colors and
+temporary lines. An ID for a dotted line selects its whole first-segment
+group. Dotted names are rejected as removal targets. With no target, `remove`
+still removes only the newest temporary line; `--all` removes only temporary
+lines. See [removing lines](push.md#remove-lines).
+
+Without NAME, `new` generates `tmp-ID`; `--prefix` selects another prefix.
+The `+ make` shortcut generates `make-ID`, allowing concurrent runs. Use
+`+ +build make` for an explicit name. A standalone line cannot share a name
+with a group prefix, and group prefixes cannot be all digits.
+
+Shell initialization also defines `sb` as an alias for `statusbar`, preserving
+an existing `sb` command. Use `--no-sb-alias` to opt out.
+
+The remaining sections convert the older slot-based configuration.
 
 ## Where configs live
 
@@ -23,7 +61,7 @@ statusbar config < ~/.config/statusbar/config.statusbar
 A valid replacement removes the warning line. Any config that cannot be used
 at startup, including one named by `--config` or `$STATUSBAR_CONFIG`, is
 handled the same way: the built-in config and a warning, never a shell that
-fails to start. `statusbar config show path` shows the file a new session loads.
+fails to start. `statusbar config path` shows the file a new session loads.
 
 Shipped themes and samples now end in `.statusbar`; `--config` accepts any
 file name.
@@ -46,8 +84,8 @@ text = " #(command:host)#(fill: )#(datetime:%H:%M) "
 run = hostname -s
 ```
 
-- `[line.N]` becomes `[line.NAME]`. Names use letters, digits, `_` and `-`,
-  and cannot be only digits.
+- `[line.N]` becomes `[line.NAME]`. Names use letters, digits, `_`, `-` and dots
+  between nonempty segments; see the [naming rules](config.md#linename).
 - `left` and `right` become one `text`: left side, `#(fill: )`, right side.
 - `#(anything)` no longer runs a shell command. Define `[command.NAME]` and
   write `#(command:NAME)`; `#(NAME)` alone is an error.
@@ -139,7 +177,7 @@ text, still starting at the left edge.
 
 ## Setting values
 
-`statusbar set N TEXT` addressed a slot number. `statusbar set NAME TEXT` now
+`statusbar set N TEXT` addressed a slot number. `statusbar update NAME TEXT` now
 sets a line's value, shown by `#(value)`:
 
 ```ini
@@ -162,17 +200,17 @@ text = "#(value)#(fill: )#(datetime:%H:%M)"
 ```
 
 ```sh
-statusbar set build "Build passed"
-statusbar set build --reset
+statusbar update build "Build passed"
+statusbar update build --reset
 ```
 
-- `set NAME` with no text now changes nothing; use `--reset` to restore the
-  default. `set NAME ""` sets an explicit empty value.
+- `update NAME` with no text now changes nothing; use `--reset` to restore the
+  default. `update NAME ""` sets an explicit empty value.
 - A value no longer replaces the whole slot: the rest of the template, dates
   and commands keep updating.
 - Values are literal. `#[fg=green]` in a value used to style it; now it is
   shown as written. ANSI colors in a value still work, so
-  `statusbar set build "$(printf '\033[32mok\033[0m')"` is green.
+  `statusbar update build "$(printf '\033[32mok\033[0m')"` is green.
 - A decimal target is a line ID, not a slot or position. Configured lines get
   IDs 1, 2, … in order at startup, but prefer names.
 
@@ -191,8 +229,8 @@ failed  = "#[fg=red]✗ #(value)"
 ```
 
 ```sh
-statusbar set build "compiling" --status running
-statusbar set build "12 tests passed" --status success
+statusbar update build "compiling" --status running
+statusbar update build "12 tests passed" --status success
 ```
 
 ## Pushed lines
@@ -218,7 +256,7 @@ failed = "#[fg=brightblack]#(value)#(fill: )#[fg=red]failed#[fg=brightblack] [#(
 ```
 
 - `#(exit_code)` and `#(signal)` are gone. A command's result selects
-  `success` (exit 0) or `failed`; `push` still exits with the command's
+  `success` (exit 0) or `failed`; `new` exits with the command's
   status.
 - `spinner` and `spinner_interval` move to `[push]`.
 - Pushed lines keep the right side by default (`keep = right`), so the name
@@ -228,36 +266,37 @@ On the command line, the tag becomes the line's name:
 
 ```sh
 statusbar push -t build -- make        # before
-statusbar push build -- make           # after
+statusbar new build -- make            # after
 ```
 
-`push` prints the name when input ends; an unnamed push prints its numeric
-ID, as before. `pop` takes a name or ID.
+`new` prints the explicit or generated name when input ends. Without a
+name, it generates `tmp-ID`. `remove` takes a top-level name or numeric ID;
+see the group removal rules above.
 
 ## FIFOs
 
-`statusbar fifo` is replaced by `bind` and `push --fifo`:
+`statusbar fifo` is replaced by `bind` and `new --fifo`:
 
 | Before | After |
 |--------|-------|
-| `statusbar fifo build` | `statusbar push build --fifo` |
+| `statusbar fifo build` | `statusbar new build --fifo` |
 | `statusbar fifo --slot 3 prompt` | `statusbar bind prompt` (for a `[line.prompt]`) |
-| `statusbar fifo --finish --exit-code 0 build` | `statusbar set build --status success` |
-| `statusbar fifo --finish build` | `statusbar set build --status done` |
-| `statusbar fifo --start build` | `statusbar set build --status running` |
+| `statusbar fifo --finish --exit-code 0 build` | `statusbar update build --status success` |
+| `statusbar fifo --finish build` | `statusbar update build --status done` |
+| `statusbar fifo --start build` | `statusbar update build --status running` |
 | `statusbar fifo --remove prompt` | `statusbar bind -u prompt` |
-| `$STATUSBAR_SLOTS/build` | the path printed by `bind`/`push --fifo`, in `$STATUSBAR_FIFOS` |
+| `$STATUSBAR_SLOTS/build` | the path printed by `bind`/`new --fifo`, in `$STATUSBAR_FIFOS` |
 
 A FIFO now keeps accepting input after any status change. Removing a binding
-keeps the line's value and status; `pop` removes a pushed line and its FIFO.
+keeps the line's value and status; `remove` removes a line or group and its FIFOs.
 
 ## Shell integration
 
 `statusbar init --starship-slot N` becomes `--starship-line NAME`, defaulting
 to a line named `prompt`. Give your config a `[line.prompt]` whose template
 includes `#(value)`. In the Nushell sample, `set 3 --` becomes
-`set prompt --`. Scripts that sent the OSC 1337 `SetUserVar=StatusBarSlotN`
-sequence directly should call `statusbar set` instead; statusbar no longer
+`update prompt --`. Scripts that sent the OSC 1337 `SetUserVar=StatusBarSlotN`
+sequence directly should call `statusbar update` instead; statusbar no longer
 consumes that sequence.
 
 ## Command output

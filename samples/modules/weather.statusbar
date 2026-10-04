@@ -1,6 +1,6 @@
 # Module: weather. macOS/Linux; curl, tr; network request to wttr.in.
 # The service guesses location from your IP. Set location to e.g. Athens.
-# Load: statusbar config add weather.statusbar
+# Load: statusbar config import weather.statusbar
 
 [line.weather.current]
 default = "#[track]#(command:weather.current)#[notrack]"

@@ -6,28 +6,51 @@ order they were added.
 
 ## Unreleased
 
-- Make `config --add` accept mixed prefixes and unprefixed definitions without
-  a name argument; add `config --remove PREFIX` with dependency checks and
-  preservation of surviving lines, bindings and command processes
-
-- Make bundled module displays defaults, so `set` and FIFO values override
-  them and `set --reset` restores their live content
-- Use `module.name` for module lines, commands and colors; update `config --add`,
-  prefix grouping and the module library, and support dotted line names in
-  `set`, `push` and FIFO bindings
-- Add `config --list [current|startup|default]` to list configured line
-  and command names grouped by module prefix
-- Add `list [--pushed] [--short] [--json]` to inspect session lines, including hidden
-  lines, with stable IDs, statuses, raw override values and bound FIFO paths
-- Add `config --add` for atomic additions of lines, commands,
-  and colors, preserving existing line state and running commands
-- Bundle a library of ten modules using terminal-native colors, with setup
-  instructions, platform requirements, and checks for theme composition
-- Use static names in module sources; imports preserve source text without
+- **Breaking:** rename `set` to `update` (`upd`), `push` to `new`, and `pop`
+  to `remove` (`rm`)
+- Make `remove NAME` remove a standalone line or an entire group, including
+  configured lines, commands, colors and temporary lines; an ID for a dotted
+  line selects its whole group. No target removes the newest temporary line;
+  `--all` removes only temporary lines
+- Generate `tmp-ID` names for `new` without a name; add `--prefix` (`-p`)
+- Add `list [--temp] [--json]` (`ls`) to inspect session lines, including hidden
+  lines, with stable IDs, access modes, statuses, raw values and FIFO paths
+- **Breaking:** replace config flags with `show`, `path`, `check`, `load`,
+  and `import` subcommands. `config show [current|startup|default]` prints
+  source text; `config path` prints the selected startup path. Keep
+  `config < FILE` as a shorthand for loading stdin
+- Add `config show [current|startup|default] --json` to inspect full parsed
+  definitions, effective settings and compiled templates without running commands
+- Add `config import FILE` for atomic additions of lines, commands and colors,
+  accepting mixed prefixes and unprefixed definitions while preserving existing
+  line state and running commands. Imports preserve source text without
   placeholder substitution
+- Check dependencies during removal and preserve surviving lines, bindings
+  and command processes
+- Use `module.name` for module lines, commands and colors; support dotted
+  names in `update`, `new` and FIFO bindings. Reserve group prefixes so they
+  cannot collide with standalone line names or be all digits
+- Bundle eleven modules using terminal-native colors, with setup instructions,
+  platform requirements and checks for theme composition
+- Add a Codex usage module with a usage meter, reset countdown, credits,
+  available resets and lifetime token totals
+- Make bundled module displays defaults, so `update` and FIFO values override
+  them and `update --reset` restores their live content
+- Group bundled config and theme commands under prefixes such as `system.*`,
+  `hn.*` and `gh.*`
+- Use terminal-native colors by default and a shared style for native themes
+  and modules: muted bold labels, regular-weight values, dim dotted fills and
+  colored status indicators
+- **Breaking:** replace `*-native.statusbar` theme files with
+  `*-color.statusbar` variants preserving the original Starship-inspired colors
+  and layouts; unsuffixed theme files now use terminal colors
 - Define `+ [+NAME] COMMAND` in Zsh and Fish integration for background
-  statusbar jobs; preserve existing `+` commands and offer `init --no-plus`
-  to skip the shortcut
+  statusbar jobs, generating `COMMAND-ID` names when no name is supplied;
+  preserve existing `+` commands and offer `init --no-plus` to skip the shortcut
+- Define `sb` as an alias for `statusbar` during shell initialization;
+  preserve existing `sb` commands and offer `init --no-sb-alias` to skip it
+- Add a concurrent-download demo showing the `+` shortcut, live color-theme
+  changes and temporary-line cleanup
 
 ## v0.5.1
 

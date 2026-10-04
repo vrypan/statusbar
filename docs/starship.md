@@ -23,7 +23,8 @@ statusbar to update the terminal title. Add `--report-cwd=false` if another
 integration already reports it. Both features default to enabled; use
 `--starship=false` to keep your existing prompt. Initialization also defines
 the [`+` background shortcut](usage.md#background-shortcut); add `--no-plus`
-to skip it.
+to skip it. The integration also defines `sb` as an alias for `statusbar`;
+use `--no-sb-alias` to skip the alias. Existing `sb` commands are preserved.
 
 By default the prompt details become the value of the line named `prompt`;
 the built-in config and the shipped themes have one. Select another line
@@ -93,7 +94,7 @@ source ~/.config/nushell/statusbar.nu
 
 Start a new shell. The sourced file checks for a statusbar session, so it does
 nothing in ordinary Nushell sessions. To use another line, edit the
-`set prompt` command in the sample. If another integration already emits OSC 7, remove the
+`update prompt` command in the sample. If another integration already emits OSC 7, remove the
 `pre_prompt` hook block from the sample. To keep only directory reporting,
 remove the Starship block.
 
@@ -143,7 +144,7 @@ Set up the split by hand with a profile, as in
 **Nothing reaches statusbar.** Check that `$STATUSBAR_STATE` is set in the
 session, that `statusbar init zsh` prints code there, that the config has a
 line named `prompt` whose template contains `#(value)`, and that
-`statusbar set prompt test` shows `test`. A statusbar started before you
+`statusbar update prompt test` shows `test`. A statusbar started before you
 updated it may need a restart.
 
 **The right side is misaligned.** statusbar counts most wide characters and
@@ -158,7 +159,7 @@ The sections below build the same thing from parts, for when you want a
 different split: another selection of modules, another line, or a
 profile. Use them instead of `statusbar init zsh`, not together with it. Both
 pieces go in `~/.zshrc` after `eval "$(starship init zsh)"`. The prompt
-replacement checks `$STATUSBAR_STATE`, and `statusbar set` does nothing outside
+replacement checks `$STATUSBAR_STATE`, and `statusbar update` does nothing outside
 a session, so the same `.zshrc` works everywhere.
 
 1. A hook that sends Starship's output to statusbar before each prompt.
@@ -173,7 +174,7 @@ statusbar_precmd() {
   out=$(STARSHIP_SHELL= starship prompt \
     --terminal-width="$COLUMNS" --jobs="$STARSHIP_JOBS_COUNT" \
     --status="${STARSHIP_CMD_STATUS:-}" --cmd-duration="${STARSHIP_DURATION:-}")
-  statusbar set prompt "${out%$'\n'*}"     # drop the last line: ❯
+  statusbar update prompt "${out%$'\n'*}"     # drop the last line: ❯
 }
 precmd_functions+=(statusbar_precmd)
 ```
@@ -189,7 +190,7 @@ precmd_functions+=(statusbar_precmd)
   default layout, `$all` ends in `$line_break$character`, so that line is the
   prompt character. The newline Starship adds before the prompt
   (`add_newline`) is trimmed by statusbar.
-- `statusbar set` does nothing outside a statusbar session, so the hook needs
+- `statusbar update` does nothing outside a statusbar session, so the hook needs
   no check of its own.
 
 Place `#(value)` after the fill in the line's template to put the prompt on
@@ -211,7 +212,7 @@ statusbar = "$directory$git_branch$git_status$cmd_duration$status"
   out=$(STARSHIP_SHELL= starship prompt --profile statusbar \
     --terminal-width="$COLUMNS" --jobs="$STARSHIP_JOBS_COUNT" \
     --status="${STARSHIP_CMD_STATUS:-}" --cmd-duration="${STARSHIP_DURATION:-}")
-  statusbar set prompt "$out"
+  statusbar update prompt "$out"
 ```
 
 A profile is only a format string; modules keep their settings from the rest

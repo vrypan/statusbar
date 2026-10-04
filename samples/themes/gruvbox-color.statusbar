@@ -15,7 +15,7 @@ failure = #fb4934
 [line.rule]
 text = "#[fg=yellow]#(fill:━)"
 
-# Show user/host/load until Starship or `set prompt` supplies a value.
+# Show user/host/load until Starship or `update prompt` supplies a value.
 [line.prompt]
 default = "#[fg=text,bg=orange,bold] #(command:system.user) #[fg=base,bg=yellow] #(command:system.host) "
 default .= "#[fg=base,bg=aqua,nobold] load #(command:system.load) "
@@ -24,7 +24,7 @@ text = "#[default,fg=text,bg=base]#(value)"
 text .= "#[default,fg=text,bg=base]#(fill: )"
 text .= "#[fg=base,bg=aqua] #(command:system.weather) #[fg=base,bg=yellow,bold] #(datetime:%H:%M:%S) #[default,fg=text,bg=base]"
 
-# Lines created by `statusbar push`.
+# Lines created by `statusbar new`.
 [push]
 spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 text = "#[fg=muted,bg=base]#[fg=yellow]#(spinner)#[default,fg=muted,bg=base] #[fg=text,bold]#(name)#[default,fg=muted,bg=base] › #(value)#(fill: )"

@@ -1,5 +1,5 @@
 # Module: load. macOS/Linux; uptime and awk. Load is not CPU percentage.
-# Load: statusbar config add load.statusbar
+# Load: statusbar config import load.statusbar
 
 [line.load.average]
 default = "#[track]#(command:load.average)#[notrack] (1 / 5 / 15 min)"

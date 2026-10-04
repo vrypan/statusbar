@@ -26,7 +26,7 @@ is a separate setting: a terminal command affects that terminal's new tabs
 and windows; a shell startup block affects other terminals and sessions that
 read the same startup file too.
 
-Run `statusbar config show path` to find the config a new session would select,
+Run `statusbar config path` to find the config a new session would select,
 or `built-in`. Selection follows this order:
 
 1. An explicit `statusbar --config PATH` launch option.
@@ -34,7 +34,7 @@ or `built-in`. Selection follows this order:
 3. `$XDG_CONFIG_HOME/statusbar/config.statusbar` if set; otherwise
    `~/.config/statusbar/config.statusbar`.
 
-`show path` does not recover a running session's `--config` argument. A missing
+`config path` does not recover a running session's `--config` argument. A missing
 file at the default location uses the built-in config. A config that cannot
 be read or parsed, including an explicit one, starts the built-in config with
 a warning line; the shell always starts. Run `statusbar config check FILE`
@@ -56,13 +56,13 @@ Locate bundled themes:
 The bundled module library provides individual features with native colors.
 Find it beside the themes directory (`share/statusbar/modules` for installed
 builds, or `modules/` in release archives). Read its `README.md` for platforms
-and dependencies. Add selected modules with `statusbar config add FILE`
+and dependencies. Add selected modules with `statusbar config import FILE`
 or copy their definitions into a draft config. Modules use static names such
 as `disk.usage`; keep their names, references and command intervals together.
-Add fragments with `config add FILE`; load complete themes with
-`config load FILE`. Use `config list` to inspect prefixes and
-`config remove PREFIX` to remove a group. Save `config show current` to retain
-the assembled layout. Do not load optional network modules unless requested.
+Add fragments with `config import FILE`; load complete themes with
+`config load FILE`. Use `config show --json` to inspect definitions and
+`statusbar remove PREFIX` to remove a group, including its temporary lines.
+Save `config show current` to retain the assembled layout. Do not load optional network modules unless requested.
 
 Create a draft in a user-owned directory, for example
 `~/.config/statusbar/themes/my-theme.statusbar`, creating its parent if needed.
@@ -111,7 +111,9 @@ palette too. Reserve stronger colors for state indicators and meter thresholds.
 Keep these rules in mind:
 
 - **Layout:** each `[line.NAME]` adds a line, in declaration order. Names use
-  letters, digits, `_`, `-` and `.` and are not only digits. `text` is the
+  letters, digits, `_`, `-` and dots between nonempty segments. Neither a name
+  nor its first segment may be all digits. A standalone line name cannot also
+  be a line, command, or color group prefix. `text` is the
   template: text before `#(fill:PATTERN)` is left-aligned, text after it
   right-aligned, and a template that is only a fill draws a rule. The right
   side clips first on narrow terminals (`keep = right` reverses that). Give
@@ -137,22 +139,22 @@ Keep these rules in mind:
   own lines, not after values.
 - **Defaults:** `default` is a template expanded at `#(value)` until a value
   is explicitly set. It supports styles and named commands, but cannot refer
-  to `#(value)` itself. `set NAME ""` suppresses it; `set NAME --reset`
+  to `#(value)` itself. `update NAME ""` suppresses it; `update NAME --reset`
   restores it. `default .= "..."` appends to an earlier `default =`.
-  Values from `set`, FIFOs, and command output remain literal.
+  Values from `update`, FIFOs, and command output remain literal.
 - **Commands:** They run with `/bin/sh -c` in statusbar's starting directory,
   with the inherited environment, not the interactive shell's aliases or
   functions. Only their first output line is displayed; stderr is discarded.
   Output is displayed literally (ANSI colors work, `#[...]` does not). Give
   each command an appropriate `interval`. Use a shell hook and
-  `statusbar set NAME TEXT` for data that must follow the shell's `cd`.
+  `statusbar update NAME TEXT` for data that must follow the shell's `cd`.
 - **Starship:** The default destination is the line named `prompt`; its
   template must contain `#(value)`. Keep that line if using prompt
   relocation. A one-line Starship prompt stays in the
   terminal; multiline prompts move all but the final line into the bar.
   Starship keeps its own colors even with a native statusbar theme.
 - **Temporary lines:** Keep the `[push]` section and its status templates
-  when the user wants the sample's styling for `statusbar push`.
+  when the user wants the sample's styling for `statusbar new`.
 
 For more options, consult the
 [configuration reference](https://github.com/vrypan/statusbar/blob/main/docs/config.md).
@@ -206,7 +208,9 @@ Choose the flags for the user's setup:
 - `init` also defines `+ [+NAME] COMMAND` for background jobs, unless `+`
   already exists. Add `--no-plus` to skip it. Keep personal shortcuts unless
   the user wants to replace them. Disabling Starship, directory reporting and
-  `+` together makes `init` print nothing.
+  `+` still defines `sb` as an alias for `statusbar`. Add `--no-sb-alias` to
+  skip that too. Existing `sb` commands are preserved; disabling all four
+  features makes `init` print nothing.
 
 Directory reporting lets statusbar update the terminal title. It does not
 change the working directory of configured commands. Verify reporting in a
@@ -224,7 +228,7 @@ prompt hook even for manual launches. For example, **only if the theme has a
 ```bash
 __statusbar_cwd() {
     local previous_status=$?
-    statusbar set cwd -- "$PWD"
+    statusbar update cwd -- "$PWD"
     return "$previous_status"
 }
 ```
@@ -235,7 +239,7 @@ through the existing prompt framework. If `PROMPT_COMMAND` is unset, use
 on a new line; if it is an array, append an element. Preserve existing
 callbacks and the command exit status used by the prompt. See
 [Bash's PROMPT_COMMAND rules](https://www.gnu.org/software/bash/manual/html_node/Bash-Variables.html#index-PROMPT_005fCOMMAND).
-`statusbar set` does nothing outside a session. A Bash theme without shell
+`statusbar update` does nothing outside a session. A Bash theme without shell
 data needs no additional prompt hook.
 
 ## 4. Configure the chosen launch method
@@ -359,9 +363,9 @@ sending, not that the session applied it. Check the bar and
 `statusbar config show current` afterward. Invalid configs leave the
 active layout intact.
 
-Values set with `statusbar set` survive replacement for lines whose names
+Values set with `statusbar update` survive replacement for lines whose names
 still exist. If one hides the draft's default, restore it with
-`statusbar set NAME --reset`; an active prompt hook may write it again at the
+`statusbar update NAME --reset`; an active prompt hook may write it again at the
 next prompt. The saved config does not include these values.
 
 For interactive browsing, use `statusbar-theme /path/to/themes` inside a

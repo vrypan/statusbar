@@ -12,7 +12,7 @@ failure = #f7768e
 [line.rule]
 text = "#[fg=muted]#(fill:─)"
 
-# Show user/host/load until Starship or `set prompt` supplies a value.
+# Show user/host/load until Starship or `update prompt` supplies a value.
 [line.prompt]
 default = "#[fg=muted]#(command:system.user)@#[fg=blue,bold]#(command:system.host)#[default]  #[fg=muted]load #[default]#(command:system.load)"
 text = "#[default] #(value)"
@@ -20,7 +20,7 @@ text = "#[default] #(value)"
 text .= "#[default]#(fill: )"
 text .= "#[fg=muted]#(command:system.weather)  #(datetime:%a %d)  #[fg=accent,bold]#(datetime:%H:%M:%S)#[default] "
 
-# Lines created by `statusbar push`.
+# Lines created by `statusbar new`.
 [push]
 spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 text = "#[fg=blue]#(spinner)#[fg=muted] #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )"

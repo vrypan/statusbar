@@ -1,18 +1,20 @@
 # Usage
 
 Start your usual shell with `statusbar`. Inside that session, these are the
-commands most people need:
+commands most people need. The build example assumes a project with a
+Makefile; `another.statusbar` and `extra.statusbar` stand for your own config
+and module files:
 
 ```sh
-statusbar set build "Build passed"          # change a line's value
-statusbar set build --status success        # or its status
-statusbar push build -- make                # give a command a temporary line
-statusbar pop                               # remove the newest temporary line
-statusbar pop --all                         # remove all temporary lines
-statusbar list --pushed                     # inspect temporary lines
-statusbar config load another.statusbar     # change the running layout
-statusbar config add extra.statusbar        # add new definitions
-statusbar config remove extra               # remove extra.* definitions
+statusbar new build -- make                # give a command a temporary line
+statusbar update build "Build passed"      # change its value
+statusbar update build --status success    # or its status
+statusbar remove                           # remove the newest temporary line
+statusbar remove --all                     # remove all temporary lines
+statusbar list --temp                      # inspect temporary lines
+statusbar config load another.statusbar    # change the running layout
+statusbar config import extra.statusbar    # add new definitions
+statusbar remove extra                     # remove extra.* definitions
 ```
 
 Run `statusbar --help` for the command list, or
@@ -20,30 +22,33 @@ Run `statusbar --help` for the command list, or
 
 ```
 statusbar [run] [options] [-- COMMAND...]
-statusbar set NAME [TEXT...] [--status STATE]
-statusbar set NAME --reset [--status STATE]
-statusbar push [NAME] [--status STATE]
-statusbar push [NAME] [--status STATE] -- COMMAND [ARG...]
-statusbar push [NAME] [--status STATE] --fifo
-statusbar pop [NAME | --all]
-statusbar list [--pushed] [--short] [--json]
+statusbar update NAME [TEXT...] [--status STATE]
+statusbar update NAME --reset [--status STATE]
+statusbar new [NAME] [--prefix PREFIX] [--status STATE]
+statusbar new [NAME] [--prefix PREFIX] [--status STATE] -- COMMAND [ARG...]
+statusbar new [NAME] [--prefix PREFIX] [--status STATE] --fifo
+statusbar remove [NAME|ID] | statusbar remove --all
+statusbar list [--temp] [--json]
 statusbar bind [-u | --unbind] NAME
-statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME] [--no-plus]
-statusbar config show [current|startup|default|path]
+statusbar init <zsh|fish> [--starship=false] [--report-cwd=false] [--starship-line NAME] [--no-plus] [--no-sb-alias]
+statusbar config show [current|startup|default] [--json]
+statusbar config path
 statusbar config check FILE
 statusbar config load FILE
-statusbar config add FILE
-statusbar config list [--debug]     # alias: ls
-statusbar config remove PREFIX     # alias: rm
+statusbar config import FILE
 statusbar config < FILE
 statusbar completion <bash|zsh|fish>
 ```
 
-NAME is a line's name, or its numeric ID. A decimal NAME always means an ID,
-never a position in the bar.
+`update`, `bind`, and `remove` accept numeric line IDs; a decimal target
+always means an ID, never a position in the bar. `new` takes a name to create.
+`remove` accepts a standalone name or top-level group name, without dots;
+an ID for a dotted line selects the entire group.
+
+Short forms are `upd` for `update`, `rm` for `remove`, and `ls` for `list`.
 
 Use [`statusbar list`](list.md) to inspect all lines, including hidden ones.
-`--pushed` filters to temporary lines; `--json` returns a versioned snapshot
+`--temp` filters to temporary lines; `--json` returns a versioned snapshot
 for scripts and integrations.
 
 ## `run`
@@ -74,46 +79,54 @@ replaces the complete layout, including its lines, without restarting the
 command. See [configuration](config.md#replace-the-running-config) for
 replacement semantics.
 
-## `set`
+## `update`
 
-`statusbar set NAME` changes only what you supply: TEXT replaces the value,
+`statusbar update NAME` changes only what you supply: TEXT replaces the value,
 `""` makes it empty, `--reset` restores the configured default, and
 `--status` sets `normal`, `running`, `done`, `success` or `failed`:
 
+With an existing line named `build`:
+
 ```sh
-statusbar set build 'Build passed' --status success
-statusbar set build --status running
-statusbar set build --reset
+statusbar update build 'Build passed' --status success
+statusbar update build --status running
+statusbar update build --reset
 ```
 
 Values display literally; ANSI colors and OSC 8 links in them work.
-`statusbar set build -` displays a literal dash. Outside a session, `set` does
+`statusbar update build -` displays a literal dash. Outside a session, `update` does
 nothing and succeeds. See [changing a line](set.md) for details and hooks.
 
-## `push` and `pop`
+## `new` and `remove`
 
-`statusbar push [NAME]` with terminal stdin creates an empty line, prints
-its name (or numeric ID), and returns. Use `set` to update it. In every mode,
+`statusbar new [NAME]` with terminal stdin creates an empty line, prints
+its explicit or generated name, and returns. Use `update` to update it. In every mode,
 `--status STATE` sets the initial status; the default is `running`.
 
-`command | statusbar push [NAME]` appends a line and streams the latest line
+`command | statusbar new [NAME]` appends a line and streams the latest line
 of input into its value. When input ends, it sets the status to `done`, prints
-the line's name (its numeric ID when unnamed) and leaves the final result
-displayed. Background pushes skip that print when stdout is the terminal.
-`statusbar push [NAME] -- command` starts the command with
+the line's name and leaves the final result
+displayed. Background streams skip that print when stdout is the terminal.
+`statusbar new [NAME] -- command` starts the command with
 `COLUMNS` set to the width available for the value, streams its stdout and
 stderr, sets `success` or `failed` from its result, and returns its exit
-status. `statusbar push [NAME] --fifo` creates the line with a FIFO and prints
+status. `statusbar new [NAME] --fifo` creates the line with a FIFO and prints
 the FIFO's path.
 
-`statusbar pop` removes the newest pushed line still present; `statusbar pop
-NAME` removes a specific line, even if its stream is still active. See
-[pushing lines](push.md) for examples and limits. Pushed lines survive config
-replacement.
+Without NAME, `new` generates `tmp-ID`; `--prefix PREFIX` (or `-p PREFIX`)
+changes the prefix. Explicit names take precedence over `--prefix`.
+
+`statusbar remove` removes only the newest temporary line; `remove --all`
+removes all temporary lines. `statusbar remove NAME` removes a standalone
+line or a whole `NAME.*` group, including configured definitions and temporary
+lines. A numeric ID for a dotted line also selects its whole group. Removing
+a line does not stop an external command streaming into it. See
+[temporary lines](push.md) for examples and limits. Temporary lines survive
+config replacement.
 
 ## `bind`
 
-`statusbar bind NAME` creates a FIFO for an existing configured or pushed line
+`statusbar bind NAME` creates a FIFO for an existing configured or temporary line
 and prints its path. Text written to it replaces the line's value.
 `statusbar bind -u NAME` (or `--unbind`) removes the FIFO, keeping the line,
 its value and its status. See [FIFOs](bind.md) for redirection, stream
@@ -124,7 +137,7 @@ behavior, and cleanup.
 `statusbar init zsh` or `statusbar init fish` prints shell integration that
 reports the working directory with OSC 7 and moves Starship's prompt details
 into the line named `prompt` when Starship is available. Both features default
-to `true`; init also defines the `+` shortcut. Zsh
+to `true`; init also defines the `+` shortcut and `sb` alias. Zsh
 uses `eval "$(statusbar init zsh)"`; Fish uses `statusbar init fish | source`
 after Starship's own initialization. Nushell can source
 [the sample integration](../samples/statusbar.nu); see [starship.md](starship.md).
@@ -135,8 +148,9 @@ selects another line; it cannot be combined with `--starship=false`. The hook
 updates the line at every prompt, so it starts using the line if a loaded
 configuration adds it and leaves the full prompt in the terminal while the
 line is absent. Directory reporting works independently, even with one statusbar
-line. Disabling both features still defines `+`; add `--no-plus` to disable
-all three. Outside a statusbar session, `init` prints nothing.
+line. Add `--no-plus` to skip `+`, and `--no-sb-alias` to skip the `sb` alias
+for `statusbar`. Existing commands with either name are preserved. Disabling
+all four features prints nothing. Outside a statusbar session, `init` prints nothing.
 
 Reports are sent to the controlling terminal when the directory changes and
 before each prompt. Repeating initialization does not duplicate these hooks.
@@ -146,13 +160,16 @@ before each prompt. Repeating initialization does not duplicate these hooks.
 Zsh and Fish initialization defines `+ [+NAME] COMMAND [ARG...]`:
 
 ```sh
-+ make test          # background line named make
-+ +build make test   # background line named build
-statusbar pop build  # remove the line afterward
++ make test             # background line named make-ID
++ +build make test      # background line named build
+statusbar remove build  # remove the line afterward
 ```
 
-Without `+NAME`, the line name is the command's basename (`/usr/bin/make`
-becomes `make`). The shortcut runs `statusbar push NAME -- COMMAND ... &`.
+Without `+NAME`, the command's basename becomes a prefix: `/usr/bin/make`
+creates `make-ID`, so concurrent runs get different names. Characters outside
+letters, digits, `_` and `-` become `-`, and the prefix is limited to 43
+characters. The shortcut runs `statusbar new --prefix PREFIX -- COMMAND ... &`.
+With `+NAME`, it uses that explicit name instead.
 The line records success or failure when the command finishes; the shortcut
 returns immediately. Names must be valid line names and unique in the session.
 It runs executable commands, not shell aliases or functions. For a pipeline,
@@ -182,13 +199,11 @@ statusbar config load ~/.config/statusbar/config.statusbar
 | `show [current]` | Print the active config, including live edits |
 | `show startup` | Print the config originally loaded by this session |
 | `show default` | Print the built-in config |
-| `show path` | Show the config path selected for a new session, or `built-in` |
+| `path` | Show the config path selected for a new session, or `built-in` |
 | `check FILE` | Validate a complete config without running its commands |
 | `load FILE` | Replace the running layout |
-| `add FILE` | Add new line, command and color definitions |
-| `list` / `ls` | List current line and command definitions by prefix |
-| `list --debug` | Show the whole parsed current config |
-| `remove PREFIX` / `rm PREFIX` | Remove configured `PREFIX.*` definitions |
+| `import FILE` | Add new line, command and color definitions |
+| `show [current|startup|default] --json` | Print the full parsed config as JSON |
 
 `FILE` is a filename, or `-` to read stdin. Bare `statusbar config` loads
 redirected input and shows help when run directly in a terminal:
@@ -197,31 +212,33 @@ redirected input and shows help when run directly in a terminal:
 statusbar config load my.statusbar
 statusbar config < my.statusbar
 statusbar config show startup | statusbar config load -
-statusbar config add extra.statusbar
-statusbar config list
-statusbar config remove extra
+statusbar config import extra.statusbar
+statusbar config show --json
+statusbar remove extra
 statusbar config show current > saved.statusbar
 ```
 
-`check`, `show default`, and `show path` work outside a session. All other
-operations require a running session. `show`, `list`, and `remove` ignore stdin.
+`check`, `show default` (including `--json`), and `path` work outside a
+session. All other operations require a running session. `show` and `path` ignore stdin.
 
 `show current` and `show startup` preserve source text, including comments
 and formatting, but exclude runtime values and statuses. The startup snapshot
 stays unchanged after live edits or changes to its source file, including when
 started with `--config -`. Nested sessions have separate snapshots.
 
-`list` inspects current configuration definitions; `list --debug` includes
-settings, colors, templates, defaults, commands, and push and highlight settings.
-The debug output is not a reloadable config. Neither form runs commands.
+`show --json` includes settings, colors, compiled templates, defaults,
+commands, and push and highlight settings. It does not run commands. JSON is
+for inspection and cannot be reloaded; see the
+[JSON format](config.md#inspect-the-parsed-configuration).
 Use [`statusbar list`](list.md) for live line values, statuses, and FIFO bindings.
 
-`show path` checks `$STATUSBAR_CONFIG`, then
+`path` checks `$STATUSBAR_CONFIG`, then
 `$XDG_CONFIG_HOME/statusbar/config.statusbar` (normally
 `~/.config/statusbar/config.statusbar`). It does not recover a running
 session's `--config` argument or describe its current layout.
 
-`add` rejects duplicate names and global settings. `remove` rejects edits
+`import` rejects duplicate names, namespace conflicts and global settings.
+The root command `statusbar remove PREFIX` rejects edits
 that leave dependencies unresolved or remove the last configured line.
 Both preserve surviving line state and command processes; `load` restarts
 configured commands. Live edits do not change the saved file. See
@@ -304,7 +321,7 @@ working directory or environment of statusbar commands.
 | `STATUSBAR_CONFIG`  | read by statusbar         | config file, when `--config` isn't given |
 | `STATUSBAR_STATE`   | the child                  | session indicator, control socket prefix, and config snapshots used by `config` |
 | `STATUSBAR_SESSION_ID` | the child               | token for authenticated session requests |
-| `STATUSBAR_FIFOS`   | the child                  | private directory for FIFOs created with `statusbar bind` and `push --fifo` |
+| `STATUSBAR_FIFOS`   | the child                  | private directory for FIFOs created with `statusbar bind` and `new --fifo` |
 
 ## Logging
 

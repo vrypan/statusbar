@@ -71,8 +71,8 @@ alias sbx='statusbar config < "$HOME/.config/statusbar/extra.statusbar"'
 
 This replaces statusbar's config in that session, without restarting my shell.
 Starship stays in the second line, and statusbar grows to include the top Hacker
-News story, the star count for statusbar on GitHub, CPU and memory usage,
-temperature, weather, and the date and time. Tracked values briefly highlight
+News story, the latest unread GitHub notification, system load, weather,
+and the date and time. Tracked values briefly highlight
 when they change.
 
 <details>
@@ -154,9 +154,8 @@ interval = 300
 
 </details>
 
-This is my actual config, including commented experiments and unused command
-definitions. It uses `curl`, `jq`, `gh`, and `macmon`; `gh` is authenticated on
-my machine.
+This config uses `curl`, `jq`, an authenticated `gh`, `uptime`, and `awk`.
+Hacker News, GitHub, and weather need network access.
 
 ![screenshot extra](screenshot-extra.png)
 

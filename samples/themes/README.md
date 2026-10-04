@@ -97,8 +97,8 @@ preserve their original palettes and layouts.
 - Reserve accent, success and failure colors for spinners and state indicators.
   Resource meters may use green, yellow and red to show thresholds.
 - Put a module's live content in `default` and its label, `#(value)` and fill in
-  `text`. Overrides then retain the layout; `set NAME --reset` restores live data.
-- Use `keep = left` for pushed lines so their leading name survives clipping.
+  `text`. Overrides then retain the layout; `update NAME --reset` restores live data.
+- Use `keep = left` for temporary lines so their leading name survives clipping.
 
 The built-in config and terminal-native themes define these shared color names:
 
@@ -140,12 +140,12 @@ used by change highlights.
 ## Prompt, commands and temporary lines
 
 Starship replaces the value of `prompt`; the surrounding clock and weather
-remain where the theme provides them. Use `statusbar set prompt --reset` to
+remain where the theme provides them. Use `statusbar update prompt --reset` to
 restore the fallback. Native themes give temporary lines a spinner, bold
 name, muted value and dotted fill, with success and failure indicators.
 Color variants retain their original temporary-line styling.
 
 The default config and most themes group commands under `system.*`.
 Multi-line also groups news under `hn.*` and notifications under `gh.*`.
-Use `statusbar config list` to inspect them. A prefix cannot be removed while
+Use `statusbar config show --json` to inspect their definitions. A prefix cannot be removed while
 remaining definitions reference its commands or colors.

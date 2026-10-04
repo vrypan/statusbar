@@ -17,7 +17,7 @@ text = "#(fill: )⡎⠉⠉⢱"
 default = "<starship placeholder>"
 text = "#(value)#(fill: )⢇⣒⣒⡸"
 
-# Lines created by `statusbar push`.
+# Lines created by `statusbar new`.
 [push]
 spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 text = "#[fg=blue]#(spinner)#[fg=muted] #[fg=accent,bold]#(name)#[default,fg=muted] › #(value)#(fill: )"

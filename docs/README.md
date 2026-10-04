@@ -5,7 +5,7 @@ clock, project context, build status, or command progress without adding those
 details to every prompt.
 
 This guide starts with a small statusbar, then shows how to customize it. Each
-`[line.NAME]` section in a config adds one named line with its own template.
+`[line.NAME]` section in a config imports one named line with its own template.
 
 ## Start with one line
 
@@ -72,43 +72,44 @@ also the template of a line without `text`:
 ```zsh
 # ~/.zshrc: show the current directory before each prompt.
 __statusbar_cwd() {
-  statusbar set cwd -- "$PWD"
+  statusbar update cwd -- "$PWD"
 }
 precmd_functions+=(__statusbar_cwd)
 ```
 
-`statusbar set cwd --reset` restores the line's `default`. Lines also have a
+`statusbar update cwd --reset` restores the line's `default`. Lines also have a
 status (`normal`, `running`, `done`, `success` or `failed`) that can select a
-different template, for example to color a build line:
+different template. To change the directory line's status:
 
 ```sh
-statusbar set build "12 tests passed" --status success
+statusbar update cwd --status success
 ```
 
-`statusbar set` is a no-op outside a statusbar session, so the same shell setup
+`statusbar update` is a no-op outside a statusbar session, so the same shell setup
 works in regular terminals. [Changing a line](set.md) has Bash and Fish hooks
 and the details of values and statuses.
 
 ## Give a command its own line
 
-Use `push` for output that changes while a command runs:
+Use `new` for output that changes while a command runs:
 
 ```sh
-statusbar push build -- make
+statusbar new build -- make
 ```
 
 The new line shows the latest output line and stays visible when `make` ends,
-marked as succeeded or failed. `push` prints the line's name, its numeric ID
-when you don't give one, so you can remove it later with `statusbar pop NAME`.
-Use `statusbar pop` without a name to remove the newest line. See
+marked as succeeded or failed. `new` prints the line's name, generating
+`tmp-ID` when you don't give one, so you can remove it later with
+`statusbar remove NAME`. Use `statusbar remove` without a name to remove
+the newest temporary line. See
 [temporary lines](push.md) for pipes, logs, progress bars, and styling.
 
 With Zsh or Fish integration enabled, `+ make` starts a background line named
-`make`; `+ +build make` names it `build`. See the
+`make-ID`; `+ +build make` names it `build`. See the
 [`+` shortcut](usage.md#background-shortcut) for setup and options.
 
 For output from commands that only know how to write to a file, create a
-[FIFO](bind.md): `statusbar push build --fifo` creates a line and prints a
+[FIFO](bind.md): `statusbar new build --fifo` creates a line and prints a
 pipe path, and `statusbar bind cwd` gives an existing line one.
 
 ## Use Starship
@@ -123,7 +124,8 @@ eval "$(statusbar init zsh)"
 
 This also reports your current directory for the terminal title. Both features
 are enabled by default. Add `--report-cwd=false` if another integration already
-reports directories, or `--starship=false` to use only directory reporting.
+reports directories, or `--starship=false` to keep your prompt. The `+` shortcut and `sb` alias
+remain enabled; use `--no-plus` and `--no-sb-alias` to skip them.
 
 For Fish, initialize Starship first:
 
@@ -187,7 +189,7 @@ The [module library](../samples/modules/README.md) contains ready-made features
 with native terminal colors. Add one inside a running session:
 
 ```sh
-statusbar config add samples/modules/disk.statusbar
+statusbar config import samples/modules/disk.statusbar
 ```
 
 This adds the module's line and commands to the current layout. Existing
@@ -195,13 +197,13 @@ lines and commands keep running. Inspect your definitions, remove a module,
 or save your assembled layout:
 
 ```sh
-statusbar config list
+statusbar config show --json
 statusbar config show current > ~/.config/statusbar/config.statusbar
 # To remove the module from the running session:
-statusbar config remove disk
+statusbar remove disk
 ```
 
-Removing `disk` removes its `disk.*` definitions. Each module's names are
+Removing `disk` removes its `disk.*` definitions and temporary lines. Each module's names are
 written in its file. See the library for installation paths, requirements,
 and customization.
 
@@ -220,7 +222,7 @@ current layout stays in place. A valid one can add, remove, or reorder lines
 without restarting the shell; lines keep their values and statuses by name.
 Only load config files you trust, since they can run commands. See
 [configuration](config.md#replace-the-running-config) for what happens to
-values and pushed lines; the [protocol](osc-3110.md) is there for programs that
+values and temporary lines; the [protocol](osc-3110.md) is there for programs that
 send config changes directly.
 
 If the config a session starts with is invalid or unreadable, statusbar still
@@ -255,12 +257,13 @@ The default effect makes two pulses over 2.4 seconds. Set `pulses = 1` or
 ## Reference and behavior
 
 - [How I use statusbar](how-i-use-statusbar.md) — a minimal everyday statusbar and a richer optional layout.
+- [Migration](migration.md) — update older commands, scripts, and slot-based configs.
 - [Usage](usage.md) — commands, options, completions, generated configs, and environment.
 - [Configuration](config.md) — lines, templates, fill, statuses, commands, change highlights, colors, and markup.
 - [Changing a line](set.md) — values, statuses, and the control protocol.
-- [Pushing lines](push.md) — stream output into a new line and remove it.
+- [Temporary lines](push.md) — stream output into a new line and remove it.
 - [Listing lines](list.md) — inspect live values, statuses and FIFO bindings.
-- [FIFOs](bind.md) — redirect output to a pushed or configured line.
+- [FIFOs](bind.md) — redirect output to a temporary or configured line.
 - [Starship](starship.md) — prompt integration and customization.
 - [Display and animation model](display-model.md) — content updates, animation
   ticks, composed frames, and terminal paints.

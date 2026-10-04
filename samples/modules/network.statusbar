@@ -1,5 +1,5 @@
 # Module: network. macOS; route, netstat, awk. Samples the default IPv4 interface for one second.
-# Load: statusbar config add network.statusbar
+# Load: statusbar config import network.statusbar
 
 [line.network.status]
 default = "#(command:network.status)"

@@ -42,7 +42,7 @@ interval = 60
 ```
 
 `[command.host]` runs `hostname`; its first output line supplies the fallback
-value. The label and fill stay in place when you use `statusbar set host TEXT`.
+value. The label and fill stay in place when you use `statusbar update host TEXT`.
 `[colors]` names colors used in styles. These defaults follow your terminal;
 replace them with `#rrggbb` values for fixed colors. `text .=` appends to the
 template to keep long lines readable. See the
@@ -90,7 +90,7 @@ file and line; a file that cannot be read exits 1. This checks config syntax;
 check command dependencies and the layout in a session afterward.
 
 `statusbar config show` prints the active config. Use `show startup` for the
-original session config, `show default` for the built-in config, or `show path`
+original session config, `show default` for the built-in config, or `config path`
 for the config path selected for a new session. See [usage](usage.md#config).
 
 For generated configs and here-documents, see
@@ -98,32 +98,36 @@ For generated configs and here-documents, see
 
 ## Inspect the parsed configuration
 
-Inside a session:
+Use `config show --json` to inspect the active configuration. To inspect the
+built-in config without starting a session, use `config show default --json`.
+These commands do not execute configured commands.
+
+With `jq` installed, list configured command names or inspect their intervals:
 
 ```sh
-statusbar config list            # line and command names by prefix
-statusbar config ls              # the same listing
-statusbar config list --debug    # settings and parsed definitions too
+statusbar config show --json | jq -r '.commands[].name'
+statusbar config show --json | jq '.commands'
 ```
 
-The compact listing groups names by the part before their first dot:
+The JSON object has `version`, `global`, `colors`, `lines`, `commands`, `push`
+and `highlight`. The format version is currently `1`. Lines and commands stay
+in declaration order and include their zero-based `index`. Intervals use
+milliseconds; commands include their effective `interval_ms` and
+`uses_global_interval`. Spinner frames are an array of strings.
 
-```text
-(no prefix) line.rule line.prompt
-system command.system.user command.system.host command.system.load
-```
+Line and push `variants` contain `text`, `running`, `done`, `success` and
+`failed`. Each template is an array of tagged parts, such as `{"text":"Ready"}`,
+`{"command":"system.load"}` or `{"value":{}}`. Command references use full
+names. A missing status template is `null`; an explicitly empty one is `[]`.
+Lines also include the fallback source in `default` and its expanded
+`default_variants`, or `null` when no fallback source is present. A missing
+global style is `null`.
 
-Groups are alphabetical, with unprefixed names first. Lines come before
-commands and keep their declaration order within each kind. Each group
-occupies one output line. Colors and template details are omitted.
-
-`--debug` includes global settings, colors, lines with compiled templates
-and defaults, commands, push templates, and highlight settings. It is for
-inspection, not a config you can reload. Both forms inspect only the current
-config, require a session, and do not run commands.
-
-Use `statusbar list` for live values, statuses, pushed lines and FIFO bindings.
-Use `statusbar config show` for source text with comments and formatting.
+JSON is for inspection and cannot be loaded as a config. Omit `--json` to
+save source text with comments and formatting. Both forms accept `current`,
+`startup`, or `default`; the first two require a running session. Neither
+includes runtime values or statuses. Use [`statusbar list --json`](list.md)
+for live values, statuses, temporary lines and FIFO bindings.
 
 ## Replace the running config
 
@@ -138,12 +142,12 @@ Replacement is strict: an invalid config leaves the active statusbar unchanged.
 A successful replacement applies every setting, including its lines:
 
 - Lines keep their identity by name. A configured line that is still present
-  keeps its ID, its value set with `statusbar set`, and its status, and moves
+  keeps its ID, its value set with `statusbar update`, and its status, and moves
   to its new position. A line still showing its default shows the new default.
 - Lines the new config drops are removed, together with their FIFOs.
-- Lines created by `statusbar push` stay below the configured lines, with their
+- Lines created by `statusbar new` stay below the configured lines, with their
   IDs, values and statuses. A replacement cannot add a configured line with the
-  name of a pushed line.
+  name of a temporary line.
 
 Configured commands restart and establish their first values without a change
 highlight. Because those commands are executable code, load trusted configs.
@@ -155,12 +159,12 @@ limit and [the protocol](osc-3110.md) for its terminal sequence.
 
 ## Add to the running config
 
-Use `config add FILE` to add a module containing new lines, commands, and colors.
+Use `config import FILE` to add a module containing new lines, commands, and colors.
 The [module library](../samples/modules/README.md) has ready-made modules with
 native terminal colors. A module is a config fragment, for example:
 
 ```sh
-statusbar config add - <<'EOF'
+statusbar config import - <<'EOF'
 [line.extra.load]
 text = "#[fg=extra.accent]#(command:extra.load)#[default]"
 
@@ -176,7 +180,10 @@ EOF
 A fragment can contain several prefixes or unprefixed definitions. Names must
 be unique within each kind: a line and a command can both be called `disk.usage`,
 but two lines cannot share that name. Later imports may extend an existing
-prefix. There are no module declarations, registration or import-time names.
+prefix. A standalone line cannot share its name with a group prefix: for
+example, `[line.disk]` cannot coexist with `[line.disk.usage]`,
+`[command.disk.fetch]`, or a color named `disk.accent`. Group prefixes cannot
+be all digits. There are no module declarations, registration or import-time names.
 
 The source text is preserved, including command scripts and comments. The
 combined config must fit the 64 KiB limit. Modules that contain a line and
@@ -184,20 +191,20 @@ all their dependencies can also be checked directly with `config check`.
 
 Fragments may refer to existing commands and colors. A fragment may also
 contain only commands or colors. Global settings, `[push]`, and `[highlight]`
-are not accepted by `config add`; use a complete replacement to change them.
+are not accepted by `config import`; use a complete replacement to change them.
 
 The running session merges each addition against its latest config and
 validates the complete result before applying it. Duplicate line, command,
-or color names, pushed-line name conflicts, invalid config, and size-limit
+or color names, temporary-line name conflicts, invalid config, and size-limit
 failures leave the active config unchanged. New configured lines appear
-after existing configured lines and before pushed lines. Existing line IDs,
+after existing configured lines and before temporary lines. Existing line IDs,
 values, statuses, FIFO bindings, command processes, schedules, and cached
 output are preserved. Only new commands start immediately.
 
 `config show current` includes the added source, including its comments.
 The startup snapshot and saved file stay unchanged; save the current config
 explicitly to reuse it in later sessions. Prefixes group related definitions
-without wrapper markup; use `config remove PREFIX` to remove a group.
+without wrapper markup; use `remove PREFIX` to remove a group.
 
 Like replacement, sending an addition does not wait for an acknowledgement.
 The CLI checks a snapshot first to report errors; the session checks again
@@ -206,29 +213,35 @@ when applying the request. Inspect `config show current` afterward. See
 
 ## Remove a prefix
 
+Inside a running session:
+
 ```sh
-statusbar config remove disk
+statusbar remove disk
 ```
 
-This removes configured `disk.*` lines, commands and colors, regardless of
-which file added them. It does not match `diskette.*`, an unprefixed `disk`, or
-pushed jobs named `disk.*`. Prefixes use 1–62 letters, digits, underscores or
-hyphens. The first dot separates the prefix from the rest of a name.
+This removes the whole `disk.*` group: configured lines, commands, colors,
+and temporary lines, regardless of which file added them. It does not match
+`diskette.*`. If `disk` is a standalone line instead, it removes that line.
+A standalone line and a group cannot share the same name.
+
+Supply the top-level name, without dots. A numeric line ID selects its whole
+first-segment group too: removing the ID of `disk.usage` removes `disk.*`.
+Use `statusbar list` to inspect line names and IDs. With no argument,
+`statusbar remove` removes only the newest temporary line; `--all` removes
+only temporary lines. See [removing lines](push.md#remove-lines).
 
 Removal rejects references from remaining templates to removed commands or
 colors (including defaults even when a line does not use `#(value)`,
 status variants, push templates and the global style). References produced
 dynamically by a command are not inspected.
-An unknown prefix or removal of the last configured line is also rejected.
-The running session checks its latest configuration before applying the edit.
+An unknown target or removal of the last configured line is also rejected.
 
-Surviving line IDs, values, statuses, FIFOs and unchanged command processes
-are preserved. Removed configured lines lose their FIFO bindings; removed
-commands are stopped. Pushed lines remain. Removal ignores stdin and prints
-nothing when submitted. Like `config add`, the OSC request is asynchronous: inspect
-`config list` or `config show current` afterward. A concurrent change can
-cause the session to reject an edit after CLI preflight succeeded.
-
+The session checks and acknowledges the request over its control socket.
+Successful removal prints nothing. Surviving line IDs, values, statuses,
+FIFOs and unchanged command processes are preserved. Removed lines lose their
+FIFO bindings, and removed configured commands are stopped. External commands
+streaming into removed temporary lines keep running, but their later output
+is ignored. The saved config file stays unchanged.
 
 ## Syntax
 
@@ -275,7 +288,10 @@ is required. Names are case-sensitive and use letters, digits, `_`, `-` and `.`,
 up to 64 characters; names made only of digits are reserved for the IDs
 statusbar assigns. Each name may be declared once.
 Dots separate nonempty segments, such as `codex.usage`; leading, trailing
-and consecutive dots are invalid. Hyphens remain valid within names.
+and consecutive dots are invalid. The first segment cannot be all digits.
+A standalone line name cannot also be the prefix of a line, command, or color
+group; use `disk.summary` alongside `disk.usage`, rather than `disk`.
+Hyphens remain valid within names.
 
 | Key       | Meaning                                                            |
 |-----------|--------------------------------------------------------------------|
@@ -290,14 +306,15 @@ and consecutive dots are invalid. Hyphens remain valid within names.
 ### Values and statuses
 
 Every line has a value and a status. Values supplied with
-[`statusbar set`](set.md) or a [FIFO](bind.md) display literally at `#(value)`:
+[`statusbar update`](set.md) or a [FIFO](bind.md) display literally at `#(value)`:
 their `#(...)` and `#[...]` text is never interpreted, while ANSI colors and
 OSC 8 hyperlinks still work.
 
 Until a value is set, `#(value)` expands the line's `default` template, or
 shows nothing if `default` is omitted. The fallback can include styles,
 commands, dates, environment variables, and terminal properties. For example,
-using the built-in config's `muted` and `accent` colors and `system.*` commands:
+replace only `[line.prompt]` in a copy of the built-in config with this section.
+Keep its `muted` and `accent` colors and `system.*` command definitions:
 
 ```ini
 [line.prompt]
@@ -305,9 +322,9 @@ default = "#[fg=muted]#(command:system.user)@#[default]#[fg=accent,bold]#(comman
 text = "#(value)#(fill: )"
 ```
 
-`statusbar set prompt "Hello"` replaces the fallback with `Hello`.
-An explicit empty value (`statusbar set prompt ""`) also replaces it;
-`statusbar set prompt --reset` restores the live fallback. A status template
+`statusbar update prompt "Hello"` replaces the fallback with `Hello`.
+An explicit empty value (`statusbar update prompt ""`) also replaces it;
+`statusbar update prompt --reset` restores the live fallback. A status template
 that contains `#(value)` uses the same fallback.
 
 `default` cannot refer to `#(value)` itself. Escape a literal `#` with `##`,
@@ -318,7 +335,7 @@ where needed. The expanded line must still have at most one fill and 16
 non-nested tracking regions; these limits include every insertion of `default`.
 
 The status is `normal`, `running`, `done`, `success` or `failed`. Configured
-lines start `normal`; `statusbar set NAME --status STATE` changes it, and any
+lines start `normal`; `statusbar update NAME --status STATE` changes it, and any
 change is allowed. A status never changes the value.
 
 The status selects the template. `normal` uses `text`. `running` and `done`
@@ -336,8 +353,8 @@ failed  = " #[fg=red]✗ #(value)"
 ```
 
 ```sh
-statusbar set build "compiling" --status running
-statusbar set build "12 tests passed" --status success
+statusbar update build "compiling" --status running
+statusbar update build "12 tests passed" --status success
 ```
 
 ## Templates
@@ -367,7 +384,7 @@ Define shell commands in `[command.NAME]` and show them with
 written, like values.
 
 `terminal` values update on window resize; `content_rows` also updates when
-pushed lines or a replacement config change the bar height. A value change
+temporary lines or a replacement config change the bar height. A value change
 never stops dates, terminal sizes or commands from updating.
 
 ### Fill and alignment
@@ -393,7 +410,7 @@ When the text does not fit, `keep` decides which end stays. With a fill,
 remains; `keep = right` keeps the right side and shows the start of the left
 side. Without a fill, `keep = left` shows the start and `keep = right` shows
 the end, still starting at the left edge. Configured lines default to `left`,
-pushed lines to `right`, so a pushed line's name stays visible. Clipping never
+temporary lines to `right`, so a temporary line's name stays visible. Clipping never
 splits a character.
 
 ## Markup
@@ -522,8 +539,8 @@ skipped rather than replayed.
 ## `[push]`
 
 `[push]` holds the templates of lines created by
-[`statusbar push`](push.md). It accepts the same template keys as a line,
-plus the spinner settings, but no `default`: pushed lines start empty.
+[`statusbar new`](push.md). It accepts the same template keys as a line,
+plus the spinner settings, but no `default`: temporary lines start empty.
 Because it is not a `[line.NAME]` section, `push` remains a valid line name.
 
 ```ini
@@ -534,16 +551,16 @@ success = "#[fg=brightblack]#(value)#(fill: )#[fg=green]✓#[fg=brightblack] [#(
 failed  = "#[fg=brightblack]#(value)#(fill: )#[fg=red]✗#[fg=brightblack] [#(name)]"
 ```
 
-Pushed lines start `running`, so they use `running` or `text` while input
-arrives. When input ends, `push` sets `done` for a pipe; `push --` sets
+Temporary lines start `running`, so they use `running` or `text` while input
+arrives. When input ends, `new` sets `done` for a pipe; `new --` sets
 `success` when the command exits with 0 and `failed` for any other exit
 status or a signal. The statuses fall back as for configured lines. Without
-`[push]`, pushed lines use `text = "#(value)#(fill: )[#(name)]"`. `keep`
+`[push]`, temporary lines use `text = "#(value)#(fill: )[#(name)]"`. `keep`
 defaults to `right`.
 
-`#(name)` shows the name given to `push`, or the line's numeric ID. Reloading
-the config renders existing pushed lines with the new templates, keeping their
-values and statuses.
+`#(name)` shows the explicit or generated name, such as `build` or `tmp-5`.
+Reloading the config renders existing temporary lines with the new templates,
+keeping their values and statuses.
 
 ### Spinner
 
@@ -571,7 +588,7 @@ provides a static indicator while running.
 
 Frames share the width of the widest character, with padding after narrower
 frames. This keeps surrounding text steady and reserves the correct space
-when `push --` sets the command's `COLUMNS`. Frames are plain text, not markup;
+when `new --` sets the command's `COLUMNS`. Frames are plain text, not markup;
 put styles around `#(spinner)` in the template. A sequence can contain up to
 128 frames and 1024 bytes, without control characters or standalone characters
 that take no screen space.

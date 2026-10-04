@@ -44,7 +44,7 @@ pulses = 2
 #   ##                  a literal #
 #
 # running =, done =, success = and failed = replace text while the line has
-# that status, e.g. after `statusbar set NAME --status success`.
+# that status, e.g. after `statusbar update NAME --status success`.
 
 # A rule separating the shell from the statusbar.
 [line.rule]
@@ -53,8 +53,8 @@ text = "#[fg=rule,dim]#(fill:─)#[default]"
 # `eval "$(statusbar init zsh)"` moves Starship's prompt details into this
 # line's value, on the left. Commands here run in statusbar's working
 # directory, not your shell's, so they can't follow `cd`; update the bar from
-# your shell instead: `statusbar set prompt TEXT`.
-# Until a value is set, show user/host/load. `set prompt --reset` restores it.
+# your shell instead: `statusbar update prompt TEXT`.
+# Until a value is set, show user/host/load. `update prompt --reset` restores it.
 [line.prompt]
 default = "#[fg=muted,bold]* Host: #[nobold]#(command:system.user)@#(command:system.host)"
 default .= "  load #[track]#(command:system.load)#[notrack]"

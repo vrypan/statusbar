@@ -4,29 +4,25 @@ Run inside a live statusbar session:
 
 ```sh
 statusbar list
-statusbar list --pushed
+statusbar list --temp
 statusbar list --json
-statusbar list --pushed --json
-statusbar list --short
-statusbar list --pushed --short --json
+statusbar list --temp --json
 ```
 
-The default output is a table with `ID`, `NAME`, `KIND`, `STATUS`, `VISIBLE`,
-`FIFO` and `VALUE` columns. Configured lines come first in config order,
-followed by pushed lines in creation order. Hidden lines are included. `--pushed` shows
-only pushed lines without changing their order or visibility.
+`statusbar ls` is an alias for `statusbar list`. The default output is a table
+with `ID`, `NAME`, `TEMP`, `ACCESS`, `FIFO` and `STATUS` columns. Configured
+lines come first in config order, followed by temporary lines in creation
+order. Hidden lines are included. `--temp` shows only temporary lines without
+changing their order or visibility.
 
-Use `--short` for a compact table with only `ID`, `NAME`, `STATUS` and
-`VALUE`. It combines with `--pushed` and `--json`.
+`TEMP` and `FIFO` show `yes` or `no`. `ACCESS` is `rw` when supplied text
+appears in the line's current status template, and `ro` otherwise. It describes
+whether an override is displayed, not whether the command accepts updates.
+An unnamed line has `-` in the `NAME` column. Use JSON to inspect values,
+visibility and FIFO paths, or to consume the listing in scripts.
 
-The table uses `-` for an unnamed line or an unbound FIFO, `<default>` for a
-value with no override, and `""` for an explicitly empty value. Control characters and
-backslashes in values are escaped so they cannot change the terminal or
-create extra table rows. Long values are not clipped to the terminal width.
-Use JSON for scripts rather than parsing the table.
-
-For configuration definitions grouped by prefix, use
-[`statusbar config list`](config.md#inspect-the-parsed-configuration).
+For configuration definitions and compiled templates, use
+[`statusbar config show --json`](config.md#inspect-the-parsed-configuration).
 
 ## JSON format
 
@@ -36,45 +32,48 @@ For configuration definitions grouped by prefix, use
   "lines": [
     {
       "id": 4,
-      "name": "pueue-12",
-      "kind": "pushed",
+      "name": "build-4",
+      "temp": true,
+      "access": "rw",
       "status": "running",
       "visible": true,
       "value": "Compiling…",
-      "fifo": null
+      "fifo": false,
+      "fifo_path": null
     }
   ]
 }
 ```
 
-`--short --json` keeps the same `version` and `lines` envelope, but each
-line contains only `id`, `name`, `status` and `value`. Omitted fields are
-absent, not set to null; names and values retain their usual null semantics.
-
 | Field | Meaning |
 |---|---|
 | `version` | JSON format version, currently `1` |
-| `id` | Stable, never reused within the session; accepted by `set` and `pop` |
-| `name` | Explicit name, or `null` for an unnamed line |
-| `kind` | `configured` or `pushed` |
+| `id` | Stable, never reused within the session; accepted by `update`, `bind` and `remove` |
+| `name` | Explicit or generated name, or `null` for an unnamed line |
+| `temp` | `true` for a temporary line, `false` for a configured line |
+| `access` | `rw` if supplied text appears in the current status template; otherwise `ro` |
 | `status` | Display status: `normal`, `running`, `done`, `success` or `failed` |
 | `visible` | Whether the current layout gives the line a terminal row |
 | `value` | Stored override text, or `null` when no override is set |
-| `fifo` | Bound FIFO path, or `null` when the line has no binding |
+| `fifo` | Whether a FIFO is bound to the line |
+| `fifo_path` | Bound FIFO path, or `null` when the line has no binding |
+
+An ID passed to `remove` selects the whole group for a dotted line name;
+see [removing lines](push.md#remove-lines).
 
 `value` contains no template expansion, padding or clipping. A configured
-line with `null` uses its configured default; a pushed line with `null` has
+line with `null` uses its configured default; a temporary line with `null` has
 no supplied value. An explicitly empty value is `""`, including when it
 suppresses a configured default. ANSI sequences remain part of the value
 and are JSON-escaped. Invalid UTF-8 bytes are replaced with U+FFFD in the
 snapshot; the session's stored bytes are unchanged.
 
-`fifo` reports bindings created by `bind` or `push --fifo`, including those
-on hidden lines. Unbinding a line makes its `fifo` field `null`.
+`fifo` reports bindings created by `bind` or `new --fifo`, including those
+on hidden lines. Unbinding makes `fifo` false and `fifo_path` null.
 
-The result is one complete snapshot. A later `set`, `pop`, config replacement
-or terminal resize may change what a subsequent call returns. Listing does
-not modify lines, statuses or producer ownership.
+The result is one complete snapshot. A later `update`, `remove`, config
+replacement or terminal resize may change what a subsequent call returns.
+Listing does not modify lines, statuses or producer ownership.
 
 With no matches, JSON contains `"lines": []`, the table contains only its
 header, and the command exits successfully. Missing, stale or incompatible

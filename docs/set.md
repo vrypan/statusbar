@@ -1,26 +1,27 @@
 # Change a line
 
-`statusbar set NAME` changes the value or status of an existing line, by name
-or by its numeric ID. Only what you supply changes:
+`statusbar update NAME` changes the value or status of an existing line, by name
+or by its numeric ID. `statusbar upd` is a short form. Only what you supply
+changes. These examples assume a line named `build` already exists:
 
 | Command | Effect |
 |---------|--------|
-| `statusbar set build` | nothing |
-| `statusbar set build --status running` | the status only |
-| `statusbar set build ""` | an explicit empty value |
-| `statusbar set build "Build passed" --status success` | value and status together |
-| `statusbar set build --reset` | the configured default value; status unchanged |
-| `statusbar set build --reset --status normal` | default value and status together |
+| `statusbar update build` | nothing |
+| `statusbar update build --status running` | the status only |
+| `statusbar update build ""` | an explicit empty value |
+| `statusbar update build "Build passed" --status success` | value and status together |
+| `statusbar update build --reset` | the configured default value; status unchanged |
+| `statusbar update build --reset --status normal` | default value and status together |
 
 ```sh
-statusbar set prompt "$(git branch --show-current)"
-statusbar set build "compiling" --status running
-statusbar set build --reset
+statusbar update prompt "$(git branch --show-current)"
+statusbar update build "compiling" --status running
+statusbar update build --reset
 ```
 
 A value and a status given together change at once; the bar never shows one
 without the other. `--reset` restores the line's `default` (empty if it has
-none, or for a pushed line) and cannot be combined with TEXT, not even `""`.
+none, or for a temporary line) and cannot be combined with TEXT, not even `""`.
 An explicit empty value is not the same as the default: it stays empty after
 a config reload, while a line showing its default shows the new default.
 
@@ -30,7 +31,7 @@ value. The status selects the line's template, so a `failed` line can show a
 red cross; see [values and statuses](config.md#values-and-statuses). A line
 keeps accepting values whatever its status.
 
-`set` works for configured and [pushed](push.md) lines. Lines hidden because
+`update` works for configured and [temporary](push.md) lines. Lines hidden because
 the terminal is short keep their value and show it when they become visible.
 A name that does not exist in the session is an error and never creates a
 line. A decimal NAME always means the line with that internal ID, even when
@@ -47,9 +48,9 @@ A value displays as written. `#(value)` in it shows `#(value)`, and
 and tracking. ANSI SGR colors and OSC 8 hyperlinks in a value are kept.
 The configured `default` is a template: `--reset` restores its expansion,
 including live commands and dates. Setting an empty value suppresses it.
-`statusbar set build -` displays a literal dash; use `--` before text that
+`statusbar update build -` displays a literal dash; use `--` before text that
 starts with a dash. To show the latest line of a command's output as it
-arrives, use [`statusbar push`](push.md) or a [FIFO](bind.md).
+arrives, use [`statusbar new`](push.md) or a [FIFO](bind.md).
 
 ## Outside a session
 
@@ -58,12 +59,12 @@ exits successfully, so shell hooks can call it unconditionally. Invalid
 arguments are still reported. Inside a session, an unknown line or a rejected
 change prints an error and exits with status 1.
 
-`set` talks to the session over its authenticated control socket, never
+`update` talks to the session over its authenticated control socket, never
 through stdout, so it also works from tools that capture command output:
 
 ```toml
 [custom.statusbar]
-command = "statusbar set branch \"$(git branch --show-current)\""
+command = "statusbar update branch \"$(git branch --show-current)\""
 when = true
 ```
 
@@ -75,7 +76,7 @@ such as `[line.cwd]` in your config, add this to `~/.bashrc` for Bash:
 ```bash
 __statusbar_cwd() {
   local previous_status=$?
-  statusbar set cwd -- "$PWD"
+  statusbar update cwd -- "$PWD"
   return "$previous_status"
 }
 PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND}; }__statusbar_cwd"
@@ -85,7 +86,7 @@ For Fish, add this to `~/.config/fish/config.fish`:
 
 ```fish
 function __statusbar_cwd --on-event fish_prompt
-  statusbar set cwd -- "$PWD"
+  statusbar update cwd -- "$PWD"
 end
 ```
 
@@ -95,7 +96,7 @@ framework. For Starship, `statusbar init` does this for you; see
 
 ## Protocol
 
-`set`, `push`, `pop`, `bind` and [`list`](list.md) send datagrams to a private Unix socket beside
+`update`, `new`, `remove`, `bind` and [`list`](list.md) send datagrams to a private Unix socket beside
 the session's state file (`$STATUSBAR_STATE.sock`). Each request carries the
 session token from `$STATUSBAR_SESSION_ID` and is acknowledged. Values travel
 base64-encoded, and a request states explicitly whether the value is
