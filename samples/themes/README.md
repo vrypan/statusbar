@@ -1,18 +1,18 @@
 # Themes and shared style
 
-Themes use terminal colors by default. Choose a `*-color.statusbar` file for
+Themes use terminal colors by default. Choose a `*-color.stbt` file for
 the original Starship-inspired colors and layouts, including badges and
 Powerline segments. Terminal-native themes and modules share muted labels,
 dim dotted fills and colored status indicators.
 
 | Terminal palette | Fixed colors | Content |
 | --- | --- | --- |
-| [minimal.statusbar](minimal.statusbar) | [minimal-color.statusbar](minimal-color.statusbar) | Starship prompt; native uses a separator and `Ready`, color uses a braille ornament and placeholder |
-| [pure.statusbar](pure.statusbar) | [pure-color.statusbar](pure-color.statusbar) | Host, load, weather, date and time |
-| [tokyo-night.statusbar](tokyo-night.statusbar) | [tokyo-night-color.statusbar](tokyo-night-color.statusbar) | Host, load, weather, date and time |
-| [gruvbox.statusbar](gruvbox.statusbar) | [gruvbox-color.statusbar](gruvbox-color.statusbar) | Host, load, weather, date and time |
-| [pastel-powerline.statusbar](pastel-powerline.statusbar) | [pastel-powerline-color.statusbar](pastel-powerline-color.statusbar) | Host, load, weather, date and time |
-| [multi-line.statusbar](multi-line.statusbar) | [multi-line-color.statusbar](multi-line-color.statusbar) | Prompt, Hacker News, GitHub notifications, load and weather |
+| [minimal.stbt](minimal.stbt) | [minimal-color.stbt](minimal-color.stbt) | Starship prompt; native uses a separator and `Ready`, color uses a braille ornament and placeholder |
+| [pure.stbt](pure.stbt) | [pure-color.stbt](pure-color.stbt) | Host, load, weather, date and time |
+| [tokyo-night.stbt](tokyo-night.stbt) | [tokyo-night-color.stbt](tokyo-night-color.stbt) | Host, load, weather, date and time |
+| [gruvbox.stbt](gruvbox.stbt) | [gruvbox-color.stbt](gruvbox-color.stbt) | Host, load, weather, date and time |
+| [pastel-powerline.stbt](pastel-powerline.stbt) | [pastel-powerline-color.stbt](pastel-powerline-color.stbt) | Host, load, weather, date and time |
+| [multi-line.stbt](multi-line.stbt) | [multi-line-color.stbt](multi-line-color.stbt) | Prompt, Hacker News, GitHub notifications, load and weather |
 
 The terminal-native versions of Pure, Tokyo Night, Gruvbox and Pastel share
 the same layout. Color versions preserve their original formats: Pure uses
@@ -55,7 +55,7 @@ Inside a running statusbar session, browse this directory interactively:
 ./zig-out/bin/statusbar-theme ./samples/themes
 ```
 
-The separate `statusbar-theme` binary lists `.statusbar` files alphabetically
+The separate `statusbar-theme` binary lists `.stbt` files alphabetically
 in the given directory, including symlinks to regular files. It does not
 recurse. Use arrows or `j`/`k`, Page Up/Down, and Home/End to navigate.
 Enter validates and applies the selected config while keeping the picker open.
@@ -73,14 +73,14 @@ From the repository root, try one in a fresh terminal outside an existing
 statusbar session:
 
 ```sh
-./zig-out/bin/statusbar --config "$PWD/samples/themes/tokyo-night.statusbar"
+./zig-out/bin/statusbar --config "$PWD/samples/themes/tokyo-night.stbt"
 ```
 
 Replace the filename to compare alternatives. Exit the child shell to return.
 To load a layout inside an existing statusbar session:
 
 ```sh
-statusbar config load ./samples/themes/tokyo-night.statusbar
+statusbar config load ./samples/themes/tokyo-night.stbt
 ```
 
 ## Shared styling rules

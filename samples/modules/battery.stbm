@@ -1,5 +1,5 @@
 # Module: battery. macOS; pmset, awk. Shows AC power on Macs without a battery.
-# Load: statusbar config import battery.statusbar
+# Load: statusbar config import battery.stbm
 
 [line.battery.status]
 default = "#(command:battery.status)"

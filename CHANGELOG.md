@@ -6,6 +6,11 @@ order they were added.
 
 ## Unreleased
 
+- **Breaking:** use `.stbt` for themes and complete samples, and `.stbm` for
+  module fragments. Update theme discovery, bundled files, packaging and
+  examples; the startup filename remains `config.statusbar`, and explicit
+  config paths still accept any extension
+
 - **Breaking:** rename `set` to `update` (`upd`), `push` to `new`, and `pop`
   to `remove` (`rm`)
 - Make `remove NAME` remove a standalone line or an entire group, including

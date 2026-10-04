@@ -1,5 +1,5 @@
 # gruvbox: shared muted labels and dotted fills.
-# Colors follow the terminal palette; gruvbox-color.statusbar uses fixed colors.
+# Colors follow the terminal palette; gruvbox-color.stbt uses fixed colors.
 # Commands: whoami, hostname, uptime, awk, curl; weather needs network access.
 
 interval = 5

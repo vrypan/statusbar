@@ -65,10 +65,10 @@ Add fragments with `config import FILE`; load complete themes with
 Save `config show current` to retain the assembled layout. Do not load optional network modules unless requested.
 
 Create a draft in a user-owned directory, for example
-`~/.config/statusbar/themes/my-theme.statusbar`, creating its parent if needed.
+`~/.config/statusbar/themes/my-theme.stbt`, creating its parent if needed.
 Copy a suitable bundled theme or use `statusbar config show default` as a
 starting point. Unsuffixed themes use terminal palette colors; choose
-`*-color.statusbar` for the original Starship-inspired colors and layouts.
+`*-color.stbt` for the original Starship-inspired colors and layouts.
 Installed themes may be replaced on upgrade, so customize the copy.
 
 Inspect commands before loading a theme: every `[command.NAME]` executes a
@@ -353,10 +353,10 @@ Save a copy of `statusbar config show current` before replacing a live
 layout. Then preview:
 
 ```sh
-statusbar config load ~/.config/statusbar/themes/my-theme.statusbar
+statusbar config load ~/.config/statusbar/themes/my-theme.stbt
 ```
 
-Outside a session, launch `statusbar --config /absolute/path/to/my-theme.statusbar`
+Outside a session, launch `statusbar --config /absolute/path/to/my-theme.stbt`
 in an interactive terminal. Both methods execute the draft's commands.
 The live command validates and sends the config; a zero exit status confirms
 sending, not that the session applied it. Check the bar and
@@ -378,7 +378,7 @@ in section 1, preserving the existing file first. For the usual location:
 
 ```sh
 mkdir -p ~/.config/statusbar
-cp ~/.config/statusbar/themes/my-theme.statusbar ~/.config/statusbar/config.statusbar
+cp ~/.config/statusbar/themes/my-theme.stbt ~/.config/statusbar/config.statusbar
 ```
 
 Respect `$STATUSBAR_CONFIG`, `$XDG_CONFIG_HOME`, and any explicit `--config`

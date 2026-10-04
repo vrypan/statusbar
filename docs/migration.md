@@ -63,8 +63,11 @@ at startup, including one named by `--config` or `$STATUSBAR_CONFIG`, is
 handled the same way: the built-in config and a warning, never a shell that
 fails to start. `statusbar config path` shows the file a new session loads.
 
-Shipped themes and samples now end in `.statusbar`; `--config` accepts any
-file name.
+Shipped themes and complete samples now end in `.stbt`; modules end in
+`.stbm`. Rename personal theme files to `.stbt` to make them visible in
+`statusbar-theme`. The default startup file remains `config.statusbar`, and
+`--config`, `config load`, and `config import` still accept explicit paths
+with any extension.
 
 ## One line
 

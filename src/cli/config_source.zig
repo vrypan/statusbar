@@ -2,7 +2,7 @@
 const std = @import("std");
 const config = @import("model").config;
 
-/// samples/default.statusbar, used when there is no config file.
+/// samples/default.stbt, used when there is no config file.
 pub const default_config = @embedFile("default_config");
 
 pub const default_name = "config.statusbar";

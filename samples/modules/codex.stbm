@@ -1,5 +1,5 @@
 # Module: codex. macOS/Linux; codex-usage, jq, and a running authenticated Codex daemon.
-# Load: statusbar config import codex.statusbar
+# Load: statusbar config import codex.stbm
 # codex-usage must be on PATH, or set CODEX_USAGE_BIN before starting statusbar.
 # Account usage: 7-day quota, reset countdown, credits, reset credits, lifetime tokens.
 # Quota colors: green below 75%, yellow from 75%, red from 90%.

@@ -1,5 +1,5 @@
 # multi-line: shared muted labels and dotted fills.
-# Colors follow the terminal palette; multi-line-color.statusbar uses fixed colors.
+# Colors follow the terminal palette; multi-line-color.stbt uses fixed colors.
 # Commands: curl, jq, gh (authenticated), uptime, awk; network access.
 
 interval = 5

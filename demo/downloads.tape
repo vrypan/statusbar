@@ -59,12 +59,12 @@ Enter
 Sleep 1800ms
 
 # Live theme replacement keeps the pushed lines and their running commands.
-Type `statusbar config load "$STATUSBAR_DEMO_REPO/samples/themes/gruvbox-color.statusbar"`
+Type `statusbar config load "$STATUSBAR_DEMO_REPO/samples/themes/gruvbox-color.stbt"`
 Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type `statusbar config load "$STATUSBAR_DEMO_REPO/samples/themes/tokyo-night-color.statusbar"`
+Type `statusbar config load "$STATUSBAR_DEMO_REPO/samples/themes/tokyo-night-color.stbt"`
 Sleep 300ms
 Enter
 Sleep 2200ms
@@ -94,7 +94,7 @@ Sleep 1800ms
 # + +render-push vhs demo/push.tape
 # It needs VHS and its capture dependencies.
 
-Type `statusbar config load "$STATUSBAR_DEMO_REPO/samples/themes/pastel-powerline-color.statusbar"`
+Type `statusbar config load "$STATUSBAR_DEMO_REPO/samples/themes/pastel-powerline-color.stbt"`
 Sleep 300ms
 Enter
 Sleep 2200ms

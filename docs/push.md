@@ -123,7 +123,7 @@ failed  = "#[fg=red]✗#[default] #(value)#(fill: )failed [#(name)]"
 The final text stays in `#(value)`. `statusbar update NAME --status STATE`
 changes the status of a temporary line too, and any change is allowed. To show
 activity while a command is quiet, add a [spinner](config.md#spinner). A
-complete example is in [samples/spinner.statusbar](../samples/spinner.statusbar).
+complete example is in [samples/spinner.stbt](../samples/spinner.stbt).
 See [`[push]`](config.md#push) for all settings.
 
 ## Input

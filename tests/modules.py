@@ -99,7 +99,7 @@ def command_text(path):
 def main():
     binary = str(Path(sys.argv[1]).resolve())
     assert shutil.which('jq'), 'module fixture checks require jq'
-    files = sorted(MODULES.glob('*.statusbar'))
+    files = sorted(MODULES.glob('*.stbm'))
     assert len(files) == 11
     for path in files:
         assert f'[line.{path.stem}.' in path.read_text(), path
@@ -127,7 +127,7 @@ def main():
                'MODULE_COUNTER': str(Path(directory) / 'counter')}
 
         def run(name, mode=''):
-            result = subprocess.run(['/bin/sh', '-c', command_text(MODULES / f'{name}.statusbar')],
+            result = subprocess.run(['/bin/sh', '-c', command_text(MODULES / f'{name}.stbm')],
                                     env={**env, 'MODULE_CASE': mode}, capture_output=True,
                                     text=True, timeout=10)
             assert result.returncode == 0, (name, mode, result.stderr)
@@ -176,13 +176,13 @@ def main():
         assert 'tokens ∑ —' in run('codex', 'usage-error')[1]
         for mode in ('offline', 'invalid'):
             assert run('codex', mode)[1] == '⚠ usage unavailable'
-        result = subprocess.run(['/bin/sh', '-c', command_text(MODULES / 'codex.statusbar')],
+        result = subprocess.run(['/bin/sh', '-c', command_text(MODULES / 'codex.stbm')],
                                 env={**env, 'CODEX_USAGE_BIN': str(mockdir / 'absent')},
                                 capture_output=True, text=True)
         assert result.stdout == 'install codex-usage', result
         # Missing dependencies give a readable state before any request.
         (mockdir / 'curl').unlink()
-        result = subprocess.run(['/bin/sh', '-c', command_text(MODULES / 'weather.statusbar')],
+        result = subprocess.run(['/bin/sh', '-c', command_text(MODULES / 'weather.stbm')],
                                 env={**env, 'PATH': str(mockdir)}, capture_output=True, text=True)
         assert result.stdout == 'install curl', result
         (mockdir / 'curl').symlink_to(provider.name)
@@ -191,22 +191,22 @@ def main():
         child = terminal.CHILD_PRELUDE + r'''
 import json, pathlib
 library = pathlib.Path(sys.argv[2])
-for path in sorted(library.glob('*.statusbar')):
+for path in sorted(library.glob('*.stbm')):
     run('config', 'import', str(path))
     settle()
 deadline = time.monotonic() + 5
 while True:
     lines = json.loads(run('ls', '--json'))['lines']
-    if len(lines) == len(list(library.glob('*.statusbar'))) + 1 or time.monotonic() >= deadline: break
+    if len(lines) == len(list(library.glob('*.stbm'))) + 1 or time.monotonic() >= deadline: break
     time.sleep(.05)
-assert len(lines) == len(list(library.glob('*.statusbar'))) + 1 and all(line['visible'] for line in lines), lines
-assert {line['name'].split('.')[0] for line in lines[1:]} == {path.stem for path in library.glob('*.statusbar')}, lines
+assert len(lines) == len(list(library.glob('*.stbm'))) + 1 and all(line['visible'] for line in lines), lines
+assert {line['name'].split('.')[0] for line in lines[1:]} == {path.stem for path in library.glob('*.stbm')}, lines
 snapshot = run('config', 'show')
 assert '<module>' not in snapshot, snapshot
 definitions = json.loads(run('config', 'show', '--json'))
-assert {line['name'].split('.')[0] for line in definitions['lines'][1:]} == {path.stem for path in library.glob('*.statusbar')}, definitions
-run('config', 'import', '-', input=(library / 'clock.statusbar').read_bytes(), code=2)
-run('config', 'import', str(library / 'clock.statusbar'), code=2)
+assert {line['name'].split('.')[0] for line in definitions['lines'][1:]} == {path.stem for path in library.glob('*.stbm')}, definitions
+run('config', 'import', '-', input=(library / 'clock.stbm').read_bytes(), code=2)
+run('config', 'import', str(library / 'clock.stbm'), code=2)
 assert run('config', 'show') == snapshot
 time.sleep(2)
 for line in lines[1:]:

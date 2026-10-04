@@ -2,7 +2,7 @@
 
 Start your usual shell with `statusbar`. Inside that session, these are the
 commands most people need. The build example assumes a project with a
-Makefile; `another.statusbar` and `extra.statusbar` stand for your own config
+Makefile; `another.stbt` and `extra.stbm` stand for your own config
 and module files:
 
 ```sh
@@ -12,8 +12,8 @@ statusbar update build --status success    # or its status
 statusbar remove                           # remove the newest temporary line
 statusbar remove --all                     # remove all temporary lines
 statusbar list --temp                      # inspect temporary lines
-statusbar config load another.statusbar    # change the running layout
-statusbar config import extra.statusbar    # add new definitions
+statusbar config load another.stbt    # change the running layout
+statusbar config import extra.stbm    # add new definitions
 statusbar remove extra                     # remove extra.* definitions
 ```
 
@@ -66,8 +66,8 @@ always follows `--`.
 | `-c`, `--config PATH`   | config file, or `-` for stdin; see [config.md](config.md) for where it is looked for, and the built-in default |
 | `--log PATH`           | append runtime diagnostics to a regular file |
 
-Options take their value as the next argument (`--config my.statusbar`) or
-with `=` (`--config=my.statusbar`). Use `--config -` to read from stdin.
+Options take their value as the next argument (`--config my.stbt`) or
+with `=` (`--config=my.stbt`). Use `--config -` to read from stdin.
 The config defines the lines, commands, refresh intervals, and styles.
 
 If the config cannot be read or is invalid, `run` still starts the shell with
@@ -209,13 +209,13 @@ statusbar config load ~/.config/statusbar/config.statusbar
 redirected input and shows help when run directly in a terminal:
 
 ```sh
-statusbar config load my.statusbar
-statusbar config < my.statusbar
+statusbar config load my.stbt
+statusbar config < my.stbt
 statusbar config show startup | statusbar config load -
-statusbar config import extra.statusbar
+statusbar config import extra.stbm
 statusbar config show --json
 statusbar remove extra
-statusbar config show current > saved.statusbar
+statusbar config show current > saved.stbt
 ```
 
 `check`, `show default` (including `--json`), and `path` work outside a

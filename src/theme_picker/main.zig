@@ -7,7 +7,7 @@ const default_themes_dir = @import("theme_options").default_themes_dir;
 
 const usage = (if (default_themes_dir != null) "Usage: statusbar-theme [DIRECTORY]\n" else "Usage: statusbar-theme DIRECTORY\n") ++
     \\
-    \\Select a .statusbar file and activate it in the current statusbar session.
+    \\Select a .stbt file and activate it in the current statusbar session.
     \\Lists regular files (including symlinks to files), without recursing.
     \\Use arrows or j/k, Page Up/Down, Home/End; Enter applies; Esc/q closes.
     \\This replaces the session config; it does not write your config file.
@@ -69,7 +69,7 @@ pub fn main(init: std.process.Init) !u8 {
         return 1;
     };
     if (names.len == 0) {
-        try stderr.print("statusbar-theme: no .statusbar files in {s}\n", .{path});
+        try stderr.print("statusbar-theme: no .stbt files in {s}\n", .{path});
         return 1;
     }
 
@@ -135,7 +135,7 @@ fn discover(arena: std.mem.Allocator, io: Io, dir: Io.Dir) ![][]const u8 {
     var names: std.ArrayList([]const u8) = .empty;
     var it = dir.iterate();
     while (try it.next(io)) |entry| {
-        if (!std.mem.endsWith(u8, entry.name, ".statusbar")) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".stbt")) continue;
         const stat = dir.statFile(io, entry.name, .{}) catch continue;
         if (stat.kind != .file) continue;
         try names.append(arena, try arena.dupe(u8, entry.name));

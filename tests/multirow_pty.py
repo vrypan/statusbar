@@ -1445,7 +1445,7 @@ binary, replacement, direct, nested_token_path, rejected_command_path = sys.argv
 help_result = subprocess.run([binary, "config"], capture_output=True)
 explicit_help = subprocess.run([binary, "config", "--help"], capture_output=True)
 assert help_result.returncode == 0 and help_result.stdout == explicit_help.stdout, help_result
-assert b"EXAMPLES" in help_result.stdout and b"statusbar config < my.statusbar" in help_result.stdout
+assert b"EXAMPLES" in help_result.stdout and b"statusbar config < my.stbt" in help_result.stdout
 for expected in (b"show", b"path", b"check", b"load", b"import"):
     assert expected in help_result.stdout, help_result
 def frame(config, token=None):
@@ -1573,8 +1573,8 @@ time.sleep(.3)
         assert data.index(b"\x1b7\x1b[1;19r\x1b8") < data.index(b"AFTER_CONFIG"), data
     finally:
         stop(pid, master)
-    pastel = os.path.abspath("samples/themes/pastel-powerline.statusbar")
-    multi = os.path.abspath("samples/themes/multi-line.statusbar")
+    pastel = os.path.abspath("samples/themes/pastel-powerline.stbt")
+    multi = os.path.abspath("samples/themes/multi-line.stbt")
     script = r'''
 printf THEME_GROWTH_READY
 IFS= read -r command
@@ -1784,7 +1784,7 @@ def check_background_push_tty_output(binary):
     zsh = shutil.which("zsh")
     if not zsh:
         return
-    config = os.path.abspath("samples/spinner.statusbar")
+    config = os.path.abspath("samples/spinner.stbt")
     pid, master = spawn([binary, "-c", config, "--", zsh, "-f", "-i"])
     data = b""
     try:

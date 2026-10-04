@@ -6,7 +6,19 @@ const config = @import("config.zig");
 const shipped = @import("shipped_configs");
 
 test "every shipped config parses" {
-    try std.testing.expect(shipped.all.len >= 15);
+    var themes: usize = 0;
+    var modules: usize = 0;
+    for (shipped.all) |entry| {
+        if (entry.prefix != null) {
+            modules += 1;
+            try std.testing.expect(std.mem.endsWith(u8, entry.name, ".stbm"));
+        } else {
+            themes += 1;
+            try std.testing.expect(std.mem.endsWith(u8, entry.name, ".stbt"));
+        }
+    }
+    try std.testing.expect(themes >= 15);
+    try std.testing.expect(modules > 0);
     for (shipped.all) |entry| {
         if (entry.prefix != null) continue;
         var diag: config.Diagnostic = .{};

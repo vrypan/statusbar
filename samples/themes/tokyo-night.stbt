@@ -1,5 +1,5 @@
-# pastel-powerline: shared muted labels and dotted fills.
-# Colors follow the terminal palette; pastel-powerline-color.statusbar uses fixed colors.
+# tokyo-night: shared muted labels and dotted fills.
+# Colors follow the terminal palette; tokyo-night-color.stbt uses fixed colors.
 # Commands: whoami, hostname, uptime, awk, curl; weather needs network access.
 
 interval = 5

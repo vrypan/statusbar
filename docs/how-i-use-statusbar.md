@@ -17,7 +17,7 @@ Here's my `~/.config/statusbar/config.statusbar`:
 
 ```ini
 # minimal: shared muted labels and dotted fills.
-# Colors follow the terminal palette; minimal-color.statusbar uses fixed colors.
+# Colors follow the terminal palette; minimal-color.stbt uses fixed colors.
 
 interval = 5
 
@@ -66,7 +66,7 @@ eval "$(statusbar init zsh)"
 When I settle into a terminal, I type `sbx`:
 
 ```sh
-alias sbx='statusbar config < "$HOME/.config/statusbar/extra.statusbar"'
+alias sbx='statusbar config < "$HOME/.config/statusbar/extra.stbt"'
 ```
 
 This replaces statusbar's config in that session, without restarting my shell.
@@ -76,11 +76,11 @@ and the date and time. Tracked values briefly highlight
 when they change.
 
 <details>
-<summary>This is my ~/.config/statusbar/extra.statusbar:</summary>
+<summary>This is my ~/.config/statusbar/extra.stbt:</summary>
 
 ```ini
 # multi-line: shared muted labels and dotted fills.
-# Colors follow the terminal palette; multi-line-color.statusbar uses fixed colors.
+# Colors follow the terminal palette; multi-line-color.stbt uses fixed colors.
 # Commands: curl, jq, gh (authenticated), uptime, awk; network access.
 
 interval = 5

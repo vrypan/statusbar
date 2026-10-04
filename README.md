@@ -67,14 +67,14 @@ Applying a theme changes only the current session. **To use it every time**,
 run the copy command the picker prints when you exit after changing themes.
 
 Homebrew builds find their bundled themes automatically. You can also pass
-a directory of your own `.statusbar` themes:
+a directory of your own `.stbt` themes:
 
 ```sh
 statusbar-theme ~/.config/statusbar/themes
 ```
 
 Bundled themes follow your terminal's palette by default. Choose a
-`*-color.statusbar` variant for the original Starship-inspired colors and layouts. See [sample themes](samples/themes/README.md).
+`*-color.stbt` variant for the original Starship-inspired colors and layouts. See [sample themes](samples/themes/README.md).
 The picker uses [zooi](https://github.com/vrypan/zooi).
 
 ## Make it yours

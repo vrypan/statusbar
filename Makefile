@@ -43,10 +43,10 @@ package: all
 		test -x "$$dir/bin/statusbar" || exit 1; \
 		test -x "$$dir/bin/statusbar-theme" || exit 1; \
 		cmp AGENT_SETUP.md "$$dir/AGENT_SETUP.md" || exit 1; \
-		for theme in samples/themes/*.statusbar; do \
+		for theme in samples/themes/*.stbt; do \
 			cmp "$$theme" "$$dir/themes/$${theme##*/}" || exit 1; \
 		done; \
-		for module in samples/modules/*.statusbar samples/modules/README.md; do \
+		for module in samples/modules/*.stbm samples/modules/README.md; do \
 			cmp "$$module" "$$dir/modules/$${module##*/}" || exit 1; \
 		done; \
 		COPYFILE_DISABLE=1 tar -czf "$(DIST)/$$root.tar.gz" -C "$(DIST)" "$$root" || exit 1; \

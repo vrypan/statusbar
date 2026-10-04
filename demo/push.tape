@@ -21,7 +21,7 @@ Enter
 Show
 Sleep 1300ms
 
-Type "statusbar -c samples/themes/gruvbox-color.statusbar -- zsh -f"
+Type "statusbar -c samples/themes/gruvbox-color.stbt -- zsh -f"
 Sleep 300ms
 Enter
 Sleep 1000ms

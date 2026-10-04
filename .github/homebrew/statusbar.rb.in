@@ -34,8 +34,8 @@ class Statusbar < Formula
   test do
     assert_path_exists bin/"statusbar"
     assert_path_exists bin/"statusbar-theme"
-    assert_path_exists pkgshare/"themes/pure.statusbar"
-    assert_path_exists pkgshare/"themes/pure-color.statusbar"
+    assert_path_exists pkgshare/"themes/pure.stbt"
+    assert_path_exists pkgshare/"themes/pure-color.stbt"
     assert_path_exists pkgshare/"AGENT_SETUP.md"
     assert_match "Usage: statusbar-theme", shell_output("#{bin}/statusbar-theme --help")
     assert_match "Default directory: #{opt_pkgshare}/themes", shell_output("#{bin}/statusbar-theme --help")

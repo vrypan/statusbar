@@ -1,5 +1,5 @@
 # Module: host. macOS/Linux; whoami and hostname.
-# Load: statusbar config import host.statusbar
+# Load: statusbar config import host.stbm
 
 [line.host.identity]
 default = "#(command:host.identity)"

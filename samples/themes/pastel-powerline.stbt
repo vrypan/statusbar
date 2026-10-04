@@ -1,5 +1,5 @@
-# pure: shared muted labels and dotted fills.
-# Colors follow the terminal palette; pure-color.statusbar uses fixed colors.
+# pastel-powerline: shared muted labels and dotted fills.
+# Colors follow the terminal palette; pastel-powerline-color.stbt uses fixed colors.
 # Commands: whoami, hostname, uptime, awk, curl; weather needs network access.
 
 interval = 5

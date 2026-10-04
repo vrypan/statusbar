@@ -47,7 +47,7 @@ const config_commands = [_]zecli.CommandSpec{
         \\running commands. JSON is for inspection and cannot be reloaded.
         \\Neither output includes runtime values or statuses.
         ++ "\n",
-        .examples = &.{ "config show", "config show --json", "config show startup > original.statusbar", "config show default > my.statusbar" },
+        .examples = &.{ "config show", "config show --json", "config show startup > original.stbt", "config show default > my.stbt" },
     },
     .{
         .name = "path",
@@ -72,7 +72,7 @@ const config_commands = [_]zecli.CommandSpec{
         \\Parses FILE without loading it or running commands. Works outside a
         \\session and reports syntax errors with file and line.
         ++ "\n",
-        .examples = &.{ "config check my.statusbar", "generate-config | statusbar config check -" },
+        .examples = &.{ "config check my.stbt", "generate-config | statusbar config check -" },
     },
     .{
         .name = "load",
@@ -86,7 +86,7 @@ const config_commands = [_]zecli.CommandSpec{
         \\An invalid config leaves the running bar unchanged.
         \\`statusbar config < FILE` is the same as `statusbar config load - < FILE`.
         ++ "\n",
-        .examples = &.{ "config load my.statusbar", "config show startup | statusbar config load -" },
+        .examples = &.{ "config load my.stbt", "config show startup | statusbar config load -" },
     },
     .{
         .name = "import",
@@ -99,7 +99,7 @@ const config_commands = [_]zecli.CommandSpec{
         \\config. Names must be unique within each kind; duplicates are rejected.
         \\Global settings require a full replacement with `load`.
         ++ "\n",
-        .examples = &.{ "config import extra.statusbar", "config import - < extra.statusbar" },
+        .examples = &.{ "config import extra.stbm", "config import - < extra.stbm" },
     },
 };
 
@@ -116,10 +116,10 @@ const config_application = zecli.comptimeValidated(.{
     ++ "\n",
     .examples = &.{
         "config show",
-        "config check my.statusbar",
-        "config < my.statusbar",
+        "config check my.stbt",
+        "config < my.stbt",
         "config show default | statusbar config",
-        "config import extra.statusbar",
+        "config import extra.stbm",
     },
 });
 
@@ -178,7 +178,7 @@ const commands = [_]zecli.CommandSpec{
         ++ "\n",
         .examples = &.{
             "statusbar",
-            "statusbar --config my.statusbar",
+            "statusbar --config my.stbt",
             "generate-config | statusbar --config -",
             "statusbar -- vim notes.txt",
         },
@@ -433,7 +433,7 @@ test "run is the default command" {
 
     const cases = [_]struct { []const [:0]const u8, []const u8 }{
         .{ &.{}, "run" },
-        .{ &.{ "-c", "my.statusbar" }, "run" },
+        .{ &.{ "-c", "my.stbt" }, "run" },
         .{ &.{ "--", "set" }, "run" },
         .{ &.{ "update", "prompt" }, "update" },
         .{ &.{ "upd", "prompt" }, "upd" },
@@ -443,7 +443,7 @@ test "run is the default command" {
         .{ &.{ "ls", "--temp", "--json" }, "ls" },
         .{ &.{ "new", "build" }, "new" },
         .{ &.{ "rm", "disk" }, "rm" },
-        .{ &.{ "run", "-c", "my.statusbar" }, "run" },
+        .{ &.{ "run", "-c", "my.stbt" }, "run" },
         .{ &.{"--help"}, "--help" },
         .{ &.{"-V"}, "-V" },
     };

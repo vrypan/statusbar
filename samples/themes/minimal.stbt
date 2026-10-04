@@ -1,5 +1,7 @@
-# Start with: statusbar --config samples/spinner.statusbar
-# Inside the session, try: statusbar new wait -- sleep 3
+# minimal: shared muted labels and dotted fills.
+# Colors follow the terminal palette; minimal-color.stbt uses fixed colors.
+
+interval = 5
 
 [colors]
 text = default
@@ -9,8 +11,12 @@ accent = colour3
 success = colour10
 failure = colour1
 
-[line.title]
-text = "#[fg=muted,bold]* Statusbar: #[nobold]ready #[fg=rule,dim]#(fill:·)#[default]"
+[line.rule]
+text = "#[fg=rule,dim]#(fill:─)#[default]"
+
+[line.prompt]
+default = "Ready"
+text = "#[fg=text]#(value)#[default]"
 
 # Temporary lines use the same muted labels as modules.
 [push]

@@ -1,5 +1,5 @@
-# tokyo-night: shared muted labels and dotted fills.
-# Colors follow the terminal palette; tokyo-night-color.statusbar uses fixed colors.
+# pure: shared muted labels and dotted fills.
+# Colors follow the terminal palette; pure-color.stbt uses fixed colors.
 # Commands: whoami, hostname, uptime, awk, curl; weather needs network access.
 
 interval = 5

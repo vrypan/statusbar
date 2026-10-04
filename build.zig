@@ -29,9 +29,10 @@ fn shippedConfigs(b: *std.Build) *std.Build.Module {
     for ([_][]const u8{ "samples", "samples/themes", "samples/modules" }) |directory| {
         var dir = b.build_root.handle.openDir(io, directory, .{ .iterate = true }) catch @panic("cannot open shipped config directory");
         defer dir.close(io);
+        const extension = if (std.mem.eql(u8, directory, "samples/modules")) ".stbm" else ".stbt";
         var it = dir.iterate();
         while (it.next(io) catch @panic("cannot list shipped configs")) |entry| {
-            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".statusbar")) continue;
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, extension)) continue;
             const path = b.fmt("{s}/{s}", .{ directory, entry.name });
             const copy = b.fmt("{s}", .{path});
             _ = files.addCopyFile(b.path(path), copy);
@@ -80,7 +81,7 @@ fn addLayers(
     cli.addImport("completion", packages.completion);
     // The sample config doubles as the built-in default, so the two can't
     // drift apart.
-    cli.addAnonymousImport("default_config", .{ .root_source_file = b.path("samples/default.statusbar") });
+    cli.addAnonymousImport("default_config", .{ .root_source_file = b.path("samples/default.stbt") });
     return layers;
 }
 
@@ -92,14 +93,14 @@ pub fn build(b: *std.Build) void {
         .source_dir = b.path("samples/themes"),
         .install_dir = .prefix,
         .install_subdir = themes_dir,
-        .include_extensions = &.{".statusbar"},
+        .include_extensions = &.{".stbt"},
     });
     const modules_dir = b.option([]const u8, "modules-dir", "Module library directory relative to the install prefix") orelse "share/statusbar/modules";
     b.installDirectory(.{
         .source_dir = b.path("samples/modules"),
         .install_dir = .prefix,
         .install_subdir = modules_dir,
-        .include_extensions = &.{ ".statusbar", ".md" },
+        .include_extensions = &.{ ".stbm", ".md" },
     });
     const guide_dir = b.option([]const u8, "guide-dir", "Agent guide directory relative to the install prefix") orelse "share/statusbar";
     b.installFile("AGENT_SETUP.md", b.pathJoin(&.{ guide_dir, "AGENT_SETUP.md" }));

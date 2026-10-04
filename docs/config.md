@@ -57,11 +57,11 @@ statusbar chooses its config path in this order:
 3. `$XDG_CONFIG_HOME/statusbar/config.statusbar` if `XDG_CONFIG_HOME` is set;
    otherwise, `~/.config/statusbar/config.statusbar`
 
-Shipped configs and themes use the `.statusbar` extension. An explicit path
-works with any name.
+Complete themes use `.stbt`; module fragments use `.stbm`. The default
+startup file remains `config.statusbar`. An explicit path works with any name.
 
 If the default file is missing, statusbar uses its built-in config:
-[`samples/default.statusbar`](../samples/default.statusbar).
+[`samples/default.stbt`](../samples/default.stbt).
 
 A config that cannot be used never keeps your shell from starting. If the
 selected file is missing or unreadable, or if it is invalid, statusbar prints
@@ -135,7 +135,7 @@ Inside a session, you can replace the whole config. From the repository
 checkout, for example:
 
 ```sh
-statusbar config load ./samples/themes/tokyo-night.statusbar
+statusbar config load ./samples/themes/tokyo-night.stbt
 ```
 
 Replacement is strict: an invalid config leaves the active statusbar unchanged.
@@ -600,7 +600,7 @@ templates for a static marker. Reloading the config starts the new sequence
 from its first frame. As with other width changes, a reload does not update a
 running command's `COLUMNS`.
 
-See [the spinner sample](../samples/spinner.statusbar) for a complete config.
+See [the spinner sample](../samples/spinner.stbt) for a complete config.
 
 ## `[command.NAME]`
 

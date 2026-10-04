@@ -15,17 +15,17 @@ No special font is required.
 
 | Module | Shows | Platform and dependencies | Refresh |
 | --- | --- | --- | --- |
-| [clock](clock.statusbar) | Local date and clock | macOS/Linux; no commands | 1 second |
-| [host](host.statusbar) | `user@hostname` | macOS/Linux; `whoami`, `hostname` | 1 hour |
-| [load](load.statusbar) | 1-, 5-, and 15-minute load averages | macOS/Linux; `uptime`, `awk` | 10 seconds |
-| [disk](disk.statusbar) | Disk usage with a thin meter | macOS/Linux; `df`, `awk` | 1 minute |
-| [weather](weather.statusbar) | Conditions and temperature | macOS/Linux; `curl`, `tr`, wttr.in access | 5 minutes |
-| [hackernews](hackernews.statusbar) | Top story, linked to its discussion | macOS/Linux; `curl`, `jq`, Hacker News access | 1 minute |
-| [github](github.statusbar) | Unread notifications and latest title, linked to your inbox | macOS/Linux; `gh`, `jq`, GitHub access and login | 1 minute |
-| [codex](codex.statusbar) | 7-day usage meter, reset countdown, credits, available resets, lifetime tokens | macOS/Linux; `codex-usage`, `jq`, running authenticated Codex daemon | 1 minute |
-| [compute](compute.statusbar) | CPU and memory meters | macOS; `top`, `sysctl`, `awk` | 5 seconds |
-| [battery](battery.statusbar) | Battery meter and charging/power state | macOS; `pmset`, `awk` | 30 seconds |
-| [network](network.statusbar) | Download/upload rates and interface | macOS; `route`, `netstat`, `awk` | 5 seconds |
+| [clock](clock.stbm) | Local date and clock | macOS/Linux; no commands | 1 second |
+| [host](host.stbm) | `user@hostname` | macOS/Linux; `whoami`, `hostname` | 1 hour |
+| [load](load.stbm) | 1-, 5-, and 15-minute load averages | macOS/Linux; `uptime`, `awk` | 10 seconds |
+| [disk](disk.stbm) | Disk usage with a thin meter | macOS/Linux; `df`, `awk` | 1 minute |
+| [weather](weather.stbm) | Conditions and temperature | macOS/Linux; `curl`, `tr`, wttr.in access | 5 minutes |
+| [hackernews](hackernews.stbm) | Top story, linked to its discussion | macOS/Linux; `curl`, `jq`, Hacker News access | 1 minute |
+| [github](github.stbm) | Unread notifications and latest title, linked to your inbox | macOS/Linux; `gh`, `jq`, GitHub access and login | 1 minute |
+| [codex](codex.stbm) | 7-day usage meter, reset countdown, credits, available resets, lifetime tokens | macOS/Linux; `codex-usage`, `jq`, running authenticated Codex daemon | 1 minute |
+| [compute](compute.stbm) | CPU and memory meters | macOS; `top`, `sysctl`, `awk` | 5 seconds |
+| [battery](battery.stbm) | Battery meter and charging/power state | macOS; `pmset`, `awk` | 30 seconds |
+| [network](network.stbm) | Download/upload rates and interface | macOS; `route`, `netstat`, `awk` | 5 seconds |
 
 The built-in theme already includes the host, load, and clock. These modules
 are also useful with a smaller starting layout or another theme.
@@ -52,15 +52,15 @@ Locate the library for your installation:
 From the repository directory, inside the statusbar shell:
 
 ```sh
-statusbar config import samples/modules/disk.statusbar
-statusbar config import samples/modules/weather.statusbar
+statusbar config import samples/modules/disk.stbm
+statusbar config import samples/modules/weather.stbm
 ```
 
 For Homebrew:
 
 ```sh
 modules_dir="$(brew --prefix statusbar)/share/statusbar/modules"
-statusbar config import "$modules_dir/disk.statusbar"
+statusbar config import "$modules_dir/disk.stbm"
 ```
 
 New lines appear in import order, above temporary lines. Importing the same
@@ -135,13 +135,13 @@ desktop Macs. GitHub fetches one page of up to 100 notifications and displays
 Additions affect the current session. To save your assembled layout:
 
 ```sh
-statusbar config show current > my.statusbar
-statusbar config check my.statusbar
+statusbar config show current > my.stbt
+statusbar config check my.stbt
 ```
 
-Start a later session with `statusbar --config my.statusbar`, or copy the
+Start a later session with `statusbar --config my.stbt`, or copy the
 file to your chosen startup config location. To edit definitions, update the
-saved complete config and reload it with `statusbar config load my.statusbar`.
+saved complete config and reload it with `statusbar config load my.stbt`.
 Adding or removing definitions preserves unchanged command processes;
 replacing the complete config restarts them.
 
@@ -152,7 +152,7 @@ limits how many rows can be visible.
 
 ## Write a module
 
-A module is a `.statusbar` fragment containing `[line.NAME]`, `[command.NAME]`,
+A module is a `.stbm` fragment containing `[line.NAME]`, `[command.NAME]`,
 and optionally `[colors]`. Choose a static prefix such as `host.`, and use it
 in definitions and references:
 
@@ -172,7 +172,7 @@ Import with `config import FILE`; the source defines `host.summary` and
 written. Fragments may contain multiple prefixes or unprefixed definitions.
 Snapshots from `config show current` can be saved, checked with
 `config check FILE`, and loaded as complete configs. Each bundled module can also be checked directly with
-`statusbar config check samples/modules/host.statusbar`.
+`statusbar config check samples/modules/host.stbm`.
 
 Module prefixes use letters, digits, underscores and hyphens, and cannot be
 all digits. Set command intervals

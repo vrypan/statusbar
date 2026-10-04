@@ -156,25 +156,25 @@ statusbar.
 ## Try a theme
 
 The repository includes four ready-to-run themes based on familiar Starship
-styles: [Pure](../samples/themes/pure.statusbar),
-[Tokyo Night](../samples/themes/tokyo-night.statusbar),
-[Gruvbox](../samples/themes/gruvbox.statusbar), and
-[Pastel Powerline](../samples/themes/pastel-powerline.statusbar).
+styles: [Pure](../samples/themes/pure.stbt),
+[Tokyo Night](../samples/themes/tokyo-night.stbt),
+[Gruvbox](../samples/themes/gruvbox.stbt), and
+[Pastel Powerline](../samples/themes/pastel-powerline.stbt).
 
 These themes follow your terminal's palette. For the original colors and layouts,
-choose a `*-color.statusbar` file, such as
-[Pure Color](../samples/themes/pure-color.statusbar). The
+choose a `*-color.stbt` file, such as
+[Pure Color](../samples/themes/pure-color.stbt). The
 [theme directory](../samples/themes/README.md) also includes Minimal and
 Multi-line layouts.
 
 Inside a running session, use `statusbar-theme /path/to/themes` to browse
-and activate a `.statusbar` file with the keyboard. The picker changes the
+and activate a `.stbt` file with the keyboard. The picker changes the
 current session without writing your saved config.
 
 From the repository checkout, try one without replacing your config:
 
 ```sh
-statusbar --config ./samples/themes/tokyo-night.statusbar
+statusbar --config ./samples/themes/tokyo-night.stbt
 ```
 
 Native themes use the same muted labels, dim dotted fills and status indicators
@@ -189,7 +189,7 @@ The [module library](../samples/modules/README.md) contains ready-made features
 with native terminal colors. Add one inside a running session:
 
 ```sh
-statusbar config import samples/modules/disk.statusbar
+statusbar config import samples/modules/disk.stbm
 ```
 
 This adds the module's line and commands to the current layout. Existing
@@ -213,7 +213,7 @@ Inside a running statusbar session, send a config to `statusbar config` to
 replace the whole layout. From the repository checkout, for example:
 
 ```sh
-statusbar config load ./samples/themes/tokyo-night.statusbar
+statusbar config load ./samples/themes/tokyo-night.stbt
 statusbar config show default | statusbar config
 ```
 

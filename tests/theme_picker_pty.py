@@ -73,16 +73,18 @@ def check_picker(binary, root):
     themes.mkdir()
     a = b"[line.first]\ntext = FIRST\n"
     z = b"[line.last]\ntext = LAST\n"
-    (themes / "z-last.statusbar").write_bytes(z)
-    (themes / "a first's.statusbar").write_bytes(a)
-    (themes / "b-link.statusbar").symlink_to("a first's.statusbar")
-    (themes / "broken.statusbar").symlink_to("missing")
-    (themes / "ignored.statusbar").mkdir()
+    (themes / "z-last.stbt").write_bytes(z)
+    (themes / "a first's.stbt").write_bytes(a)
+    (themes / "b-link.stbt").symlink_to("a first's.stbt")
+    (themes / "broken.stbt").symlink_to("missing")
+    (themes / "ignored.stbt").mkdir()
     (themes / "README.md").write_text("not a theme")
-    os.mkfifo(themes / "pipe.statusbar")
+    (themes / "module.stbm").write_bytes(a)
+    (themes / "old.statusbar").write_bytes(a)
+    os.mkfifo(themes / "pipe.stbt")
     data = pick(binary, themes, b"\x1b[B\x1b[B\r")
-    assert data.index(b"a first's.statusbar") < data.index(b"b-link.statusbar") < data.index(b"z-last.statusbar")
-    for hidden in (b"README.md", b"ignored.statusbar", b"pipe.statusbar", b"broken.statusbar"):
+    assert data.index(b"a first's.stbt") < data.index(b"b-link.stbt") < data.index(b"z-last.stbt")
+    for hidden in (b"module.stbm", b"old.statusbar", b"README.md", b"ignored.stbt", b"pipe.stbt", b"broken.stbt"):
         assert hidden not in data, data
     frame = re.search(re.escape(PREFIX) + rb"([^\x1b]+)\x1b\\", data)
     assert frame, data
@@ -90,13 +92,13 @@ def check_picker(binary, root):
     assert frame.start() < data.index(b"\x1b[?1049l"), data
     assert b"__RESULT_0__" in data, data
     assert data.index(b"\x1b[?1049l") < data.index(b"To use this theme"), data
-    assert hint_command(data)[1] == str(themes / "z-last.statusbar"), data
+    assert hint_command(data)[1] == str(themes / "z-last.stbt"), data
 
     data = pick(binary, themes, b"\x1b[F\r", again=b"\x1b[H\r")
     frames = re.findall(re.escape(PREFIX) + rb"([^\x1b]+)\x1b\\", data)
     assert len(frames) == 2 and base64.b64decode(frames[0]).endswith(z) and base64.b64decode(frames[1]).endswith(a), data
 
-    assert hint_command(data)[1] == str(themes / "a first's.statusbar"), data
+    assert hint_command(data)[1] == str(themes / "a first's.stbt"), data
 
     for keys in (b"q", b"\x1b", b"\x03"):
         data = pick(binary, themes, keys)
@@ -111,7 +113,7 @@ def check_picker(binary, root):
     invalid.mkdir()
     for contents, diagnostic in ((b"[unknown]\n", b"unknown"), (b"", b"empty config"),
                                 (b"#" * 30000, b"limit")):
-        (invalid / "bad.statusbar").write_bytes(contents)
+        (invalid / "bad.stbt").write_bytes(contents)
         data = pick(binary, invalid, b"\r", apply_marker=diagnostic)
         assert PREFIX not in data and diagnostic in data and b"To use this theme" not in data, data
         assert b"__RESULT_0__" in data, data
@@ -121,7 +123,7 @@ def check_picker(binary, root):
         ({"STATUSBAR_CONFIG": str(root / "custom's config")}, root / "custom's config"),
     ):
         data = pick(binary, themes, b"\r", extra_env=variables)
-        assert hint_command(data) == ["cp", str(themes / "a first's.statusbar"), str(destination)], data
+        assert hint_command(data) == ["cp", str(themes / "a first's.stbt"), str(destination)], data
         assert not destination.exists(), destination
 
     # Applying the original again leaves no change to persist.
@@ -137,9 +139,9 @@ def check_live(picker, statusbar, root):
     themes.mkdir()
     old = "[line.old]\ntext = OLD_THEME\n"
     new = "".join(f"[line.row{i}]\ntext = NEW_ROW_{i}\n" for i in range(1, 6))
-    initial = root / "initial.statusbar"
+    initial = root / "initial.stbt"
     initial.write_text(old)
-    selected = themes / "new.statusbar"
+    selected = themes / "new.stbt"
     script = '''
 "$1" "$2"
 printf '__PICKER_DONE__'
@@ -186,7 +188,7 @@ def main():
         root = Path(directory).resolve()
         result = subprocess.run([picker, directory], capture_output=True,
                                 env=dict(env, STATUSBAR_SESSION_ID=TOKEN))
-        assert result.returncode == 1 and b"no .statusbar files" in result.stderr
+        assert result.returncode == 1 and b"no .stbt files" in result.stderr
         check_picker(picker, root)
         check_live(picker, statusbar, root)
 
