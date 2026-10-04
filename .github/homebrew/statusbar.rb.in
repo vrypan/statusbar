@@ -18,7 +18,8 @@ class Statusbar < Formula
   def install
     ENV["ZIG_GLOBAL_CACHE_DIR"] = (buildpath/".zig-global-cache").to_s
     system "zig", "build", "-Doptimize=ReleaseSafe",
-           "-Ddefault-themes-dir=#{opt_pkgshare}/themes", "--prefix", prefix
+           "-Ddefault-themes-dir=#{opt_pkgshare}/themes",
+           "-Ddefault-modules-dir=#{opt_pkgshare}/modules", "--prefix", prefix
     generate_completions_from_executable bin/"statusbar", "completion"
   end
 

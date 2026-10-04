@@ -44,7 +44,9 @@ statusbar-theme
 
 The Homebrew build uses its bundled theme directory by default; an explicit
 directory argument overrides it. Other builds require a directory unless
-compiled with `-Ddefault-themes-dir=/path/to/themes`.
+compiled with `-Ddefault-themes-dir=/path/to/themes`. That option also lets
+`statusbar config load pure` find `pure.stbt` in the default theme directory,
+after checking local files. See [file lookup](../../docs/config.md#find-themes-and-modules-by-name).
 
 Themes installed by Homebrew are package data and may be replaced on upgrade.
 Copy a theme to your own directory before customizing it.

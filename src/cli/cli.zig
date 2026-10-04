@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const zecli = @import("zecli");
+const config_paths = @import("config_paths");
 
 const config_flag = zecli.FlagSpec{
     .name = "config",
@@ -84,9 +85,12 @@ const config_commands = [_]zecli.CommandSpec{
         \\Validates FILE and replaces the current config with it. The new
         \\layout can change the number of rows without restarting your shell.
         \\An invalid config leaves the running bar unchanged.
+        \\Tries FILE, then FILE.stbt. Bare filenames also search the compiled-in
+        \\default theme directory, in the same order. Existing files take priority;
+        \\only missing files trigger fallback. - reads stdin.
         \\`statusbar config < FILE` is the same as `statusbar config load - < FILE`.
-        ++ "\n",
-        .examples = &.{ "config load my.stbt", "config show startup | statusbar config load -" },
+        ++ "\n" ++ (if (config_paths.default_themes_dir) |path| "Default theme directory: " ++ path ++ "\n" else "No default theme directory configured.\n"),
+        .examples = &.{ "config load pure", "config load my.stbt", "config show startup | statusbar config load -" },
     },
     .{
         .name = "import",
@@ -98,8 +102,11 @@ const config_commands = [_]zecli.CommandSpec{
         \\Merges new line, command and color definitions into the current
         \\config. Names must be unique within each kind; duplicates are rejected.
         \\Global settings require a full replacement with `load`.
-        ++ "\n",
-        .examples = &.{ "config import extra.stbm", "config import - < extra.stbm" },
+        \\Tries FILE, then FILE.stbm. Bare filenames also search the compiled-in
+        \\default module directory, in the same order. Existing files take priority;
+        \\only missing files trigger fallback. - reads stdin.
+        ++ "\n" ++ (if (config_paths.default_modules_dir) |path| "Default module directory: " ++ path ++ "\n" else "No default module directory configured.\n"),
+        .examples = &.{ "config import disk", "config import extra.stbm", "config import - < extra.stbm" },
     },
 };
 

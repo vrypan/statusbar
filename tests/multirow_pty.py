@@ -2722,6 +2722,49 @@ with tempfile.TemporaryDirectory() as folder:
     print('config import validates definitions, merges atomically, keeps running commands and line state')
 
 
+def check_config_lookup(binary):
+    child = CHILD_PRELUDE + r"""
+from pathlib import Path
+def wait_for(expected):
+    deadline = time.monotonic() + 4
+    while expected not in run('config', 'show'):
+        assert time.monotonic() < deadline, 'config update not applied'
+        time.sleep(.02)
+with tempfile.TemporaryDirectory() as folder:
+    os.chdir(folder)
+    exact = '[line.exact]\n'
+    suffixed = '[line.suffixed]\n'
+    Path('theme').write_text(exact)
+    Path('theme.stbt').write_text(suffixed)
+    run('config', 'load', 'theme'); wait_for(exact.strip())
+    assert run('config', 'show') == exact.strip()
+    Path('theme').unlink()
+    run('config', 'load', 'theme'); wait_for(suffixed.strip())
+    assert run('config', 'show') == suffixed.strip()
+    Path('extra.stbm').write_text('[line.extra.value]\n')
+    run('config', 'import', './extra'); wait_for('[line.extra.value]')
+    assert '[line.extra.value]' in run('config', 'show')
+    run('config', 'check', 'theme', code=1)
+    # An existing invalid or empty file must not load the valid suffixed file.
+    snapshot = run('config', 'show')
+    for contents in ('[unknown]\n', ''):
+        Path('theme').write_text(contents)
+        run('config', 'load', 'theme', code=2)
+        assert run('config', 'show') == snapshot
+    Path('invalid.stbt').write_text('[unknown]\n')
+    result = subprocess.run([b, 'config', 'load', 'invalid'], capture_output=True)
+    assert result.returncode == 2 and b'invalid.stbt:1:' in result.stderr, result.stderr
+    # Stdin remains literal even if a file named '-.stbt' exists.
+    Path('-.stbt').write_text('[unknown]\n')
+    run('config', 'load', '-', input=b'[line.stdin]\n'); wait_for('[line.stdin]')
+    assert run('config', 'show') == '[line.stdin]'
+mark('LOOKUP_OK')
+"""
+    code, data = run_session(binary, '[line.base]\n', child, timeout=15)
+    assert code == 0 and b'LOOKUP_OK' in data, data[-5000:]
+    print('config lookup: exact precedence, extensions, validation labels and stdin passed')
+
+
 def check_reload_lines(binary):
     child = CHILD_PRELUDE + r'''
 run('update', 'a', 'kept', '--status', 'success')
@@ -2939,6 +2982,7 @@ def main():
     check_push_completion(binary)
     check_push_initial_status(binary)
     check_push_spinner(binary)
+    check_config_lookup(binary)
     check_reload_lines(binary)
     check_config_import(binary)
     check_config_remove(binary)

@@ -56,11 +56,10 @@ statusbar config import samples/modules/disk.stbm
 statusbar config import samples/modules/weather.stbm
 ```
 
-For Homebrew:
+For Homebrew, the compiled-in module directory lets you use a bare name:
 
 ```sh
-modules_dir="$(brew --prefix statusbar)/share/statusbar/modules"
-statusbar config import "$modules_dir/disk.stbm"
+statusbar config import disk
 ```
 
 New lines appear in import order, above temporary lines. Importing the same

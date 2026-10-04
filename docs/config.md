@@ -96,6 +96,49 @@ for the config path selected for a new session. See [usage](usage.md#config).
 For generated configs and here-documents, see
 [reading a config from stdin](usage.md#generate-a-config-on-the-fly).
 
+## Find themes and modules by name
+
+Inside a session, you can omit the extension:
+
+```sh
+statusbar config load ./my-theme       # also tries ./my-theme.stbt
+statusbar config import ./disk         # also tries ./disk.stbm
+```
+
+For `load`, lookup tries the supplied path first, then appends `.stbt` if it
+is not already present. `import` does the same with `.stbm`. Only missing
+files trigger fallback: an existing but invalid, empty, unreadable or oversized
+file reports an error.
+
+A bare filename, with no `/`, also searches the compiled-in default directory:
+first the exact filename, then the filename with its extension. Local files
+win. Paths containing `/`, including `./disk`, stay local to the supplied
+path. `-` still reads stdin, and `config check` and startup `--config` use
+only the exact supplied path.
+
+Homebrew builds configure both bundled directories, so these work from any
+working directory without a matching local file:
+
+```sh
+statusbar config load pure
+statusbar config import disk
+```
+
+For source builds, set the directories at build time:
+
+```sh
+zig build -Ddefault-themes-dir="$PWD/samples/themes" \
+  -Ddefault-modules-dir="$PWD/samples/modules"
+```
+
+Use absolute paths for predictable lookup from any working directory.
+Relative directory settings resolve from the command's working directory.
+Without these options, no default search directories are configured.
+`-Ddefault-themes-dir` also supplies the theme picker's default directory.
+`-Dthemes-dir` and `-Dmodules-dir` choose installation destinations separately;
+they do not configure lookup. Run `statusbar config load --help` or
+`statusbar config import --help` to see the compiled-in directory.
+
 ## Inspect the parsed configuration
 
 Use `config show --json` to inspect the active configuration. To inspect the

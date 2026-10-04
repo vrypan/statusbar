@@ -6,6 +6,11 @@ order they were added.
 
 ## Unreleased
 
+- Let `config load FILE` also try `FILE.stbt` and `config import FILE` try
+  `FILE.stbm`; bare names search compiled-in default directories after local
+  files. Share `-Ddefault-themes-dir` with the picker and add
+  `-Ddefault-modules-dir`; configure both for Homebrew
+
 - **Breaking:** use `.stbt` for themes and complete samples, and `.stbm` for
   module fragments. Update theme discovery, bundled files, packaging and
   examples; the startup filename remains `config.statusbar`, and explicit

@@ -58,6 +58,7 @@ fn addLayers(
     optimize: std.builtin.OptimizeMode,
     packages: Packages,
     metrics: *std.Build.Step.Options,
+    config_paths: *std.Build.Module,
 ) Layers {
     var layers: Layers = undefined;
     for (std.enums.values(Layer)) |layer| {
@@ -77,6 +78,7 @@ fn addLayers(
     layers.get(.model).addImport("zunic", packages.zunic);
     layers.get(.model).addImport("shipped_configs", shippedConfigs(b));
     const cli = layers.get(.cli);
+    cli.addImport("config_paths", config_paths);
     cli.addImport("zecli", packages.zecli);
     cli.addImport("completion", packages.completion);
     // The sample config doubles as the built-in default, so the two can't
@@ -105,6 +107,12 @@ pub fn build(b: *std.Build) void {
     const guide_dir = b.option([]const u8, "guide-dir", "Agent guide directory relative to the install prefix") orelse "share/statusbar";
     b.installFile("AGENT_SETUP.md", b.pathJoin(&.{ guide_dir, "AGENT_SETUP.md" }));
 
+    const config_paths = b.addOptions();
+    config_paths.addOption(?[]const u8, "default_themes_dir", b.option([]const u8, "default-themes-dir", "Default theme directory for config load and statusbar-theme"));
+    config_paths.addOption(?[]const u8, "default_modules_dir", b.option([]const u8, "default-modules-dir", "Default module directory for config import"));
+
+    const config_paths_module = config_paths.createModule();
+
     const options = b.addOptions();
     options.addOption([]const u8, "version", manifest.version);
 
@@ -116,7 +124,7 @@ pub fn build(b: *std.Build) void {
     };
     const production_metrics = b.addOptions();
     production_metrics.addOption(bool, "enabled", false);
-    const layers = addLayers(b, target, optimize, packages, production_metrics);
+    const layers = addLayers(b, target, optimize, packages, production_metrics, config_paths_module);
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -149,9 +157,7 @@ pub fn build(b: *std.Build) void {
     theme_mod.addImport("session", layers.get(.session));
     theme_mod.addImport("platform", layers.get(.platform));
     theme_mod.addOptions("build_options", options);
-    const theme_options = b.addOptions();
-    theme_options.addOption(?[]const u8, "default_themes_dir", b.option([]const u8, "default-themes-dir", "Default directory for statusbar-theme when no argument is given"));
-    theme_mod.addOptions("theme_options", theme_options);
+    theme_mod.addImport("theme_options", config_paths_module);
     const theme_exe = b.addExecutable(.{ .name = "statusbar-theme", .root_module = theme_mod });
     b.installArtifact(theme_exe);
 
@@ -162,7 +168,7 @@ pub fn build(b: *std.Build) void {
 
     const benchmark_metrics = b.addOptions();
     benchmark_metrics.addOption(bool, "enabled", true);
-    const bench_layers = addLayers(b, target, optimize, packages, benchmark_metrics);
+    const bench_layers = addLayers(b, target, optimize, packages, benchmark_metrics, config_paths_module);
     const bench_mod = b.createModule(.{
         .root_source_file = b.path("src/tools/bench.zig"),
         .target = target,

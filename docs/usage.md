@@ -205,7 +205,11 @@ statusbar config load ~/.config/statusbar/config.statusbar
 | `import FILE` | Add new line, command and color definitions |
 | `show [current|startup|default] --json` | Print the full parsed config as JSON |
 
-`FILE` is a filename, or `-` to read stdin. Bare `statusbar config` loads
+`load FILE` also tries `FILE.stbt`; `import FILE` also tries `FILE.stbm`.
+Bare filenames then search the compiled-in theme or module directory, when
+configured. Local files take priority, and only missing files trigger fallback.
+See [file lookup](config.md#find-themes-and-modules-by-name) for build options.
+`check FILE` uses the exact path. `-` reads stdin. Bare `statusbar config` loads
 redirected input and shows help when run directly in a terminal:
 
 ```sh

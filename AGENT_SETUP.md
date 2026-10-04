@@ -59,6 +59,10 @@ builds, or `modules/` in release archives). Read its `README.md` for platforms
 and dependencies. Add selected modules with `statusbar config import FILE`
 or copy their definitions into a draft config. Modules use static names such
 as `disk.usage`; keep their names, references and command intervals together.
+`config import disk` also tries `disk.stbm`; `config load pure` also tries
+`pure.stbt`. Bare names check local files before their compiled-in default
+directory. Homebrew builds configure both directories; inspect command help
+for other builds. Paths containing `/` do not search the default directory.
 Add fragments with `config import FILE`; load complete themes with
 `config load FILE`. Use `config show --json` to inspect definitions and
 `statusbar remove PREFIX` to remove a group, including its temporary lines.
