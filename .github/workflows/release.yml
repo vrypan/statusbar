@@ -31,7 +31,7 @@ jobs:
       # Keep this in sync with build.zig.zon minimum_zig_version.
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
 
       - name: Derive release version
         id: version
@@ -64,7 +64,7 @@ jobs:
         run: make test-integration
 
       - name: Build release archives
-        run: make -j3 package OPTIMIZE=ReleaseSafe
+        run: make -j3 package OPTIMIZE=safe
 
       - name: Generate checksums
         shell: bash

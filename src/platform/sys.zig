@@ -20,13 +20,13 @@ pub const Fd = posix.fd_t;
 
 // --- declarations std does not provide at all ------------------------------
 //
-// Zig 0.16 does not declare the four PTY allocation functions below.
+// std.posix does not declare the four PTY allocation functions below.
 
 extern "c" fn posix_openpt(oflag: c_int) c_int;
 extern "c" fn grantpt(fd: c_int) c_int;
 extern "c" fn unlockpt(fd: c_int) c_int;
 extern "c" fn ptsname(fd: c_int) ?[*:0]const u8;
-// Zig 0.16's std.posix.tcgetpgrp uses the Linux syscall signature and
+// std.posix.tcgetpgrp uses the Linux syscall signature and
 // has no macOS backend, so it cannot replace this libc call there.
 extern "c" fn tcgetpgrp(fd: c_int) posix.pid_t;
 extern "c" fn getpgrp() posix.pid_t;
@@ -285,7 +285,7 @@ test "nonblocking pipes preserve backpressure, bytes, and EOF" {
 
     var buffer: [4096]u8 = undefined;
     try std.testing.expectEqual(NonBlockingRead.would_block, try readNonBlocking(fds[0], &buffer));
-    const payload = "x" ** 4096;
+    const payload = &@as([4096]u8, @splat('x'));
     var written: usize = 0;
     while (true) {
         switch (try writeNonBlocking(io, fds[1], payload)) {

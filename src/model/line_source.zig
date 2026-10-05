@@ -8,6 +8,7 @@
 //! line's own value or status. Command outputs live in `command_outputs.zig`.
 
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 const posix = std.posix;
 const datetime = @import("datetime.zig");
 const terminal_properties = @import("terminal_properties.zig");
@@ -563,15 +564,17 @@ test "failed rebuild keeps the old content and retries the dirty line" {
     f.set(0, .{ .value = .{ .replace = "old" } });
     _ = try f.source.update(&.{}, 0);
     try std.testing.expect(!f.source.stale and !f.source.states.items[0].dirty);
-    f.set(0, .{ .value = .{ .replace = "x" ** 1000 } });
+    f.set(0, .{ .value = .{ .replace = repeat("x", 1000) } });
     failing.fail_index = failing.alloc_index;
+    failing.resize_fail_index = failing.resize_index;
     try std.testing.expectError(error.OutOfMemory, f.source.update(&.{}, 1));
     try std.testing.expectEqualStrings("old", f.source.content.line(0));
     try std.testing.expect(f.source.stale and f.source.states.items[0].dirty);
     try std.testing.expectEqual(@as(i64, 0), f.source.timeout(2));
     failing.fail_index = std.math.maxInt(usize);
+    failing.resize_fail_index = std.math.maxInt(usize);
     try std.testing.expect((try f.source.update(&.{}, 2)).content_changed);
-    try std.testing.expectEqualStrings("x" ** 1000, f.source.content.line(0));
+    try std.testing.expectEqualStrings(repeat("x", 1000), f.source.content.line(0));
     try std.testing.expect(!f.source.stale and !f.source.states.items[0].dirty);
 }
 

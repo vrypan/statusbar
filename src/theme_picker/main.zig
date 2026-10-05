@@ -23,7 +23,7 @@ pub const panic = std.debug.FullPanic(struct {
 
 fn terminate(sig: std.posix.SIG) callconv(.c) void {
     zooi.restore();
-    std.posix.system._exit(128 + @as(c_int, @intCast(@intFromEnum(sig))));
+    std.posix.system._exit(128 + @as(c_int, @intCast(@backingInt(sig))));
 }
 
 pub fn main(init: std.process.Init) !u8 {

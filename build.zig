@@ -27,7 +27,7 @@ fn shippedConfigs(b: *std.Build) *std.Build.Module {
     var index: std.ArrayList(u8) = .empty;
     index.appendSlice(b.allocator, "pub const Config = struct { name: []const u8, text: []const u8, prefix: ?[]const u8 = null };\npub const all = [_]Config{\n") catch @panic("OOM");
     for ([_][]const u8{ "samples", "samples/themes", "samples/modules" }) |directory| {
-        var dir = b.build_root.handle.openDir(io, directory, .{ .iterate = true }) catch @panic("cannot open shipped config directory");
+        var dir = b.root.openDir(io, directory, .{ .iterate = true }) catch @panic("cannot open shipped config directory");
         defer dir.close(io);
         const extension = if (std.mem.eql(u8, directory, "samples/modules")) ".stbm" else ".stbt";
         var it = dir.iterate();
@@ -55,7 +55,7 @@ const Packages = struct {
 fn addLayers(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     packages: Packages,
     metrics: *std.Build.Step.Options,
     config_paths: *std.Build.Module,
@@ -163,7 +163,7 @@ pub fn build(b: *std.Build) void {
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    run_cmd.addPassthruArgs();
     b.step("run", "Run statusbar").dependOn(&run_cmd.step);
 
     const benchmark_metrics = b.addOptions();

@@ -70,8 +70,8 @@ pub fn remove(gpa: std.mem.Allocator, source: []const u8, prefix: []const u8, di
 }
 
 fn checkVariants(cfg: *const config.Config, variants: *const config.Variants, prefix: []const u8, diag: *config.Diagnostic) !void {
-    inline for (std.meta.fields(config.Variants)) |field| {
-        const optional: ?config.Template = @field(variants, field.name);
+    inline for (@typeInfo(config.Variants).@"struct".field_names) |field_name| {
+        const optional: ?config.Template = @field(variants, field_name);
         if (optional) |template| try checkTemplate(cfg, template, prefix, diag);
     }
 }

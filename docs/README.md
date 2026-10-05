@@ -279,7 +279,7 @@ both shell-specific cases; missing shells are explicitly reported as skipped.
 The generic terminal checks always run. Release verification installs both
 shells and runs this gate before building release archives.
 
-For rendering measurements, run `zig build bench -Doptimize=ReleaseFast`.
+For rendering measurements, run `zig build bench -Doptimize=fast`.
 It separates first-use color preparation from repeated effects and tests
 multiple colors and tracked regions. See [measurement details](internals.md#resource-limits-and-measurement)
 before comparing timings; a single warm frame does not predict first-use cost.

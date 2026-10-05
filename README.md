@@ -16,10 +16,10 @@ brew install vrypan/tap/statusbar
 
 Or download the latest [release](https://github.com/vrypan/statusbar/releases).
 
-Or build from source with Zig 0.16 on macOS or Linux:
+Or build from source with Zig 0.17 on macOS or Linux:
 
 ```sh
-zig build -Doptimize=ReleaseSafe
+zig build -Doptimize=safe
 # Binaries: zig-out/bin/statusbar and zig-out/bin/statusbar-theme
 ```
 

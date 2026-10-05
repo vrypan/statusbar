@@ -1,6 +1,6 @@
 //! Throughput benchmark for the translators every byte passes through.
 //!
-//!     zig build bench -Doptimize=ReleaseFast
+//!     zig build bench -Doptimize=fast
 
 const std = @import("std");
 const Output = @import("terminal").output.Output;
@@ -174,7 +174,7 @@ fn unrelatedRowBench(io: std.Io, out: *std.Io.Writer) !void {
     var meta: Meta = .{};
     meta.spans[0] = .{ .id = 0, .start = 0, .end = 200 };
     meta.len = 1;
-    for (1..4) |row| _ = try content.set(row, "x" ** 200, "", meta);
+    for (1..4) |row| _ = try content.set(row, &@as([200]u8, @splat('x')), "", meta);
     const look: Look = .{};
     try renderer.resize(4, 512);
     for (0..4) |n| {

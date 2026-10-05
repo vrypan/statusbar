@@ -34,17 +34,17 @@ pub const Exec = struct {
         const allocator = arena.allocator();
         const argv = try allocator.allocSentinel(?[*:0]const u8, words.len, null);
         for (words, 0..) |word, i| {
-            argv[i] = (try allocator.dupeZ(u8, word)).ptr;
+            argv[i] = (try allocator.dupeSentinel(u8, word, 0)).ptr;
         }
         var paths: std.ArrayList([:0]const u8) = .empty;
         if (std.mem.indexOfScalar(u8, words[0], '/') != null or words[0].len == 0) {
-            try paths.append(allocator, try allocator.dupeZ(u8, words[0]));
+            try paths.append(allocator, try allocator.dupeSentinel(u8, words[0], 0));
         } else {
             var dirs = std.mem.splitScalar(u8, path orelse default_path, ':');
             while (dirs.next()) |dir| {
                 // Empty PATH components mean the current directory.
                 try paths.append(allocator, if (dir.len == 0)
-                    try allocator.dupeZ(u8, words[0])
+                    try allocator.dupeSentinel(u8, words[0], 0)
                 else
                     try std.fmt.allocPrintSentinel(allocator, "{s}/{s}", .{ dir, words[0] }, 0));
             }

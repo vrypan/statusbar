@@ -9,7 +9,7 @@ pub const Log = struct {
 
     pub fn open(io: std.Io, path: []const u8) !Log {
         var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const path_z = try std.fmt.bufPrintZ(&path_buf, "{s}", .{path});
+        const path_z = try std.fmt.bufPrintSentinel(&path_buf, "{s}", .{path}, 0);
         if (std.mem.indexOfScalar(u8, path, 0) != null) return error.InvalidPath;
         const fd = try std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{
             .ACCMODE = .WRONLY,

@@ -13,6 +13,7 @@
 //! Targets and names use only letters, digits, `_`, `-` and `.`, so they travel
 //! as plain text. Every request but an update is acknowledged.
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 const types = @import("line_types.zig");
 const Status = types.Status;
 const Target = types.Target;
@@ -255,8 +256,8 @@ test "requests round-trip omitted, empty and reset values with optional status" 
         try std.testing.expectEqualDeep(case.request, try envelope.decode(&decoded));
         try std.testing.expectEqual(case.request != .update, envelope.needsReply());
     }
-    const maximum = "x" ** types.max_value;
-    const wire = try encode(&packet, "0123456789abcdef0123456789abcdef", .{ .set = .{ .target = .{ .name = "x" ** types.max_name }, .value = .{ .replace = maximum }, .status = .success } });
+    const maximum = repeat("x", types.max_value);
+    const wire = try encode(&packet, "0123456789abcdef0123456789abcdef", .{ .set = .{ .target = .{ .name = repeat("x", types.max_name) }, .value = .{ .replace = maximum }, .status = .success } });
     var full = try Envelope.parse(wire);
     try std.testing.expectEqualStrings(maximum, (try full.decode(&decoded)).set.value.replace);
 }
@@ -264,16 +265,16 @@ test "requests round-trip omitted, empty and reset values with optional status" 
 test "hostile and truncated packets are rejected" {
     var decoded: [types.max_value]u8 = undefined;
     for ([_][]const u8{
-        "1|t|C||stream|-|a.b", "1|t|C||fifo|-|",                "1|t|C||stream|-|" ++ "x" ** (types.max_prefix + 1),
-        "1|t|C|job|empty|bad", "1|t|C||fifo|normal|bad.prefix", "1|t|C|job|stream|",
-        "1|t|S",               "1|t|S|build",                   "1|t|S|build|-",
-        "1|t|S|build|x|-",     "1|t|S|build|V:!|-",             "1|t|S|build|-|fail",
-        "1|t|S|a..b|-|-",      "1|t|S|0|-|-",                   "1|t|S|build|-|-|x",
-        "1|t|C",               "1|t|C|5|stream",                "1|t|C|job|pipe",
-        "1|t|U|0|",            "1|t|U|job|eA==",                "1|t|U|1",
-        "1|t|F|1",             "1|t|F|1|fail",                  "1|t|P|",
-        "1|t|P|a/b",           "1|t|A|1",                       "1|t|B",
-        "1|t|X|..",            "1|t|U|1|" ++ "eHh4" ** 342,     "1|t|L|extra",
+        "1|t|C||stream|-|a.b", "1|t|C||fifo|-|",                  "1|t|C||stream|-|" ++ repeat("x", (types.max_prefix + 1)),
+        "1|t|C|job|empty|bad", "1|t|C||fifo|normal|bad.prefix",   "1|t|C|job|stream|",
+        "1|t|S",               "1|t|S|build",                     "1|t|S|build|-",
+        "1|t|S|build|x|-",     "1|t|S|build|V:!|-",               "1|t|S|build|-|fail",
+        "1|t|S|a..b|-|-",      "1|t|S|0|-|-",                     "1|t|S|build|-|-|x",
+        "1|t|C",               "1|t|C|5|stream",                  "1|t|C|job|pipe",
+        "1|t|U|0|",            "1|t|U|job|eA==",                  "1|t|U|1",
+        "1|t|F|1",             "1|t|F|1|fail",                    "1|t|P|",
+        "1|t|P|a/b",           "1|t|A|1",                         "1|t|B",
+        "1|t|X|..",            "1|t|U|1|" ++ repeat("eHh4", 342), "1|t|L|extra",
     }) |wire| {
         var envelope = try Envelope.parse(wire);
         try std.testing.expectError(error.InvalidPacket, envelope.decode(&decoded));
@@ -290,7 +291,7 @@ test "replies are bounded and distinguish outcomes" {
     try std.testing.expectEqualStrings("", (try decodeReply("ERR")).rejected);
     const path = "/tmp/statusbar-state-1-2.fifos/build";
     try std.testing.expectEqualStrings(path, (try decodeReply(try encodeReply(&buffer, .{ .path = path }))).path);
-    try std.testing.expectError(error.NoSpaceLeft, encodeReply(&buffer, .{ .path = "x" ** 256 }));
+    try std.testing.expectError(error.NoSpaceLeft, encodeReply(&buffer, .{ .path = repeat("x", 256) }));
 }
 
 test "explicit names ignore prefixes" {

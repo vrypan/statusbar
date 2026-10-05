@@ -2,19 +2,19 @@
     .name = .statusbar,
     .version = "0.5.1",
     .fingerprint = 0x7b494927cd0cc4b4,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .zunic = .{
-            .url = "git+https://github.com/vrypan/zunic.git#2ec52c05ea8eda6a62204c11120baff09ab6a49a",
-            .hash = "zunic-0.5.0-yeyUTQnOAAFkzjXRgvW4KsrZIlaSIta1AfGfLL9hW7ud",
+            .url = "git+https://github.com/vrypan/zunic.git#deaf0507e58a09a55b665cb268a263d143d81b3a",
+            .hash = "zunic-0.6.0-yeyUTUrSAAEkT3DVzicXLRWNsVJ7-OllC7DtB_8Fu6XE",
         },
         .zecli = .{
-            .url = "git+https://github.com/vrypan/zecli.git?ref=v0.5.0#08fa9b3b45b9236748e582560047a913dd278bfe",
-            .hash = "zecli-0.5.0-j151k2mABAAWJpLY2X_rDCKYyjEMrK8eZreqwSC6xV4_",
+            .url = "git+https://github.com/vrypan/zecli.git#c64744a82b9481983de2caf1c5e8a168d9ec7562",
+            .hash = "zecli-0.6.0-j151k8qBBABZFclvToglDn1Ij3X_aOBRZb_qY8-pKcFu",
         },
         .zooi = .{
-            .url = "git+https://github.com/vrypan/zooi.git#99885e109c951ceb17e1500184558ff81006a20c",
-            .hash = "zooi-0.3.3-c99W4EroAwA0-F8-IXHN6sBnbbBjOuIwmGWwapbiMY8t",
+            .url = "git+https://github.com/vrypan/zooi.git#bbde9aa5bb72b85a82675bedd55c3bee88fb1369",
+            .hash = "zooi-0.4.0-c99W4MkiBADpmRSQDtBdteQ5JuWXtqweW60z0ILx_9ie",
         },
     },
     .paths = .{

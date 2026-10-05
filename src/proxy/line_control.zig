@@ -281,6 +281,7 @@ const Harness = struct {
         self.runtime = try Runtime.initInitial(gpa, std.testing.io, &self.cfg, &self.lines, layout.bar, layout.cols);
         self.runtime.owned_text = try gpa.dupe(u8, text);
         self.proxy = schedulerProxy();
+        self.proxy.gpa = gpa;
         self.proxy.runtime = &self.runtime;
         self.proxy.lines = &self.lines;
         self.proxy.layout = layout;

@@ -4,6 +4,7 @@
 //! numeric parameters, intermediates and a final byte.
 
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 
 /// The longest CSI the translator buffers, final byte included.
 pub const max_seq = 64;
@@ -96,6 +97,6 @@ test "a CSI splits into marker, parameters, intermediates and final" {
 
 test "unparseable parameters are invalid and stray bytes foreign" {
     try std.testing.expectEqual(Parsed.invalid, parse("1:2H"));
-    try std.testing.expectEqual(Parsed.invalid, parse(("1;" ** max_params) ++ "1H"));
+    try std.testing.expectEqual(Parsed.invalid, parse((repeat("1;", max_params)) ++ "1H"));
     try std.testing.expectEqual(Parsed.foreign, parse("1 ?H"));
 }

@@ -69,9 +69,9 @@ const JsonVariants = struct {
 
     pub fn jsonStringify(self: @This(), json: *std.json.Stringify) !void {
         try json.beginObject();
-        inline for (std.meta.fields(config.Variants)) |field| {
-            try json.objectField(field.name);
-            const template: ?templates.Template = @field(self.value, field.name);
+        inline for (@typeInfo(config.Variants).@"struct".field_names) |field_name| {
+            try json.objectField(field_name);
+            const template: ?templates.Template = @field(self.value, field_name);
             if (template) |t| {
                 try json.beginArray();
                 for (t.parts) |part| {

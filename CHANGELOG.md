@@ -6,6 +6,9 @@ order they were added.
 
 ## Unreleased
 
+- Require Zig 0.17, update build and standard library APIs, and upgrade
+  zunic to 0.6.0, zecli to 0.6.0, and zooi to 0.4.0
+
 - **Breaking:** use `default.stbt` as the startup config filename. Search the
   user config directory for themes and modules before bundled directories;
   warn about old `config.statusbar` and `config` startup files

@@ -6,7 +6,7 @@ class Statusbar < Formula
   version "@VERSION@"
   head "https://github.com/vrypan/statusbar.git", branch: "main"
 
-  depends_on "zig@0.16" => :build
+  depends_on "zig@0.17" => :build
 
   # Homebrew permits network access during fetch, then builds offline. Keep
   # Zig's dependency cache in the retained build tree for the build step.
@@ -17,7 +17,7 @@ class Statusbar < Formula
 
   def install
     ENV["ZIG_GLOBAL_CACHE_DIR"] = (buildpath/".zig-global-cache").to_s
-    system "zig", "build", "-Doptimize=ReleaseSafe",
+    system "zig", "build", "-Doptimize=safe",
            "-Ddefault-themes-dir=#{opt_pkgshare}/themes",
            "-Ddefault-modules-dir=#{opt_pkgshare}/modules", "--prefix", prefix
     generate_completions_from_executable bin/"statusbar", "completion"

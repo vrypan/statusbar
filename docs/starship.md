@@ -7,7 +7,7 @@ The terminal keeps only the prompt character:
 ❯ git status
 …
 ❯
-statusbar on main [!⇡] via v0.16.0                             18:34
+statusbar on main [!⇡] via v0.17.0                             18:34
 ```
 
 ## Zsh

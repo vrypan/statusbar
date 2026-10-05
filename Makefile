@@ -1,7 +1,7 @@
 # Build statusbar for every supported release target.
 
 ZIG      ?= zig
-OPTIMIZE ?= ReleaseSafe
+OPTIMIZE ?= safe
 DIST     ?= dist
 VERSION  := $(shell sed -n 's/.*\.version = "\([^"]*\)".*/\1/p' build.zig.zon)
 

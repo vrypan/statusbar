@@ -1,5 +1,6 @@
 //! Plain Unicode spinner frames, measured once when the config is loaded.
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 const zunic = @import("zunic");
 
 pub const Spinner = struct {
@@ -45,7 +46,7 @@ test "spinner frames are whole graphemes with a fixed width" {
     try std.testing.expectEqualStrings("a\u{301}", spinner.frame(3).text);
     try std.testing.expectEqual(@as(usize, 0), (try Spinner.parse("")).len);
     try std.testing.expectEqual(@as(usize, 4), (try Spinner.parse("-\\|/")).len);
-    for ([_][]const u8{ "\xff", "a\n", "\x1b[31m", "\u{85}", "\u{301}", "a" ** 129, "a" ** 1025 }) |invalid| {
+    for ([_][]const u8{ "\xff", "a\n", "\x1b[31m", "\u{85}", "\u{301}", repeat("a", 129), repeat("a", 1025) }) |invalid| {
         try std.testing.expectError(error.InvalidSpinner, Spinner.parse(invalid));
     }
 }

@@ -2,6 +2,7 @@
 //! operations. Shared by the config parser, the session store, the control
 //! protocol and the CLI.
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 const names = @import("shared").names;
 
 /// The longest value a line accepts, after normalization.
@@ -77,10 +78,10 @@ pub fn normalizeValue(text: []u8) []u8 {
 }
 
 test "names are case-sensitive words and exclude all-digit spellings" {
-    for ([_][]const u8{ "build", "Build", "push", "a-1", "_x", "9lives", "codex.usage", "a.b-c.d", "x" ** max_name }) |name| {
+    for ([_][]const u8{ "build", "Build", "push", "a-1", "_x", "9lives", "codex.usage", "a.b-c.d", repeat("x", max_name) }) |name| {
         try std.testing.expect(validName(name));
     }
-    for ([_][]const u8{ "", "5", "007", ".", "..", ".a", "a.", "a..b", "a b", "a/b", "ü", "x" ** (max_name + 1) }) |name| {
+    for ([_][]const u8{ "", "5", "007", ".", "..", ".a", "a.", "a..b", "a b", "a/b", "ü", repeat("x", (max_name + 1)) }) |name| {
         try std.testing.expect(!validName(name));
     }
 }
@@ -109,9 +110,9 @@ test "value normalization keeps spaces on one line" {
 }
 
 test "prefixes fit generated names for any numeric ID and exclude dots" {
-    for ([_][]const u8{ "tmp", "build", "123", "_x-9", "x" ** max_prefix }) |prefix| try std.testing.expect(validPrefix(prefix));
-    for ([_][]const u8{ "", "a.b", "a b", "ü", "x" ** (max_prefix + 1) }) |prefix| try std.testing.expect(!validPrefix(prefix));
+    for ([_][]const u8{ "tmp", "build", "123", "_x-9", repeat("x", max_prefix) }) |prefix| try std.testing.expect(validPrefix(prefix));
+    for ([_][]const u8{ "", "a.b", "a b", "ü", repeat("x", (max_prefix + 1)) }) |prefix| try std.testing.expect(!validPrefix(prefix));
     var buffer: [max_name]u8 = undefined;
-    const name = try std.fmt.bufPrint(&buffer, "{s}-{d}", .{ "x" ** max_prefix, std.math.maxInt(u64) });
+    const name = try std.fmt.bufPrint(&buffer, "{s}-{d}", .{ repeat("x", max_prefix), std.math.maxInt(u64) });
     try std.testing.expect(validName(name));
 }

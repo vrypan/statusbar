@@ -2,6 +2,7 @@
 //! fill, its tracked regions, and the bar-wide style it is drawn with.
 
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 const markup = @import("markup.zig");
 
 /// A line's markup, including escaped values and command output, is bounded
@@ -151,13 +152,15 @@ test "failed growth preserves text, pattern and metadata and allows a retry" {
     const before: Meta = .{ .split = 2, .identity = 7 };
     _ = try content.set(0, "old", "-", before);
     failing.fail_index = failing.alloc_index;
-    try std.testing.expectError(error.OutOfMemory, content.set(0, "x" ** 1000, ".", .{ .identity = 8 }));
+    failing.resize_fail_index = failing.resize_index;
+    try std.testing.expectError(error.OutOfMemory, content.set(0, repeat("x", 1000), ".", .{ .identity = 8 }));
     try std.testing.expectEqualStrings("old", content.line(0));
     try std.testing.expectEqualStrings("-", content.lines[0].pattern());
     try std.testing.expect(Meta.eql(before, content.lines[0].meta));
     failing.fail_index = std.math.maxInt(usize);
-    try std.testing.expect(try content.set(0, "x" ** 1000, ".", .{ .identity = 8 }));
-    try std.testing.expectEqualStrings("x" ** 1000, content.line(0));
+    failing.resize_fail_index = std.math.maxInt(usize);
+    try std.testing.expect(try content.set(0, repeat("x", 1000), ".", .{ .identity = 8 }));
+    try std.testing.expectEqualStrings(repeat("x", 1000), content.line(0));
     try std.testing.expectEqualStrings(".", content.lines[0].pattern());
     try std.testing.expectEqual(@as(u64, 8), content.lines[0].meta.identity);
 }

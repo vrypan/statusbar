@@ -7,6 +7,7 @@
 //! tracked region.
 
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 const posix = std.posix;
 const config = @import("config.zig");
 const status = @import("status.zig");
@@ -172,7 +173,7 @@ test "outputs keep a normalized, bounded first line and report changes" {
     try std.testing.expect(!same.changed and same.previously_seen);
     const empty = outputs.keep(1, "");
     try std.testing.expect(empty.changed and !empty.previously_seen);
-    const long = "x" ** (max_output_line + 1);
+    const long = repeat("x", (max_output_line + 1));
     _ = outputs.keep(0, long);
     try std.testing.expectEqualStrings(long[0..max_output_line], outputs.output(0));
     try std.testing.expect(!outputs.keep(0, long[0..max_output_line] ++ "y").changed);

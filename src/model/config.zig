@@ -38,6 +38,7 @@
 //! by `deinit`.
 
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 const statements = @import("config_statements.zig");
 const sections = @import("config_sections.zig");
 const templates = @import("templates.zig");
@@ -209,11 +210,11 @@ pub fn parse(allocator: std.mem.Allocator, text: []const u8, diag: *Diagnostic) 
             Template{};
         spec.default_template = fallback;
         diag.line = if (raw.default) |source| source.fragments.items[0].line else 0;
-        inline for (std.meta.fields(Variants)) |field| {
-            if (comptime field.type == Template) {
-                @field(spec.default_variants, field.name) = try templates.expandDefault(arena, @field(spec.variants, field.name), fallback, diag);
-            } else if (@field(spec.variants, field.name)) |variant| {
-                @field(spec.default_variants, field.name) = try templates.expandDefault(arena, variant, fallback, diag);
+        inline for (@typeInfo(Variants).@"struct".field_names, @typeInfo(Variants).@"struct".field_types) |field_name, field_type| {
+            if (comptime field_type == Template) {
+                @field(spec.default_variants, field_name) = try templates.expandDefault(arena, @field(spec.variants, field_name), fallback, diag);
+            } else if (@field(spec.variants, field_name)) |variant| {
+                @field(spec.default_variants, field_name) = try templates.expandDefault(arena, variant, fallback, diag);
             }
         }
     }
@@ -257,7 +258,7 @@ test "standalone lines and first-segment groups have exclusive names" {
         "[line.disk]\n[line.diskette.usage]\n",
         "[line.disk.usage]\n[line.disk.usage.detail]\n",
         "[line.disk2]\n[line.2disk.usage]\n",
-        "[line." ++ "x" ** 64 ++ "]\n",
+        "[line." ++ repeat("x", 64) ++ "]\n",
     }) |text| {
         var diag: Diagnostic = .{};
         var cfg = try parse(std.testing.allocator, text, &diag);
@@ -444,8 +445,8 @@ test "commands and tracking regions keep their limits" {
     for (0..17) |n| try text.print(std.testing.allocator, "[command.c{d}]\nrun = true\n", .{n});
     try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, text.items, &diag));
     try std.testing.expectEqualStrings("too many commands", diag.message);
-    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.a]\ntext = " ++ "#[track]x#[notrack]" ** 17, &diag));
-    var ok = try parse(std.testing.allocator, "[line.a]\ntext = " ++ "#[track]x#[notrack]" ** 16, &diag);
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.a]\ntext = " ++ repeat("#[track]x#[notrack]", 17), &diag));
+    var ok = try parse(std.testing.allocator, "[line.a]\ntext = " ++ repeat("#[track]x#[notrack]", 16), &diag);
     ok.deinit();
 }
 
@@ -473,7 +474,7 @@ test "defaults compile as bounded templates" {
     var cfg = try parse(std.testing.allocator, "[line.a]\ndefault = \"##(value) #[bold]\"\n", &diag);
     defer cfg.deinit();
     try std.testing.expectEqualStrings("##(value) #[bold]", cfg.lines[0].default);
-    const long = "[line.a]\ndefault = " ++ "x" ** 1025 ++ "\n";
+    const long = "[line.a]\ndefault = " ++ repeat("x", 1025) ++ "\n";
     try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, long, &diag));
 }
 
@@ -487,7 +488,7 @@ test "default fragments append exactly and retain diagnostic origins" {
     try std.testing.expectEqual(@as(usize, 3), diag.line);
     try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.a]\ndefault = ok\ndefault .= #(\ndefault .= value)\n", &diag));
     try std.testing.expectEqual(@as(usize, 3), diag.line);
-    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.a]\ndefault = " ++ "x" ** 1024 ++ "\ndefault .= x\n", &diag));
+    try std.testing.expectError(error.InvalidConfig, parse(std.testing.allocator, "[line.a]\ndefault = " ++ repeat("x", 1024) ++ "\ndefault .= x\n", &diag));
     try std.testing.expectEqual(@as(usize, 3), diag.line);
 }
 
@@ -503,7 +504,7 @@ test "default expressions and combined layouts are validated" {
         "default = #(fill:-)\ntext = #(value)#(fill: )",
         "default = #(fill:-)\ntext = #(value)#(value)",
         "default = #[track]x#[notrack]\ntext = #[track]#(value)#[notrack]",
-        "default = #[track]x#[notrack]\ntext = " ++ "#(value)" ** 17,
+        "default = #[track]x#[notrack]\ntext = " ++ repeat("#(value)", 17),
     }) |body| {
         const text = try std.fmt.allocPrint(std.testing.allocator, "[line.a]\n{s}\n", .{body});
         defer std.testing.allocator.free(text);

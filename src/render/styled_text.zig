@@ -1,6 +1,7 @@
 //! Semantic terminal styling and ANSI-transparent grapheme segmentation.
 //! Scratch borrows the expanded input only until the caller copies its spans.
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 const zunic = @import("zunic");
 
 pub const Color = @import("shared").color.Color;
@@ -50,8 +51,8 @@ pub const Patch = struct {
     overline: ?bool = null,
 
     pub fn apply(self: Patch, style: *Style) void {
-        inline for (@typeInfo(Patch).@"struct".fields) |f| {
-            if (@field(self, f.name)) |v| @field(style, f.name) = v;
+        inline for (@typeInfo(Patch).@"struct".field_names) |field_name| {
+            if (@field(self, field_name)) |v| @field(style, field_name) = v;
         }
     }
 };
@@ -377,10 +378,10 @@ test "tracking boundaries share grapheme ownership and preserve style and links"
     // The worst inline input needs every event slot without growing scratch.
     var boundaries: [max_boundaries]Boundary = undefined;
     for (&boundaries, 0..) |*b, n| b.* = .{ .offset = n, .region = if (n % 2 == 0) @intCast(n / 2) else null };
-    try scratch.parseTracked("\x1b[m" ** 1365, .{}, &boundaries);
+    try scratch.parseTracked(repeat("\x1b[m", 1365), .{}, &boundaries);
     try std.testing.expectEqual(@as(usize, inline_event_capacity), scratch.count);
     try std.testing.expectEqual(@as(usize, 0), scratch.extra_events.len);
-    try scratch.parseTracked("\x1b[m" ** 1365 ++ "x", .{}, &boundaries);
+    try scratch.parseTracked(repeat("\x1b[m", 1365) ++ "x", .{}, &boundaries);
     try std.testing.expectEqual(@as(usize, inline_event_capacity), scratch.count);
     try std.testing.expectEqual(@as(usize, 0), scratch.extra_events.len);
     try scratch.reserve(gpa, 5000);

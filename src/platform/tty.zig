@@ -39,8 +39,8 @@ pub fn enterRaw(fd: sys.Fd) !Saved {
     raw.cflag.PARENB = false;
     raw.cflag.CSIZE = .CS8;
 
-    raw.cc[@intFromEnum(posix.V.MIN)] = 1;
-    raw.cc[@intFromEnum(posix.V.TIME)] = 0;
+    raw.cc[@backingInt(posix.V.MIN)] = 1;
+    raw.cc[@backingInt(posix.V.TIME)] = 0;
 
     // NOW rather than FLUSH: FLUSH discards the input queue, which would eat
     // anything the user typed before the proxy finished starting up.

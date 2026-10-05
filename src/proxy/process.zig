@@ -16,7 +16,7 @@ pub fn onSignal(sig: posix.SIG) callconv(.c) void {
     const saved_errno = system._errno().*;
     const w = sig_pipe_w.load(.monotonic);
     if (w >= 0) {
-        const byte = [1]u8{@truncate(@intFromEnum(sig))};
+        const byte = [1]u8{@truncate(@backingInt(sig))};
         _ = system.write(w, &byte, 1);
     }
     system._errno().* = saved_errno;

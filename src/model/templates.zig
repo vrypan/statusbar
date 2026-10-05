@@ -13,6 +13,7 @@
 //! text, which must outlive them; the parts slice belongs to the allocator
 //! passed to `compile`.
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 const zunic = @import("zunic");
 const datetime = @import("datetime.zig");
 const terminal_properties = @import("terminal_properties.zig");
@@ -304,10 +305,10 @@ test "escapes and percents stay literal text" {
 test "malformed unknown and removed expressions are rejected" {
     var diag: Diagnostic = .{};
     for ([_][]const u8{
-        "#(unknown)",       "#(load)",          "#(exec:date)",       "#(tag)",          "#(id)",          "#(stream)",
-        "#(exit_code)",     "#(signal)",        "#(value",            "#[bold",          "#( value )",     "#(fill:)",
-        "#(fill:\u{301})",  "#(fill:\x1b[31m)", "#(fill:a)#(fill:b)", "#(command:none)", "#(spinner)",     "#(datetime:)",
-        "#(terminal:size)", "#[track]x",        "#[notrack]",         "#[bold,track]",   "#[track]" ** 17,
+        "#(unknown)",       "#(load)",          "#(exec:date)",       "#(tag)",          "#(id)",                "#(stream)",
+        "#(exit_code)",     "#(signal)",        "#(value",            "#[bold",          "#( value )",           "#(fill:)",
+        "#(fill:\u{301})",  "#(fill:\x1b[31m)", "#(fill:a)#(fill:b)", "#(command:none)", "#(spinner)",           "#(datetime:)",
+        "#(terminal:size)", "#[track]x",        "#[notrack]",         "#[bold,track]",   repeat("#[track]", 17),
     }) |text| {
         try std.testing.expectError(error.InvalidConfig, compileTest(text, .configured, &diag));
     }
@@ -320,7 +321,7 @@ test "more than thirty two parts and long expressions have no fixed cap" {
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(std.testing.allocator);
     for (0..100) |_| try text.appendSlice(std.testing.allocator, "x#(value)#[bold]");
-    try text.appendSlice(std.testing.allocator, "#(datetime:" ++ "%Y" ** 400 ++ ")");
+    try text.appendSlice(std.testing.allocator, "#(datetime:" ++ repeat("%Y", 400) ++ ")");
     var diag: Diagnostic = .{};
     const template = try compileTest(text.items, .configured, &diag);
     defer std.testing.allocator.free(template.parts);
@@ -329,7 +330,7 @@ test "more than thirty two parts and long expressions have no fixed cap" {
 
 test "tracking regions span expressions and fill" {
     var diag: Diagnostic = .{};
-    const template = try compileTest("#[track]a#(value)#(fill: )b#[notrack]" ++ "#[track]#[notrack]" ** 15, .configured, &diag);
+    const template = try compileTest("#[track]a#(value)#(fill: )b#[notrack]" ++ repeat("#[track]#[notrack]", 15), .configured, &diag);
     defer std.testing.allocator.free(template.parts);
     try std.testing.expectEqual(@as(u5, 16), template.regions);
 }

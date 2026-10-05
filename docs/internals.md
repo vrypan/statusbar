@@ -206,7 +206,7 @@ budget failure ends the session through terminal cleanup rather than leaving
 a partial snapshot as the last painted state. Established-capacity updates
 reuse storage; preparation reserves space before emission and snapshot commit.
 
-`zig build bench -Doptimize=ReleaseFast` measures full paints, identical updates,
+`zig build bench -Doptimize=fast` measures full paints, identical updates,
 single-line changes, style-only patches, and independent region updates with
 shared animation frames and damage repair. It reports time, emitted bytes and
 lines, parsed lines and allocations. The cell model reduces terminal output for

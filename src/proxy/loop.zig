@@ -87,7 +87,7 @@ pub fn pump(self: *Proxy, sig_r: sys.Fd, pid: posix.pid_t) !void {
         .{ .fd = self.master, .events = posix.POLL.IN, .revents = 0 },
         .{ .fd = sig_r, .events = posix.POLL.IN, .revents = 0 },
         .{ .fd = self.control_endpoint.fd, .events = posix.POLL.IN, .revents = 0 },
-    } ++ [_]posix.pollfd{undefined} ** (config.max_commands + @import("session").fifo.max_bindings);
+    } ++ @as([config.max_commands + @import("session").fifo.max_bindings]posix.pollfd, @splat(undefined));
     var fifo_snapshots: [@import("session").fifo.max_bindings]@import("fifo.zig").Snapshot = undefined;
     const in = &fds[0];
     const out = &fds[1];
@@ -262,7 +262,7 @@ pub fn drainSignals(self: *Proxy, sig_r: sys.Fd, pid: posix.pid_t, now_ms: i64) 
     const n = sys.read(sig_r, &buf) catch return;
     var resized = false;
     for (buf[0..n]) |raw| {
-        const s: posix.SIG = @enumFromInt(raw);
+        const s: posix.SIG = @fromBackingInt(@intCast(raw));
         // Status commands are reaped in the source update; only the
         // session's own child is reaped here.
         switch (s) {

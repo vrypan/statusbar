@@ -2,6 +2,7 @@
 //! capture, UTF-8 boundaries and the screen state CSIs leave behind.
 
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 const config_protocol = @import("config_protocol.zig");
 const Output = @import("output.zig").Output;
 
@@ -131,11 +132,11 @@ test "rows past the child's screen are clamped off the bar" {
 }
 
 test "unbounded or unparseable CSI cannot address bar rows" {
-    try expectTranslation("\x1b[" ++ ("9" ** 64) ++ "Hsafe", "\x1b[\x18safe");
-    try expectTranslation("\x1b[" ++ ("9" ** 64) ++ "rtext", "\x1b[\x18text");
-    try expectTranslation("\x1b[" ++ ("9" ** 64) ++ "\x1b[99H", "\x1b[\x18\x1b[22H");
-    try expectTranslation("\x1b[" ++ ("1;" ** 16) ++ "99Hsafe", "\x1b[\x18safe");
-    try expectTranslation("\x1b[" ++ ("1;" ** 16) ++ "99rtext", "\x1b[\x18text");
+    try expectTranslation("\x1b[" ++ (repeat("9", 64)) ++ "Hsafe", "\x1b[\x18safe");
+    try expectTranslation("\x1b[" ++ (repeat("9", 64)) ++ "rtext", "\x1b[\x18text");
+    try expectTranslation("\x1b[" ++ (repeat("9", 64)) ++ "\x1b[99H", "\x1b[\x18\x1b[22H");
+    try expectTranslation("\x1b[" ++ (repeat("1;", 16)) ++ "99Hsafe", "\x1b[\x18safe");
+    try expectTranslation("\x1b[" ++ (repeat("1;", 16)) ++ "99rtext", "\x1b[\x18text");
 }
 
 test "margins are kept off the bar" {
@@ -264,7 +265,7 @@ test "UTF-8 pending state handles continuation chunks and recovery" {
 }
 
 test "oversized sequences are cancelled" {
-    const input = "\x1b[" ++ "1;" ** 40 ++ "H";
+    const input = "\x1b[" ++ repeat("1;", 40) ++ "H";
     try expectTranslation(input, "\x1b[\x18");
 }
 
@@ -414,7 +415,7 @@ test "invalid incomplete and oversized OSC 7 reports do not notify" {
         "\x1b]7;file:///cancel\x1a",
         "\x1b]7;file:///interrupted\x1b[99H",
         "\x1b]7;file:///incomplete",
-        "\x1b]7;" ++ ("x" ** 4097) ++ "\x07",
+        "\x1b]7;" ++ (repeat("x", 4097)) ++ "\x07",
     };
     for (inputs) |input| {
         var collector: Osc7Collector = .{};

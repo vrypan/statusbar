@@ -1,5 +1,6 @@
 //! Read-only OSC 4/10/11 discovery. Never invent RGB values for terminal colors.
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 const color = @import("shared").color;
 const Rgb = color.Rgb;
 const Palette = color.Palette;
@@ -195,7 +196,7 @@ test "oversized malformed and incomplete palette input is lossless and bounded" 
     const cases = [_][]const u8{
         "\x1b]4;999;rgb:ff/00/00\x07",
         "\x1b]11;rgb:no/00/00\x07",
-        "\x1b]4;1;" ++ "a" ** 512 ++ "\x07",
+        "\x1b]4;1;" ++ repeat("a", 512) ++ "\x07",
         "\x1b]4;1;rgb:ff/00/00",
         "\x1b]11;broken\x18\x1b[A",
         "\x1b\x1b]11;bad\x1b\\",

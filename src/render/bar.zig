@@ -12,6 +12,7 @@
 //! and `serialize.zig` (the bytes of a paint). Line content is in `content.zig`.
 
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 const styled = @import("styled_text.zig");
 const relative_highlight = @import("relative_highlight.zig");
 const color = @import("shared").color;
@@ -277,13 +278,13 @@ fn allocationScenario(gpa: std.mem.Allocator) !void {
     var content = try Content.init(gpa, 2);
     defer content.deinit();
     try setTestPair(&content, 0, "a", "b", "right");
-    _ = try content.set(1, "two", "\x1b[0m" ** 1100 ++ "─", .{ .split = 3 });
+    _ = try content.set(1, "two", repeat("\x1b[0m", 1100) ++ "─", .{ .split = 3 });
     try r.resize(2, 12);
     try r.prepare(&content, &.{}, true);
     _ = try r.build(23, "", true, true);
     r.commit();
     try r.resize(2, 20);
-    try setTestPair(&content, 0, "界" ** 40, "e\u{301}" ** 20, "right");
+    try setTestPair(&content, 0, repeat("界", 40), repeat("e\u{301}", 20), "right");
     try r.prepare(&content, &.{}, true);
     _ = try r.build(23, "", true, true);
     r.commit();
@@ -341,7 +342,7 @@ test "long markup lines beyond the old slot buffers render" {
     const gpa = std.testing.allocator;
     var content = try Content.init(gpa, 1);
     defer content.deinit();
-    const text = "#[bold]x#[default]" ** 400;
+    const text = repeat("#[bold]x#[default]", 400);
     _ = try content.set(0, text, "", .{});
     var r = try Renderer.init(gpa);
     defer r.deinit();

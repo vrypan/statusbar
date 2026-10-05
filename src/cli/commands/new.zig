@@ -95,7 +95,7 @@ pub fn run(arena: std.mem.Allocator, io: Io, command: *const zecli.Command, stdo
         const term = try process.wait(io);
         exit_code = switch (term) {
             .exited => |code| code,
-            .signal => |signal| 128 +| @as(u8, @intCast(@intFromEnum(signal))),
+            .signal => |signal| 128 +| @as(u8, @intCast(@backingInt(signal))),
             else => 1,
         };
         final_status = if (term == .exited and term.exited == 0) .success else .failed;

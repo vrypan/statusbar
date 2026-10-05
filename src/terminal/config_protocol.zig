@@ -1,6 +1,7 @@
 //! OSC 3110 STATUSBAR protocol framing for config replacement, addition
 //! and prefix removal.
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 const prefix_names = @import("shared").config_prefix;
 
 pub const namespace = "3110;STATUSBAR;";
@@ -119,10 +120,10 @@ test "add requests authenticate the fragment and respect the frame bound" {
     try std.testing.expectEqual(.add, request.kind);
     try std.testing.expectEqualStrings(text, request.text);
     try std.testing.expectError(error.AuthenticationFailed, decodeRequest(&out, payload, "fedcba9876543210fedcba9876543210"));
-    const largest = try encodeAdd(std.testing.allocator, token, "a" ** max_config);
+    const largest = try encodeAdd(std.testing.allocator, token, repeat("a", max_config));
     defer std.testing.allocator.free(largest);
     try std.testing.expect(largest.len - 4 <= max_osc);
-    try std.testing.expectError(error.ConfigTooLarge, encodeAdd(std.testing.allocator, token, "a" ** (max_config + 1)));
+    try std.testing.expectError(error.ConfigTooLarge, encodeAdd(std.testing.allocator, token, repeat("a", (max_config + 1))));
 }
 
 test "remove requests authenticate the prefix and reject malformed prefixes" {
@@ -154,7 +155,7 @@ test "config protocol round trips arbitrary config bytes" {
 
 test "config protocol enforces authentication encoding and exact size limit" {
     const token = "0123456789abcdef0123456789abcdef";
-    const max_text = "x" ** max_config;
+    const max_text = repeat("x", max_config);
     const frame = try encode(std.testing.allocator, token, max_text);
     defer std.testing.allocator.free(frame);
     try std.testing.expect(frame.len - 4 <= max_osc);

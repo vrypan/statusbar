@@ -5,6 +5,7 @@
 //! explicit name, or its decimal ID when unnamed, so binding a line by ID or
 //! by name always reaches the same pipe.
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 const posix = std.posix;
 const system = posix.system;
 const sys = @import("platform").sys;
@@ -181,7 +182,7 @@ pub const Registry = struct {
 
 test "FIFO basenames are line names or decimal IDs" {
     for ([_][]const u8{ "build", "5", "_a-B", "codex.usage" }) |name| try std.testing.expect(validBasename(name));
-    for ([_][]const u8{ "", "05", ".", "..", "a/b", "a b", "a..b", ".a", "a.", "a\n", "x" ** 65 }) |name| try std.testing.expect(!validBasename(name));
+    for ([_][]const u8{ "", "05", ".", "..", "a/b", "a b", "a..b", ".a", "a.", "a\n", repeat("x", 65) }) |name| try std.testing.expect(!validBasename(name));
 }
 
 test "FIFO stream joins writes and holds incomplete UTF-8" {

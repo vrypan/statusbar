@@ -1,5 +1,6 @@
 //! Datetime template formats, local time snapshots, and strftime rendering.
 const std = @import("std");
+const repeat = @import("shared").test_data.repeat;
 
 pub const max_format = 1024;
 /// Opaque storage large enough for libc's struct tm on supported platforms.
@@ -56,7 +57,7 @@ test "datetime formats validate bounds and identify clock conversions" {
     try std.testing.expectEqualStrings("%H:%M", (try parse("datetime:%H:%M")).?);
     try std.testing.expectEqual(@as(?[]const u8, null), try parse("other"));
     try std.testing.expectError(error.InvalidFormat, parse("datetime:"));
-    try std.testing.expectError(error.InvalidFormat, parse("datetime:" ++ "x" ** max_format));
+    try std.testing.expectError(error.InvalidFormat, parse("datetime:" ++ repeat("x", max_format)));
     try std.testing.expect(usesClock("%% %H"));
     try std.testing.expect(!usesClock("100%%"));
     try std.testing.expect(!usesClock("plain"));
