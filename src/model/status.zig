@@ -324,7 +324,10 @@ test "command environment generations own independent blocks" {
     try std.testing.expectEqualStrings("100", b.getPosix("STATUSBAR_COLUMNS").?);
     try std.testing.expectEqualStrings("", a.getPosix("EMPTY").?);
     try std.testing.expectEqualStrings("spaces = literal $value", b.getPosix("VALUE").?);
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, checkCommandEnvironment, .{});
+    // Arena growth can resize in place depending on the backing allocator's
+    // layout. Disable resizing so each failure sweep has the same allocations.
+    var backing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
+    try std.testing.checkAllAllocationFailures(backing.allocator(), checkCommandEnvironment, .{});
 }
 
 fn checkCommandEnvironment(gpa: std.mem.Allocator) !void {
