@@ -191,9 +191,16 @@ def main():
         child = terminal.CHILD_PRELUDE + r'''
 import json, pathlib
 library = pathlib.Path(sys.argv[2])
-for path in sorted(library.glob('*.stbm')):
+for count, path in enumerate(sorted(library.glob('*.stbm')), start=2):
     run('config', 'import', str(path))
-    settle()
+    # Imports are asynchronous. Wait for the saved config instead of queuing
+    # more growth requests while the proxy waits for terminal cursor replies.
+    deadline = time.monotonic() + 5
+    while True:
+        definitions = json.loads(run('config', 'show', '--json'))
+        if len(definitions['lines']) == count: break
+        assert time.monotonic() < deadline, (path, definitions)
+        time.sleep(.05)
 deadline = time.monotonic() + 5
 while True:
     lines = json.loads(run('ls', '--json'))['lines']
@@ -220,7 +227,7 @@ mark('MODULE_LIBRARY_OK')
 '''
         code, data = terminal.run_session(binary, '[line.base]\ntext = MODULES\n', child,
                                           str(MODULES), env=env, timeout=20)
-        assert code == 0 and b'MODULE_LIBRARY_OK' in data, data[-5000:]
+        assert code == 0 and b'MODULE_LIBRARY_OK' in data, (code, terminal.plain(data)[-5000:])
         visible = terminal.plain(data)
         for path in files:
             name = re.search(r'^\[line\.(.+)\]$', path.read_text(), re.M)[1]
