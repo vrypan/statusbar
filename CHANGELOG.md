@@ -4,7 +4,7 @@ Changes are grouped by version, newest first. Each section summarizes changes
 since the previous version. Within each release, changes are listed in the
 order they were added.
 
-## Unreleased
+## v0.6.0
 
 - Require Zig 0.17, update build and standard library APIs, and upgrade
   zunic to 0.6.0, zecli to 0.6.0, and zooi to 0.4.0

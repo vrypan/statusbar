@@ -17,6 +17,12 @@ If you already use named lines, update scripts and shell hooks with this table:
 | `statusbar pop [NAME]` | `statusbar remove [NAME]` (alias `rm`; see scope below) |
 | `statusbar list --pushed` | `statusbar list --temp` |
 | `statusbar list --short` | `statusbar list`; use `--json` for values and visibility |
+| `statusbar config --print` | `statusbar config show` |
+| `statusbar config --print current` | `statusbar config show current` |
+| `statusbar config --print startup` | `statusbar config show startup` |
+| `statusbar config --print default` | `statusbar config show default` |
+| `statusbar config --default` | `statusbar config show default` |
+| `statusbar config --path` | `statusbar config path` |
 | `statusbar config add FILE` | `statusbar config import FILE` |
 | `statusbar config remove PREFIX` | `statusbar remove PREFIX` |
 | `statusbar config show path` | `statusbar config path` |

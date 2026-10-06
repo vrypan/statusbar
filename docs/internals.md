@@ -181,7 +181,7 @@ their snapshots and baseline silently when revealed.
 
 ### Unicode and styles
 
-Grapheme segmentation and widths use the pinned remote zunic v0.5.0 dependency
+Grapheme segmentation and widths use the pinned remote zunic v0.6.0 dependency
 (Unicode 17). Combining sequences, flags and joined emoji are kept whole. A
 style, tracking-region, or OSC 8 hyperlink change inside a grapheme takes effect
 at the next grapheme, never halfway through the current one. Standalone zero-width clusters
