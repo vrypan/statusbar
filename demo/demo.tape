@@ -1,5 +1,7 @@
-# Capture frames for encoding with ffmpeg, as in tests/demo.tape.
-Output demo/demo-frames/
+# Run from the statusbar repository: vhs demo/demo.tape
+# Encode afterward: demo/encode.sh demo/demo-frames/
+# Output demo/demo-frames/
+Output demo/demo.mp4
 
 Require statusbar
 
@@ -7,33 +9,35 @@ Set Shell "zsh"
 Set Theme { "background": "#000000" }
 Set Width 2400
 Set Height 1400
-Set FontSize 40
+Set FontSize 32
 Set Framerate 60
 Set TypingSpeed 20ms
 Set CursorBlink false
 
 
-
 # Start in ~/Devel/statusbar
 Hide
-Type "cd ~/Devel/statusbar && clear"
+Type "alias sb=statusbar; cd ~/Devel/statusbar && clear"
+Enter
+Hide
+Type `eval "$(statusbar init zsh --starship=false --report-cwd=false)"; clear`
 Enter
 Show
 
 # Initial prompt
 Sleep 1300ms
 
-# Start statusbar
-Type "statusbar -c samples/default.stbt"
+Type "sb --help"
 Sleep 300ms
 Enter
-Sleep 1900ms
+Sleep 3000ms
 
-# Clear the terminal
-Type "clear"
+# Start statusbar
+Type "sb -c samples/default.stbt"
 Sleep 300ms
 Enter
-Sleep 1300ms
+Sleep 3000ms
+
 
 # Create a dirty working tree
 Type "ls -l"
@@ -65,73 +69,108 @@ Enter
 Sleep 2100ms
 
 # Hold each value before the shell prompt hook overwrites it.
-Type `statusbar set prompt 'Hello world!'; sleep 2`
+Type `sb update prompt 'Hello world!'; sleep 2`
 Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type `statusbar set prompt "$(printf '\e[1;32mHello, green world!')"; sleep 2`
+Type `sb update prompt "$(printf '\e[1;32mHello, green world!')"; sleep 2`
 Sleep 300ms
 Enter
 Sleep 2200ms
 
 # Restore the configured default
-Type `statusbar set prompt --reset; sleep 2`
+Type `sb update prompt --reset; sleep 2`
 Sleep 300ms
 Enter
 Sleep 2600ms
 
-Type "exit"
+Type "sb config load gruvbox-color"
 Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/gruvbox-color.stbt -- zsh -f"
+Type "sb config load pastel-powerline-color"
+Sleep 300ms
+Enter
+Sleep 3200ms
+
+Type "sb config load pure-color"
+Sleep 300ms
+Enter
+Sleep 3200ms
+
+Type "sb config load tokyo-night-color"
+Sleep 300ms
+Enter
+Sleep 3200ms
+
+Type "sb config load multi-line-color"
+Sleep 300ms
+Enter
+Sleep 3200ms
+
+Type "sb config load minimal"
+Sleep 300ms
+Enter
+Sleep 3200ms
+
+Type "sb config import compute"
 Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "exit"
+Type "sb config import disk"
 Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/pastel-powerline-color.stbt -- zsh -f"
+Type "sb config import battery"
 Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "exit"
+Type "sb config import network"
 Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/pure-color.stbt -- zsh -f"
+Type "sb config import weather"
 Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "exit"
+Type "sb config import clock"
 Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/tokyo-night-color.stbt -- zsh -f"
+Type "sb ls"
 Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "exit"
+Type "sb rm weather"
 Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "statusbar -c samples/themes/multi-line-color.stbt"
+Type "sb rm clock"
 Sleep 300ms
 Enter
 Sleep 2200ms
 
-Type "exit"
+Type "sb rm network"
+Sleep 300ms
+Enter
+Sleep 2200ms
+
+Type "sb rm disk"
+Sleep 300ms
+Enter
+Sleep 2200ms
+
+Type "sb rm battery"
 Sleep 300ms
 Enter
 Sleep 2200ms
