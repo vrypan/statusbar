@@ -213,6 +213,11 @@ lines, parsed lines and allocations. The cell model reduces terminal output for
 small changes but costs memory and CPU compared with the old string renderer;
 byte savings alone are not a wall-clock speedup.
 
+The line-sync workloads measure adding and removing a temporary line beside
+1,000 and 4,000 configured lines, including content remapping. ID lookup and
+content ownership transfer are linear in the number of lines; fixture creation
+and configuration parsing are outside the measurements.
+
 Adaptive workloads are independently labeled `colors` and `regions`:
 
 - `colors` uses 1, 16, 17, or 64 distinct visible, resolved foreground/background

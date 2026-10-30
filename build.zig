@@ -177,6 +177,8 @@ pub fn build(b: *std.Build) void {
     });
     bench_mod.addImport("terminal", bench_layers.get(.terminal));
     bench_mod.addImport("render", bench_layers.get(.render));
+    bench_mod.addImport("model", bench_layers.get(.model));
+    bench_mod.addImport("session", bench_layers.get(.session));
     const bench = b.addExecutable(.{ .name = "statusbar-bench", .root_module = bench_mod });
     b.step("bench", "Benchmark the translators").dependOn(&b.addRunArtifact(bench).step);
 

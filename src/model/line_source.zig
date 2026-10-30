@@ -136,10 +136,12 @@ pub const Source = struct {
         var states: std.ArrayList(LineState) = .empty;
         errdefer states.deinit(self.gpa);
         try states.ensureTotalCapacity(self.gpa, items.len);
+        var previous = std.AutoHashMap(u64, usize).init(self.gpa);
+        defer previous.deinit();
+        try previous.ensureTotalCapacity(@intCast(self.states.items.len));
+        for (self.states.items, 0..) |state, old| previous.putAssumeCapacity(state.id, old);
         for (items, from) |entry, *source| {
-            source.* = for (self.states.items, 0..) |state, old| {
-                if (state.id == entry.id) break old;
-            } else null;
+            source.* = previous.get(entry.id);
             states.appendAssumeCapacity(if (source.*) |old| self.states.items[old] else .{ .id = entry.id });
         }
         try self.content.remap(items.len, from);
@@ -550,6 +552,37 @@ fn initAllocationScenario(gpa: std.mem.Allocator) !void {
     var f: Fixture = undefined;
     try f.init(gpa, "[line.a]\ntext = one\n[line.b]\ntext = two\n");
     f.deinit();
+}
+
+test "line synchronization retains reordered state and rolls back allocation failures" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var f: Fixture = undefined;
+            try f.init(gpa, "[line.a]\ntext = A\n[push]\ntext = #(value)\n");
+            defer f.deinit();
+            _ = try f.lines.push(null, null);
+            _ = try f.lines.push(null, null);
+            try f.source.syncLines();
+            f.set(1, .{ .value = .{ .replace = "first" } });
+            f.set(2, .{ .value = .{ .replace = "second" } });
+            _ = try f.source.rebuild();
+            std.mem.swap(Line, &f.lines.items.items[1], &f.lines.items.items[2]);
+            _ = f.lines.remove(2);
+            _ = try f.lines.push(null, null);
+            f.source.syncLines() catch |err| {
+                try std.testing.expectEqualStrings("first", f.source.content.line(1));
+                try std.testing.expectEqualStrings("second", f.source.content.line(2));
+                try std.testing.expectEqual(@as(u64, 2), f.source.states.items[1].id);
+                return err;
+            };
+            try std.testing.expectEqualStrings("second", f.source.content.line(1));
+            try std.testing.expectEqualStrings("", f.source.content.line(2));
+            const formatted = f.source.rows_formatted;
+            _ = try f.source.rebuild();
+            try std.testing.expectEqual(formatted + 1, f.source.rows_formatted);
+            try std.testing.expectEqual(f.lines.items.items[2].id, f.source.content.lines[2].meta.identity);
+        }
+    }.run, .{});
 }
 
 test "source initialization cleans every allocation failure" {

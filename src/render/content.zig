@@ -74,17 +74,18 @@ pub const Content = struct {
     }
 
     /// Resizes to `count` lines, moving line `n` of the result from `from[n]`
-    /// of the old content (or starting empty when null).
+    /// of the old content (or starting empty when null). Each source index
+    /// may occur at most once: this transfers ownership, without copying text.
     pub fn remap(self: *Content, count: usize, from: []const ?usize) !void {
         std.debug.assert(from.len == count);
         const lines = try self.allocator.alloc(Line, count);
-        for (lines, from) |*entry, source| entry.* = if (source) |index| self.lines[index] else .{};
-        for (self.lines, 0..) |*entry, index| {
-            const kept = for (from) |source| {
-                if (source == index) break true;
-            } else false;
-            if (!kept) entry.bytes.deinit(self.allocator);
+        // All fallible work precedes the moves, so allocation failure leaves
+        // the original content intact. Empty moved slots make cleanup linear.
+        for (lines, from) |*entry, source| {
+            entry.* = if (source) |index| self.lines[index] else .{};
+            if (source) |index| self.lines[index] = .{};
         }
+        for (self.lines) |*entry| entry.bytes.deinit(self.allocator);
         self.allocator.free(self.lines);
         self.lines = lines;
     }

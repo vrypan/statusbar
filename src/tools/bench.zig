@@ -375,6 +375,40 @@ fn fill(buf: []u8, comptime kind: enum { text, sgr, cursor, utf8 }) void {
     }
 }
 
+/// Large configured layouts with mostly hidden rows still synchronize on
+/// each push/pop. Keep config parsing and fixture creation out of the timing.
+fn lineSyncBench(io: std.Io, out: *std.Io.Writer, count: usize) !void {
+    const gpa = std.heap.smp_allocator;
+    const config = @import("model").config;
+    var text: std.Io.Writer.Allocating = .init(gpa);
+    defer text.deinit();
+    for (0..count) |n| try text.writer.print("[line.r{d}]\n", .{n});
+    var diag: config.Diagnostic = .{};
+    var cfg = try config.parse(gpa, text.writer.buffered(), &diag);
+    defer cfg.deinit();
+    var lines = @import("session").lines.Lines.init(gpa);
+    defer lines.deinit();
+    const names = try cfg.lineNames(gpa);
+    defer gpa.free(names);
+    try lines.configure(names);
+    var source = try @import("model").line_source.Source.init(gpa, io, &cfg, &lines, 80);
+    defer source.deinit();
+    _ = try source.rebuild();
+    const repetitions = 20;
+    var elapsed: i96 = 0;
+    for (0..repetitions) |_| {
+        _ = try lines.push(null, null);
+        var start = std.Io.Clock.now(.awake, io).toNanoseconds();
+        try source.syncLines();
+        elapsed += std.Io.Clock.now(.awake, io).toNanoseconds() - start;
+        _ = lines.remove(lines.items.items.len - 1);
+        start = std.Io.Clock.now(.awake, io).toNanoseconds();
+        try source.syncLines();
+        elapsed += std.Io.Clock.now(.awake, io).toNanoseconds() - start;
+    }
+    try out.print("line sync rows={d}: {d} ns/operation (append/remove, including content remap)\n", .{ count, @divTrunc(elapsed, 2 * repetitions) });
+}
+
 pub fn main(init: std.process.Init) !u8 {
     const gpa = std.heap.smp_allocator;
     var stdout_buf: [4096]u8 = undefined;
@@ -406,6 +440,8 @@ pub fn main(init: std.process.Init) !u8 {
     for ([_]usize{ 1, 16, 17, 64 }) |colors| try adaptiveBench(init.io, stdout, colors, 0, 1);
     for ([_]usize{ 1, 8, 16 }) |regions| try adaptiveBench(init.io, stdout, 1, regions, 1);
     for ([_]usize{ 64, 200 }) |chars| try adaptiveBench(init.io, stdout, 1, 1, chars);
+    try stdout.flush();
+    for ([_]usize{ 1000, 4000 }) |count| try lineSyncBench(init.io, stdout, count);
     try stdout.flush();
     return 0;
 }
