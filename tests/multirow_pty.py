@@ -1655,6 +1655,10 @@ time.sleep(.1)
     code, data = run_session(binary, '[line.base]\ntext = BASE\n', child,
                              raw=True, cursor_rows=(1, 21))
     assert code == 0 and b'AFTER_NEW' in data, data[-2000:]
+    # Only startup discovers colors; growth asks just for the cursor.
+    assert data.count(b'\x1b]10;?') == 1, data[-2000:]
+    assert data.count(b'\x1b]4;') == 256
+    assert data.count(b'\x1b[6n') == 2
     before = data[data.index(b'ORIGIN_READY'):data.index(b'AFTER_NEW')]
     row, col, top, bottom, origin = 1, 1, 1, 23, False
     saved = (row, col, origin)
@@ -1693,7 +1697,7 @@ time.sleep(.1)
                     col += 1
     assert (row, col, origin) == (22, 5, True), (row, col, origin, before)
     assert erased and all(r >= 23 for r in erased), (erased, before)
-    print('origin-mode growth preserves child rows and cursor')
+    print('origin-mode growth preserves child rows and cursor; palette discovery runs once')
 
 
 def check_remove_configured_ids(binary):

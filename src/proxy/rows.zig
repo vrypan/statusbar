@@ -18,6 +18,7 @@ pub fn reserveRows(self: *Proxy, outer_rows: u16) !void {
     self.terminal = .init(self.io);
     self.output.screen.damaged = true;
     const bar_rows = self.layout.bar;
+    try @import("terminal_input.zig").startPaletteDiscovery(self);
     const cursor = self.queryCursorRow();
     if (bar_rows > 0) {
         const row = @min(cursor orelse outer_rows, outer_rows);

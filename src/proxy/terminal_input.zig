@@ -35,17 +35,22 @@ pub fn findCursorReport(bytes: []const u8) ?CursorReport {
     return null;
 }
 
+/// Discover colors once, before forking the child. Later cursor queries
+/// must not reset held input or reclaim the child's OSC reply ownership.
+pub fn startPaletteDiscovery(self: *Proxy) !void {
+    var queries: [4096]u8 = undefined;
+    var query_writer = std.Io.Writer.fixed(&queries);
+    try self.palette_probe.begin(&query_writer);
+    try sys.writeAll(self.io, stdout_fd, query_writer.buffered());
+    // A short grace period handles late replies without blocking the
+    // child. Its first OSC relinquishes outstanding reply ownership.
+    self.palette_deadline_ms = self.now() + 1500;
+}
+
 /// Asks the terminal where the cursor is. Keystrokes that arrive in the
 /// meantime are kept for the child. The result uses physical screen rows,
 /// even when DECOM makes the terminal's report relative to its top margin.
 pub fn queryCursorRow(self: *Proxy) ?u16 {
-    var queries: [4096]u8 = undefined;
-    var query_writer = std.Io.Writer.fixed(&queries);
-    self.palette_probe.begin(&query_writer) catch return null;
-    sys.writeAll(self.io, stdout_fd, query_writer.buffered()) catch return null;
-    // A short grace period handles late replies without blocking the
-    // child. Its first OSC relinquishes outstanding reply ownership.
-    self.palette_deadline_ms = self.now() + 1500;
     sys.writeAll(self.io, stdout_fd, "\x1b[6n") catch return null;
     var buf: [4608]u8 = undefined;
     var len: usize = 0;
