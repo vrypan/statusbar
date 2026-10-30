@@ -132,9 +132,8 @@ pub const Input = struct {
             }
         }
         if (self.state == .ground and run < bytes.len) sink.write(bytes[run..]);
-        // A lone ESC at the end of a read is the Escape key, not the start
-        // of a report still in flight.
-        if (self.state == .esc and bytes.len == 1) self.flush(sink);
+        // Read boundaries do not distinguish Escape from a fragmented
+        // report. The proxy's input timeout releases a lone Escape.
     }
 
     fn onBar(self: *const Input, row: u32) bool {
@@ -224,9 +223,7 @@ const Collector = struct {
 };
 
 fn expectTranslation(input: []const u8, expected: []const u8) !void {
-    // Splitting right after a lone ESC is indistinguishable from the Escape
-    // key, so chunked runs start from two bytes.
-    const sizes = [_]usize{ input.len, 2, 3, 5 };
+    const sizes = [_]usize{ input.len, 1, 2, 3, 5 };
     for (sizes) |chunk| {
         if (chunk == 0) continue;
         var in: Input = .{ .bar = 2, .rows = 22 };
@@ -309,11 +306,14 @@ test "pixel mouse reports compare against the child's pixel height" {
     }
 }
 
-test "a lone escape key is not held" {
+test "a lone escape key is released on timeout" {
     var in: Input = .{ .bar = 1, .rows = 20 };
     var collector: Collector = .{};
     defer collector.bytes.deinit(std.testing.allocator);
     in.feed("\x1b", &collector);
+    try std.testing.expect(in.holding());
+    try std.testing.expectEqualStrings("", collector.bytes.items);
+    in.flush(&collector);
     try std.testing.expect(!in.holding());
     try std.testing.expectEqualStrings("\x1b", collector.bytes.items);
     in.feed("\x1b[5", &collector);
