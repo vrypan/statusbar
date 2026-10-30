@@ -36,7 +36,8 @@ pub fn findCursorReport(bytes: []const u8) ?CursorReport {
 }
 
 /// Asks the terminal where the cursor is. Keystrokes that arrive in the
-/// meantime are kept for the child.
+/// meantime are kept for the child. The result uses physical screen rows,
+/// even when DECOM makes the terminal's report relative to its top margin.
 pub fn queryCursorRow(self: *Proxy) ?u16 {
     var queries: [4096]u8 = undefined;
     var query_writer = std.Io.Writer.fixed(&queries);
@@ -64,7 +65,7 @@ pub fn queryCursorRow(self: *Proxy) ?u16 {
         if (findCursorReport(buf[0..len])) |report| {
             self.pending_input.write(buf[0..report.start]);
             self.pending_input.write(buf[report.end..len]);
-            return report.row;
+            return physicalCursorRow(self, report.row);
         }
         if (len > 128) {
             self.pending_input.write(buf[0 .. len - 128]);
@@ -74,6 +75,22 @@ pub fn queryCursorRow(self: *Proxy) ?u16 {
     }
     self.pending_input.write(buf[0..len]);
     return null;
+}
+
+fn physicalCursorRow(self: *const Proxy, reported: u16) u16 {
+    const screen = &self.output.screen;
+    const offset = if (screen.origin_mode) screen.top -| 1 else 0;
+    return reported +| offset;
+}
+
+test "cursor reports in origin mode become physical rows" {
+    var proxy = @import("proxy.zig").schedulerProxy();
+    proxy.output.screen.top = 3;
+    try std.testing.expectEqual(@as(u16, 5), physicalCursorRow(&proxy, 5));
+    proxy.output.screen.origin_mode = true;
+    try std.testing.expectEqual(@as(u16, 7), physicalCursorRow(&proxy, 5));
+    proxy.output.screen.top = 0;
+    try std.testing.expectEqual(@as(u16, 5), physicalCursorRow(&proxy, 5));
 }
 
 pub fn setInputGeometry(self: *Proxy, layout: Layout) void {

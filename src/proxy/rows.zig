@@ -36,7 +36,7 @@ pub fn reserveRows(self: *Proxy, outer_rows: u16) !void {
 pub fn releaseRows(self: *Proxy) void {
     var buf: [32]u8 = undefined;
     self.output.screen.borrowCursor();
-    self.terminal.write("\x1b7\x1b[r");
+    self.terminal.write("\x1b7\x1b[?6l\x1b[r");
     for (0..self.layout.bar) |n| {
         self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H\x1b[2K", .{self.layout.barRow() + n}) catch "");
     }
@@ -130,27 +130,60 @@ pub fn makeRoomForGrowth(self: *Proxy, old: Layout, new: Layout) void {
     if (new.bar <= old.bar) return;
     self.terminal.flush();
     const reported = self.queryCursorRow() orelse old.child.row;
+    makeRoomAtRow(self, old, new, reported);
+}
+
+fn makeRoomAtRow(self: *Proxy, old: Layout, new: Layout, reported: u16) void {
     const row = @min(reported, old.child.row);
     const scroll = row -| new.child.row;
     var buf: [64]u8 = undefined;
     if (scroll > 0) {
         self.output.screen.borrowCursor();
-        self.terminal.write("\x1b7");
+        self.terminal.write("\x1b7\x1b[?6l");
+        // Scroll the whole child area even if it installed narrower margins.
+        self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[1;{d}r", .{old.child.row}) catch "");
         self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H", .{old.child.row}) catch "");
         for (0..scroll) |_| self.terminal.write("\n");
+        self.output.screen.writeRegion(&self.terminal);
         self.terminal.write("\x1b8");
     }
-    self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d}d", .{@min(row, new.child.row)}) catch "");
+    // DECRC restored DECOM. VPA is relative to the old top margin in that
+    // mode; the following margin installation clamps a now-hidden cursor.
+    const offset = if (self.output.screen.origin_mode) self.output.screen.top -| 1 else 0;
+    const target = @max(1, @min(row, new.child.row) -| offset);
+    self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d}d", .{target}) catch "");
 }
 
 pub fn eraseRows(self: *Proxy, old: Layout) void {
     if (old.bar == 0) return;
     var buf: [32]u8 = undefined;
     self.output.screen.borrowCursor();
-    self.terminal.write("\x1b7\x1b[?7l");
+    self.terminal.write("\x1b7\x1b[?7l\x1b[?6l");
     for (0..old.bar) |n| self.terminal.write(std.fmt.bufPrint(&buf, "\x1b[{d};1H\x1b[2K", .{old.barRow() + n}) catch "");
     self.terminal.write("\x1b8");
     if (self.output.screen.autowrap) self.terminal.write("\x1b[?7h");
+}
+
+test "erasing bar rows disables origin mode inside the saved cursor envelope" {
+    var proxy = schedulerProxy();
+    proxy.terminal = .{ .io = undefined };
+    proxy.output.screen.origin_mode = true;
+    proxy.output.screen.top = 3;
+    proxy.output.screen.bottom = 10;
+    const layout = Layout.of(.{ .row = 24, .col = 80, .xpixel = 0, .ypixel = 0 }, 1);
+    proxy.eraseRows(layout);
+    try std.testing.expectEqualStrings("\x1b7\x1b[?7l\x1b[?6l\x1b[24;1H\x1b[2K\x1b8\x1b[?7h", proxy.terminal.buf[0..proxy.terminal.len]);
+    try std.testing.expect(proxy.output.screen.origin_mode);
+}
+
+test "growth keeps an origin-relative cursor stationary when no scrolling is needed" {
+    var proxy = schedulerProxy();
+    proxy.terminal = .{ .io = undefined };
+    proxy.output.screen.origin_mode = true;
+    proxy.output.screen.top = 3;
+    const outer: std.posix.winsize = .{ .row = 24, .col = 80, .xpixel = 0, .ypixel = 0 };
+    makeRoomAtRow(&proxy, Layout.of(outer, 1), Layout.of(outer, 2), 7);
+    try std.testing.expectEqualStrings("\x1b[5d", proxy.terminal.buf[0..proxy.terminal.len]);
 }
 
 test "a line update reuses storage and prepares one row" {

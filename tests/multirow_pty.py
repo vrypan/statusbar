@@ -1591,7 +1591,7 @@ IFS= read -r command
         os.write(master, b"LOAD\n")
         data = read_until(master, data, b"__THEME_LOADED__", timeout=5)
         data = read_until(master, data, b"\x1b[1;19r", timeout=5)
-        growth = b"\x1b7\x1b[22;1H\n\n\n\x1b8\x1b[19d"
+        growth = b"\x1b7\x1b[?6l\x1b[1;22r\x1b[22;1H\n\n\n\x1b[1;22r\x1b8\x1b[19d"
         assert growth in data, data[-2000:]
         assert b"\x1b[20;1H" in data and b"\x1b[24;1H" in data, data[-2000:]
         os.write(master, b"EXIT\n")
@@ -1642,6 +1642,58 @@ time.sleep(.1)
     assert row == 22, ('cursor entered the statusbar', row, before[-2000:])
     assert before.index(b'\x1b[1;22r') < before.index(b'job\r\n'), before[-2000:]
     print('new at the last child row installs margins before output and keeps the cursor above the bar')
+
+
+def check_origin_growth(binary):
+    child = r"""
+import os, subprocess, sys, time
+os.write(1, b'ORIGIN_READY\x1b[3;23r\x1b[?6h\x1b[21;5H')
+subprocess.run([sys.argv[1], 'new', 'job', '--fifo'], stdout=subprocess.DEVNULL, check=True)
+os.write(1, b'AFTER_NEW')
+time.sleep(.1)
+"""
+    code, data = run_session(binary, '[line.base]\ntext = BASE\n', child,
+                             raw=True, cursor_rows=(1, 21))
+    assert code == 0 and b'AFTER_NEW' in data, data[-2000:]
+    before = data[data.index(b'ORIGIN_READY'):data.index(b'AFTER_NEW')]
+    row, col, top, bottom, origin = 1, 1, 1, 23, False
+    saved = (row, col, origin)
+    erased = []
+    for token in PAINT_TOKEN.findall(before):
+        if token == b'\x1b7':
+            saved = row, col, origin
+        elif token == b'\x1b8':
+            row, col, origin = saved
+            row = max(top, min(row, bottom)) if origin else min(row, 24)
+        elif token.startswith(b'\x1b['):
+            params, final = token[2:-1], token[-1:]
+            if params == b'?6' and final in (b'h', b'l'):
+                origin = final == b'h'
+                row, col = (top if origin else 1), 1
+            elif final == b'r':
+                values = params.split(b';')
+                top = int(values[0] or b'1')
+                bottom = int(values[1]) if len(values) > 1 and values[1] else 24
+                row, col = (top if origin else 1), 1
+            elif final in (b'H', b'f', b'd'):
+                values = params.split(b';')
+                requested = int(values[0] or b'1')
+                row = min(top + requested - 1, bottom) if origin else min(requested, 24)
+                if final != b'd':
+                    col = int(values[1] or b'1') if len(values) > 1 else 1
+            elif final == b'K':
+                erased.append(row)
+        elif not token.startswith(b'\x1b'):
+            for char in token:
+                if char == 10:
+                    row = row if row == bottom else min(row + 1, 24)
+                elif char == 13:
+                    col = 1
+                elif char >= 32:
+                    col += 1
+    assert (row, col, origin) == (22, 5, True), (row, col, origin, before)
+    assert erased and all(r >= 23 for r in erased), (erased, before)
+    print('origin-mode growth preserves child rows and cursor')
 
 
 def check_remove_configured_ids(binary):
@@ -3002,6 +3054,7 @@ def main():
     check_osc_config(binary)
     check_theme_growth(binary)
     check_new_at_bottom(binary)
+    check_origin_growth(binary)
     check_remove_configured_ids(binary)
     check_new_prefix(binary)
     check_background_job_exit(binary)
